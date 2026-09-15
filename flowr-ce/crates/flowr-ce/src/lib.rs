@@ -6,6 +6,7 @@
 //! The FlowR EE binary can merge additional routes (UI, etc.) before serving.
 
 pub(crate) mod server;
+pub mod approval;
 pub mod token_stream;
 pub mod canvas;
 pub mod handlers;
@@ -146,6 +147,10 @@ pub fn build_ce_router(storage: Arc<dyn StorageBackend>) -> Router {
         // caller, so there is nothing cross-user to authorize beyond being signed in.
         .route("/ui/pins", get(list_pins_handler).post(set_pin_handler))
         .route("/chat/sessions", get(list_chat_sessions_handler))
+        // Permissions answered in a conversation: the user's own view of them,
+        // and the only way to lift a refusal. Deliberately NOT agent-callable.
+        .route("/chat/sessions/:session_id/permissions", get(list_permissions_handler))
+        .route("/chat/sessions/:session_id/permissions/lift", post(lift_permission_handler))
         .route("/chat/sessions/:session_id", get(get_chat_session_handler)
                                             .delete(delete_chat_session_handler))
         .route("/health", get(health_handler))
@@ -750,6 +755,86 @@ async fn get_chat_session_handler(
         "updated_at": row.get("updated_at"),
         "messages": messages,
     })).into_response()
+}
+
+/// `GET /chat/sessions/:session_id/permissions` — what was allowed or declined
+/// in this conversation.
+///
+/// Gated by the same owner check as reading the transcript: the answers are as
+/// personal as the conversation that produced them.
+async fn list_permissions_handler(
+    State(state): State<Arc<AppState>>,
+    principal: Option<Extension<Principal>>,
+    Path(session_id): Path<String>,
+) -> axum::response::Response {
+    let Some(Extension(principal)) = principal else {
+        return (StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "authentication required"}))).into_response();
+    };
+    if !session_permission_allowed(&state, &principal, &session_id,
+                                   flowr_policy::actions::session_read()).await {
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))).into_response();
+    }
+    let all = flowr_policy::grants::list(&session_id);
+    Json(json!({ "permissions": all, "count": all.len() })).into_response()
+}
+
+/// `POST /chat/sessions/:session_id/permissions/lift` — reopen a refusal.
+///
+/// Body: `{ "key": "<decision key>" }`.
+///
+/// This REOPENS the question rather than granting it: the next matching call
+/// asks again. Granting outright from here would let a stray click hand out a
+/// permission with none of the context the prompt provides.
+///
+/// There is no agent-facing equivalent, and that is the point — an agent able to
+/// lift its own refusals could defeat a sticky denial by lifting and re-asking
+/// until the user gave in.
+async fn lift_permission_handler(
+    State(state): State<Arc<AppState>>,
+    principal: Option<Extension<Principal>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<Value>,
+) -> axum::response::Response {
+    let Some(Extension(principal)) = principal else {
+        return (StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "authentication required"}))).into_response();
+    };
+    // Lifting changes what the agent may do, so it takes the DELETE-tier check,
+    // not the read one: an InfoSec reader auditing a transcript must not be able
+    // to alter the permissions in it.
+    if !session_permission_allowed(&state, &principal, &session_id,
+                                   flowr_policy::actions::session_delete()).await {
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))).into_response();
+    }
+    let Some(key) = body.get("key").and_then(|v| v.as_str()) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "key is required"}))).into_response();
+    };
+    let lifted = flowr_policy::grants::lift_denial(&session_id, key);
+    Json(json!({
+        "lifted": lifted,
+        "key": key,
+        "note": if lifted {
+            "The question is open again — the agent will ask next time it needs this."
+        } else {
+            "No refusal was recorded for that key."
+        },
+    }))
+    .into_response()
+}
+
+/// Shared owner check for the permission endpoints: resolve the session's owner
+/// and run the same Cedar gate the transcript routes use.
+async fn session_permission_allowed(
+    state: &Arc<AppState>,
+    principal: &Principal,
+    session_id: &str,
+    action: flowr_policy::Action,
+) -> bool {
+    let key = crate::handlers::call_agent::session_key(session_id);
+    let row = state.storage.state().get(&key).await.ok().flatten();
+    let owner = row.as_ref().and_then(|r| r.get("owner")).and_then(|v| v.as_str());
+    session_policy_allows(principal, action, session_id, owner).await
 }
 
 /// `DELETE /chat/sessions/:session_id` — drop a conversation and its index entry.

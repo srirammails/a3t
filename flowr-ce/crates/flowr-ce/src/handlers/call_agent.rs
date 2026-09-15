@@ -594,7 +594,7 @@ impl TaskHandler for AgentHandler {
                             // hook gates this call as the agent (§6.5). Merges over any
                             // flow-level metadata.a3t already on the context.
                             let ceiling_attrs = build_ceiling_attributes(&config.config, &ctx.template_meta);
-                            call_mcp_tool(&http_client, &storage, &agent_principal, mcp_resource, tool_name, &tool_input, ceiling_attrs).await
+                            call_mcp_tool(&http_client, &storage, &agent_principal, &config.session_id, mcp_resource, tool_name, &tool_input, ceiling_attrs).await
                         };
 
                         let tool_ok = tool_result.is_ok();
@@ -1332,15 +1332,82 @@ fn build_ceiling_attributes(
     attrs
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn call_mcp_tool(
     client: &reqwest::Client,
     storage: &Arc<dyn StorageBackend>,
     caller: &flowr_mcp_core::Principal,
+    session_id: &str,
     resource_name: &str,
     tool_name: &str,
     arguments: &Value,
     attributes: serde_json::Map<String, Value>,
 ) -> std::result::Result<Value, String> {
+    // ── Permission introspection ──
+    //
+    // Handled before the gate, and READ-ONLY on purpose. The user must always be
+    // able to find out what is blocked — gating the question behind the same
+    // policy that produced the block would be a dead end.
+    //
+    // There is deliberately no matching "lift" tool. If the agent could reopen
+    // its own refusals it could defeat a sticky denial by lifting and re-asking,
+    // turning "no" into prompt spam until the user gave in. Lifting is a user
+    // action, from the permissions panel (see the /permissions endpoints).
+    if tool_name == "list_permissions" {
+        let only = arguments.get("only").and_then(|v| v.as_str()).unwrap_or("all");
+        let all = flowr_policy::grants::list(session_id);
+        let filtered: Vec<_> = all
+            .into_iter()
+            .filter(|d| match only {
+                "denied" => d.verdict == flowr_policy::grants::Verdict::Denied,
+                "granted" => d.verdict == flowr_policy::grants::Verdict::Granted,
+                _ => true,
+            })
+            .collect();
+        return Ok(json!({
+            "permissions": filtered,
+            "count": filtered.len(),
+            "note": "Only the user can change these, from the permissions panel in the chat.",
+        }));
+    }
+
+    // ── The policy gate, for BOTH routes ──
+    //
+    // This used to sit inside the local-dispatch branch, so a tool served by a
+    // REMOTE MCP server reached the network without ever passing the hook —
+    // authorization depended on where a tool happened to be hosted. Hoisting it
+    // here makes the check unconditional; routing can no longer mean skipping.
+    //
+    // The server is part of the identity of the capability: two servers can both
+    // expose `query` and they are not the same thing, so the decision is recorded
+    // against `server/tool` (see `mcp_decision_id`).
+    let decision = flowr_mcp_core::authorize_mcp_tool_call(
+        caller, Some(resource_name), tool_name, arguments, attributes.clone(),
+    ).await;
+    let decision_id = flowr_mcp_core::mcp_decision_id(Some(resource_name), tool_name);
+    // What the user already answered in this conversation, if anything: a prior
+    // grant allows without re-asking, a prior refusal denies without re-asking.
+    let decision = flowr_mcp_core::apply_session_decisions(
+        session_id, decision, flowr_policy::actions::MCP_CALL, "Tool", &decision_id,
+    );
+    let decision = match decision {
+        flowr_policy::PolicyDecision::Ask { reason, scopes, .. } => {
+            // Stop the turn and put it to the human. Blocks until they answer or
+            // it times out.
+            crate::approval::request_approval(
+                session_id, caller, Some(resource_name), tool_name, arguments, &reason, &scopes,
+            ).await
+        }
+        settled => settled,
+    };
+    if let flowr_policy::PolicyDecision::Deny { reason, policy_ids } = decision {
+        return Ok(json!({
+            "error": format!("denied: {tool_name} — {reason}"),
+            "denied": true,
+            "policies": policy_ids,
+        }));
+    }
+
     // Resolve MCP server URL from resource
     let (ns, name) = if resource_name.contains('/') {
         let parts: Vec<&str> = resource_name.splitn(2, '/').collect();
@@ -1367,11 +1434,8 @@ async fn call_mcp_tool(
         // capability ceiling), so routing a tool elsewhere never means skipping
         // authorization.
         if flowr_mcp_core::is_agent_runtime_tool(tool_name) {
-            if let Some(denied) = flowr_mcp_core::authorize_tool_call(
-                caller, tool_name, arguments, attributes.clone(),
-            ).await {
-                return callresult_to_value(denied);
-            }
+            // Already authorized at the top of this function — one gate for both
+            // the local and remote routes.
             if let Some(result) = crate::handle_agent_tool_call(
                 storage, caller, tool_name, &Some(arguments.clone()),
             ).await {

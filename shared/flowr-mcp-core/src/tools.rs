@@ -191,6 +191,25 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "list_permissions".to_string(),
+            description: "List what the user has allowed or declined for this conversation. \
+Use it when the user asks what they have denied or granted, or when a call of yours was \
+refused and you need to tell them what is blocked. Read-only: you cannot change a \
+permission from here — only the user can, from the permissions panel in the chat."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "only": {
+                        "type": "string",
+                        "enum": ["denied", "granted", "all"],
+                        "default": "all",
+                        "description": "Filter to just refusals, just grants, or everything"
+                    }
+                }
+            }),
+        },
+        Tool {
             name: "list_executions".to_string(),
             description: "List recent workflow executions. Pass namespace + name to list runs of a specific workflow, or omit both for recent executions across all workflows.".to_string(),
             input_schema: json!({
@@ -772,6 +791,67 @@ pub async fn authorize_tool_call(
                 policy_ids.join(",")
             )))
         }
+    }
+}
+
+/// Authorize one MCP tool call, naming the SERVER it is routed to.
+///
+/// [`authorize_tool_call_decision`] identifies a tool by name alone, which is
+/// right for built-ins but not for MCP: two servers can both expose `query`, and
+/// they are not the same capability. The server is attached as a resource
+/// attribute so policy can gate "this tool on this server", and the caller uses
+/// [`mcp_decision_id`] for the matching ledger key.
+///
+/// `resource.name` stays the bare tool name so existing rules that match on it
+/// (the template ceiling, the authoring-tool forbid) keep working unchanged.
+pub async fn authorize_mcp_tool_call(
+    principal: &flowr_policy::Principal,
+    server: Option<&str>,
+    name: &str,
+    args: &Value,
+    attributes: serde_json::Map<String, Value>,
+) -> flowr_policy::PolicyDecision {
+    let mut resource = flowr_policy::Resource::tool(name);
+    if let Some(srv) = server {
+        resource = resource.with_attr("server", srv);
+    }
+    let span = tracing::info_span!(
+        "tool_call",
+        "aesop.principal.kind" = principal.kind(),
+        "aesop.principal.id" = %principal.id(),
+        "aesop.on_behalf_of" = principal.on_behalf_of().unwrap_or(""),
+        "aesop.action" = flowr_policy::actions::MCP_CALL,
+        "aesop.resource.type" = "Tool",
+        "aesop.resource.id" = name,
+        "aesop.mcp.server" = server.unwrap_or(""),
+        "aesop.decision" = tracing::field::Empty,
+    );
+    let policy_req = flowr_policy::ExecutionRequest {
+        principal: principal.clone(),
+        action: flowr_policy::actions::mcp_call(),
+        resource,
+        attributes,
+        context: flowr_policy::ExecContext::default(),
+        params: args.clone(),
+    };
+    let decision = flowr_policy::policy_hook()
+        .check(&policy_req)
+        .instrument(span.clone())
+        .await;
+    span.record("aesop.decision", decision.label());
+    flowr_policy::audit::record(&policy_req, &decision);
+    decision
+}
+
+/// The id a permission decision is recorded against for an MCP tool.
+///
+/// Qualified by server, so allowing `query` on the analytics server does not
+/// silently allow `query` on a different one. Unqualified for built-ins, whose
+/// names are already global.
+pub fn mcp_decision_id(server: Option<&str>, tool: &str) -> String {
+    match server {
+        Some(s) if !s.is_empty() => format!("{s}/{tool}"),
+        _ => tool.to_string(),
     }
 }
 
