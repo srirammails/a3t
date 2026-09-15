@@ -16,6 +16,7 @@
 //! - Actions are typed `domain:verb` from a central registry, never free-form
 //!   strings assembled at call sites (§5.3).
 
+pub mod grants;
 pub mod actions;
 pub mod audit;
 pub mod op_policy;

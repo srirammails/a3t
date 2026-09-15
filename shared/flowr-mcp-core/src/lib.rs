@@ -34,6 +34,10 @@ pub use tools::{
     // The site-A gate on its own, plus the set of tools the agent runtime
     // owns — so a dispatcher can route those correctly and still authorize.
     authorize_tool_call, is_agent_runtime_tool, AGENT_RUNTIME_TOOLS,
+    // The interactive-approval path: the decision-returning gate, the session
+    // ledger resolution that sits between policy and the prompt, and the
+    // per-tool permission state the agent's tool list is annotated with.
+    authorize_tool_call_decision, apply_session_decisions, tool_permission, ToolPermission,
 };
 
 // Re-export the identity type so MCP-server call sites can name the principal

@@ -780,6 +780,10 @@ async fn delete_chat_session_handler(
         state.storage.as_ref(), &index_owner, &session_id).await {
         warn!(error = %e, "failed to prune chat session index");
     }
+    // Permissions must not outlive the transcript that justified them. Whatever
+    // the user allowed this agent to do, they allowed it in the context of THIS
+    // conversation; a deleted conversation leaves no standing consent behind.
+    flowr_policy::grants::clear(&session_id);
     crate::token_stream::close(&session_id);
     Json(json!({ "deleted": true, "session_id": session_id })).into_response()
 }

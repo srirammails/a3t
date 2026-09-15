@@ -775,6 +775,124 @@ pub async fn authorize_tool_call(
     }
 }
 
+/// Resolve a policy decision against what the user already answered in this
+/// session.
+///
+/// Sits between the policy engine and the prompt, and only ever acts on `Ask` —
+/// a `Deny` from policy is not something a session grant may overturn, and an
+/// `Allow` needs no ledger. Three outcomes:
+///
+/// - already granted → `Allow`, without asking again;
+/// - already refused → `Deny`, **without re-asking**. A refusal that kept
+///   re-prompting would train people to click through;
+/// - never asked → the `Ask` passes through and the caller prompts.
+///
+/// A refusal recorded here stays listed and can be lifted later
+/// (`grants::list_denied` / `grants::lift_denial`), so sticky is not final.
+pub fn apply_session_decisions(
+    session_id: &str,
+    decision: flowr_policy::PolicyDecision,
+    action: &str,
+    resource_type: &str,
+    resource_id: &str,
+) -> flowr_policy::PolicyDecision {
+    use flowr_policy::grants::{consult, decision_key, Verdict};
+    if !decision.is_ask() {
+        return decision;
+    }
+    let key = decision_key(action, resource_type, resource_id);
+    match consult(session_id, &key) {
+        Some(d) if d.verdict == Verdict::Granted => flowr_policy::PolicyDecision::Allow,
+        Some(d) => flowr_policy::PolicyDecision::Deny {
+            reason: format!(
+                "you refused this earlier in this conversation ({}); ask to review denied \
+                 permissions to change it",
+                d.reason
+            ),
+            policy_ids: vec!["session-denial".to_string()],
+        },
+        None => decision,
+    }
+}
+
+/// What the agent currently holds for a tool, so the LLM can be told rather than
+/// discovering it by being refused.
+///
+/// Knowing "this tool will prompt" or "you already declined this" lets a model
+/// choose a different route or explain the blocker, instead of calling and
+/// failing. It is told the *state*, never how to change it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolPermission {
+    /// Allowed outright by policy — nothing to mention.
+    Allowed,
+    /// Allowed because the user granted it in this conversation.
+    Granted,
+    /// Refused in this conversation; calling it will fail.
+    Denied,
+    /// Permitted only if the user approves when asked.
+    NeedsApproval,
+}
+
+impl ToolPermission {
+    /// One clause appended to the tool description the model sees. `Allowed`
+    /// yields nothing: annotating every ordinary tool would be noise.
+    pub fn hint(self) -> Option<&'static str> {
+        match self {
+            ToolPermission::Allowed => None,
+            ToolPermission::Granted => Some("(permission: granted by the user in this conversation)"),
+            ToolPermission::Denied => Some(
+                "(permission: DECLINED by the user in this conversation — calling this will fail; \
+                 do not retry it, tell the user if it is needed)",
+            ),
+            ToolPermission::NeedsApproval => Some(
+                "(permission: requires the user's approval — calling it will pause and ask them)",
+            ),
+        }
+    }
+}
+
+/// Per-tool permission state for this session, for annotating the tool list.
+pub async fn tool_permission(
+    principal: &flowr_policy::Principal,
+    session_id: &str,
+    name: &str,
+    attributes: serde_json::Map<String, Value>,
+) -> ToolPermission {
+    use flowr_policy::grants::{consult, decision_key, Verdict};
+    let key = decision_key(flowr_policy::actions::MCP_CALL, "Tool", name);
+    // A recorded answer wins: it is what the runtime will act on.
+    if let Some(d) = consult_readonly(session_id, &key) {
+        return match d {
+            Verdict::Granted => ToolPermission::Granted,
+            Verdict::Denied => ToolPermission::Denied,
+        };
+    }
+    // Otherwise ask the policy what would happen, WITHOUT auditing it as a real
+    // call — this is a listing, not an invocation.
+    let req = flowr_policy::ExecutionRequest {
+        principal: principal.clone(),
+        action: flowr_policy::actions::mcp_call(),
+        resource: flowr_policy::Resource::tool(name),
+        attributes,
+        context: flowr_policy::ExecContext::default(),
+        params: json!({}),
+    };
+    match flowr_policy::policy_hook().check(&req).await {
+        flowr_policy::PolicyDecision::Allow => ToolPermission::Allowed,
+        flowr_policy::PolicyDecision::Ask { .. } => ToolPermission::NeedsApproval,
+        flowr_policy::PolicyDecision::Deny { .. } => ToolPermission::Denied,
+    }
+}
+
+/// Peek at a recorded answer without consuming a one-time grant. Listing tools
+/// must not spend a permission the user has not used yet.
+fn consult_readonly(session_id: &str, key: &str) -> Option<flowr_policy::grants::Verdict> {
+    flowr_policy::grants::list(session_id)
+        .into_iter()
+        .find(|d| d.key == key)
+        .map(|d| d.verdict)
+}
+
 /// The same check as [`authorize_tool_call`], but handing back the raw decision
 /// instead of a canned error.
 ///
