@@ -996,6 +996,15 @@ fn ui_message_stream(
             }
             "token" => {
                 if !st.text_open {
+                    // A FRESH id per text block. `text_id` used to be minted once
+                    // per connection, so a turn that produced text, ended it, then
+                    // produced more — an approval pause, a tool result followed by
+                    // a second answer — reopened a part the client had already
+                    // closed with `text-end`. The AI SDK then rejected the stream
+                    // with "Received text-delta for missing text part". Suspending
+                    // mid-turn for approval makes a second text block the norm
+                    // rather than an edge case.
+                    st.text_id = format!("msg_{}", Uuid::now_v7());
                     st.pending.push_back(frame(json!({"type":"text-start","id":st.text_id})));
                     st.text_open = true;
                 }

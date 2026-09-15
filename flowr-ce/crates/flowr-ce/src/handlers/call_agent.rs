@@ -196,6 +196,35 @@ pub fn session_key(session_id: &str) -> String {
 /// State-store key for one user's list of conversations. The transcripts are the
 /// source of truth; this is a pointer list so the sidebar can be built without
 /// scanning every key in the state table.
+/// Look up who owns the agent behind a session.
+///
+/// `session_id` is `<agent-id>:session-…` when a chat runs a configured agent,
+/// and a bare session id otherwise (no agent, so no owner). Prefers the stamped
+/// `owner`, falling back to `created_by` for records written before ownership was
+/// recorded.
+async fn resolve_agent_owner(
+    storage: &Arc<dyn StorageBackend>,
+    session_id: &str,
+) -> Option<String> {
+    let agent_id = session_id.split(':').next().filter(|s| !s.is_empty())?;
+    if agent_id == session_id {
+        return None; // no agent prefix — a plain chat session
+    }
+    let row = storage
+        .state()
+        .get(&format!("agent:config:{agent_id}"))
+        .await
+        .ok()
+        .flatten()?;
+    let cfg = row.get("config").and_then(|c| c.as_object());
+    row.get("owner")
+        .and_then(|v| v.as_str())
+        .or_else(|| row.get("created_by").and_then(|v| v.as_str()))
+        .or_else(|| cfg.and_then(|c| c.get("owner")).and_then(|v| v.as_str()))
+        .or_else(|| cfg.and_then(|c| c.get("created_by")).and_then(|v| v.as_str()))
+        .map(str::to_string)
+}
+
 pub fn session_index_key(owner: &str) -> String {
     format!("agent:sessions:{}", owner)
 }
@@ -407,12 +436,27 @@ impl TaskHandler for AgentHandler {
         // was not enough: policy could see whose name the agent acted under but
         // not what that person was actually allowed to do, so an agent run by a
         // Viewer had the same authority as one run by an Admin.
+        // Resolve the agent's OWNER from the registry, server-side.
+        //
+        // It is deliberately not taken from the step config: a flow that could
+        // name its own owner could name whose authority bounds its grants. The
+        // session id carries the agent id (`<agent-id>:session-…`), so the record
+        // can be looked up and trusted.
+        //
+        // Agents created before ownership was recorded have no `owner`, but they
+        // do carry `created_by` — real provenance, not an invention — so that is
+        // the fallback. Without it every pre-existing agent could never produce a
+        // permission prompt, because the owner check would always fail.
+        let owner = match config.config.owner.clone() {
+            Some(o) => Some(o),
+            None => resolve_agent_owner(&storage, &config.session_id).await,
+        };
         let role_ceiling = config.config.role_ceiling.as_deref();
         let agent_principal = flowr_mcp_core::Principal::agent_for(
             flowr_mcp_core::AgentId(format!("agent:{}", config.session_id)),
             &ctx.principal,
             Some(format!("{}/{}", ctx.namespace, ctx.name)),
-            config.config.owner.clone(),
+            owner,
             role_ceiling,
         );
 
