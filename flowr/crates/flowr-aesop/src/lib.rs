@@ -211,6 +211,37 @@ impl CedarHook {
     }
 }
 
+/// The template keys that describe the agent's **capability ceiling** — what it
+/// was configured to be able to do.
+///
+/// Everything else under `template` stays: `tags`, `policyRef` and
+/// `runtimePolicy` are how InfoSec-authored policies ATTACH to a flow (§6.3).
+/// Removing those would let an approver escape, say, a "no external HTTP from
+/// PII-tagged flows" rule — org policy, not agent configuration.
+const CEILING_KEYS: &[&str] = &["exposedTools", "enabledTools"];
+
+/// Re-cast an attribute bag for evaluation as the human behind an agent.
+///
+/// Drops only the capability-ceiling keys, and only when that human OWNS the
+/// agent. The ceiling is configuration its owner is the authority over, so an
+/// owner can be asked to widen it; anyone else runs inside it exactly as the
+/// agent does, and a ceiling violation stays a denial for them.
+fn as_approver_attributes(
+    attrs: &serde_json::Map<String, serde_json::Value>,
+    is_owner: bool,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut out = attrs.clone();
+    if !is_owner {
+        return out;
+    }
+    if let Some(serde_json::Value::Object(template)) = out.get_mut("template") {
+        for k in CEILING_KEYS {
+            template.remove(*k);
+        }
+    }
+    out
+}
+
 #[async_trait::async_trait]
 impl PolicyHook for CedarHook {
     async fn check(&self, req: &ExecutionRequest) -> PolicyDecision {
@@ -256,9 +287,30 @@ impl PolicyHook for CedarHook {
                 // hold, so the worst a prompt can do is re-delegate what the
                 // approver could have done by hand.
                 if let Some(approver) = self.approver_of(&req.principal) {
+                    // Only the agent's OWNER may be asked to widen its ceiling.
+                    // For anyone else the ceiling binds exactly as it binds the
+                    // agent, so the denial stands — otherwise any user who could
+                    // run an agent could talk it out of its configured limits.
+                    let is_owner = match (&req.principal, req.principal.on_behalf_of()) {
+                        (Principal::Agent { owner: Some(owner), .. }, Some(human)) => owner == human,
+                        _ => false,
+                    };
                     let approver_ctx = SecurityContext {
                         principal: approver,
-                        attributes: req.attributes.clone(),
+                        // The agent's CAPABILITY CEILING is dropped for its owner,
+                        // and that is the crux of the mechanism.
+                        //
+                        // `exposedTools`/`enabledTools` describe how the agent was
+                        // configured, not what the human may do. Passing them through
+                        // made the ceiling forbid fire against the approver too, so
+                        // removing a tool from an agent produced a flat denial and
+                        // never a prompt — the one case this feature exists to serve.
+                        //
+                        // Only the ceiling keys go, and only for the owner. `tags`,
+                        // `policyRef` and `runtimePolicy` are how InfoSec policies
+                        // attach to a flow, so they stay — otherwise an approver could
+                        // wave away a rule like "no external HTTP from PII flows".
+                        attributes: as_approver_attributes(&req.attributes, is_owner),
                     };
                     if self.engine.enforce(&approver_ctx, &action, &resource).is_ok() {
                         return PolicyDecision::Ask {

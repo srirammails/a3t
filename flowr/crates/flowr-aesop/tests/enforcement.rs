@@ -455,17 +455,33 @@ async fn template_ceiling_enforces_exposed_intersect_enabled() {
         PolicyDecision::Allow
     ), "tool in exposed∩enabled is allowed");
 
-    // Exposed but NOT enabled → denied (instance narrowed it off).
+    // Outside the capability, run by the agent's OWNER → asked, not refused.
+    // The ceiling is how the owner configured their own agent, so widening it is
+    // a question they are entitled to answer. `agent_for_user()` is owned by the
+    // human it acts for.
     assert!(matches!(
         hook.check(&agent_tool_req("call:sql", tmpl.clone())).await,
-        PolicyDecision::Deny { .. }
-    ), "exposed-but-not-enabled tool is denied");
-
-    // Not exposed at all → denied (outside the template ceiling).
+        PolicyDecision::Ask { .. }
+    ), "exposed-but-not-enabled tool asks its owner");
     assert!(matches!(
         hook.check(&agent_tool_req("call:shell", tmpl.clone())).await,
+        PolicyDecision::Ask { .. }
+    ), "tool outside the ceiling asks its owner");
+
+    // Same agent, same tools, run by SOMEONE ELSE → denied. A user who did not
+    // configure the agent cannot talk it out of its limits, so the ceiling is
+    // still a real boundary for everyone but its owner.
+    let not_the_owner = Principal::Agent {
+        agent_id: AgentId("pc-crawler-7".into()),
+        on_behalf_of: Some("user::someone-else".into()),
+        flow_id: Some("acme/campaign".into()),
+        roles: vec![],
+        owner: Some("user::sriram".into()),
+    };
+    assert!(matches!(
+        hook.check(&tool_req_as(not_the_owner, "call:shell", tmpl.clone())).await,
         PolicyDecision::Deny { .. }
-    ), "tool outside the template ceiling is denied");
+    ), "a non-owner must not be able to widen the agent's ceiling");
 }
 
 #[tokio::test]
@@ -775,5 +791,93 @@ async fn a_triggered_run_is_never_asked() {
     match hook.check(&req(agent_ambient(), true)).await {
         PolicyDecision::Deny { .. } => {}
         other => panic!("an ambient/triggered agent must be denied — got {other:?}"),
+    }
+}
+
+// ── Removing a tool from an agent must ASK, not just fail ────────────────────
+//
+// The reported case: take `list_flows` out of an agent's exposed tools, run it,
+// and expect a prompt. It produced a flat denial instead, because the approver
+// re-evaluation inherited the agent's own `template.exposedTools` and so hit the
+// very same capability-ceiling forbid. The agent's configured ceiling is not a
+// fact about the human, and the owner is the authority over it.
+
+fn agent_with_ceiling(roles: &[&str], exposed: &[&str]) -> (Principal, serde_json::Map<String, serde_json::Value>) {
+    let p = Principal::Agent {
+        agent_id: AgentId("mytestagent".into()),
+        on_behalf_of: Some("usr-sriram".into()),
+        flow_id: Some("a3t/mytestagent".into()),
+        roles: roles.iter().map(|r| r.to_string()).collect(),
+        owner: Some("usr-sriram".into()),
+    };
+    let attrs = serde_json::json!({
+        "template": { "exposedTools": exposed }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    (p, attrs)
+}
+
+fn tool_req(
+    principal: Principal,
+    attributes: serde_json::Map<String, serde_json::Value>,
+    tool: &str,
+) -> ExecutionRequest {
+    ExecutionRequest {
+        principal,
+        action: flowr_policy::actions::mcp_call(),
+        resource: flowr_policy::Resource::tool(tool),
+        attributes,
+        context: Default::default(),
+        params: serde_json::json!({}),
+    }
+}
+
+#[tokio::test]
+async fn a_tool_removed_from_the_agent_asks_its_owner() {
+    let hook = CedarHook::baseline().unwrap();
+    // `list_flows` has been taken out of the agent's exposed tools.
+    let (p, attrs) = agent_with_ceiling(&["Admin"], &["get_flow"]);
+    match hook.check(&tool_req(p, attrs, "list_flows")).await {
+        PolicyDecision::Ask { .. } => {}
+        other => panic!("removing a tool from an agent should ask its owner — got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_ceiling_prompt_does_not_need_admin() {
+    // `list_flows` is not destructive and is not an authoring tool, so any user
+    // may run it. A plain user's agent should therefore be asked, not refused —
+    // the ceiling is the agent's configuration, not a privilege boundary.
+    let hook = CedarHook::baseline().unwrap();
+    let (p, attrs) = agent_with_ceiling(&[], &["get_flow"]);
+    match hook.check(&tool_req(p, attrs, "list_flows")).await {
+        PolicyDecision::Ask { .. } => {}
+        other => panic!("a non-destructive tool outside the ceiling should ask — got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn dropping_the_ceiling_does_not_loosen_org_policy() {
+    // The containment check for the fix. Org-level rules key off roles and
+    // resource attributes, never `template`, so they must still bind the approver
+    // even though the ceiling no longer does.
+    let hook = CedarHook::baseline().unwrap();
+
+    // Destructive tool, agent acting for a plain user: the destructive forbid
+    // binds the human too, so this stays a denial rather than becoming askable.
+    let (p, attrs) = agent_with_ceiling(&["Viewer"], &["get_flow"]);
+    match hook.check(&tool_req(p, attrs, "delete_flow")).await {
+        PolicyDecision::Deny { .. } => {}
+        other => panic!("a Viewer's agent must not be able to ask for a destructive tool — got {other:?}"),
+    }
+
+    // Authoring tool, agent acting for a non-Admin: the authoring RBAC forbid is
+    // scoped to `principal is User`, so the approver is caught by it.
+    let (p2, attrs2) = agent_with_ceiling(&[], &["get_flow"]);
+    match hook.check(&tool_req(p2, attrs2, "create_agent")).await {
+        PolicyDecision::Deny { .. } => {}
+        other => panic!("a non-Admin must not be asked to authorize authoring — got {other:?}"),
     }
 }
