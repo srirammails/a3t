@@ -1114,7 +1114,7 @@ pub(crate) async fn handle_agent_tool_call(
                 || json_val.and_then(|j| j.get("document")).is_some();
 
             if is_cncf {
-                Some(mcp_create_flow_cncf(storage, &args).await)
+                Some(mcp_create_flow_cncf(storage, principal, &args).await)
             } else {
                 None // Fall through to legacy create_flow
             }
@@ -1122,7 +1122,7 @@ pub(crate) async fn handle_agent_tool_call(
         "create_agent_template" => Some(mcp_create_agent_template(&args).await),
         "list_agent_templates" => Some(mcp_list_agent_templates(storage, &args).await),
         "get_agent_template" => Some(mcp_get_agent_template(storage, &args).await),
-        "create_agent" => Some(mcp_create_agent(storage, &args).await),
+        "create_agent" => Some(mcp_create_agent(storage, principal, &args).await),
         "list_agents" => Some(mcp_list_agents(storage, &args).await),
         "get_agent" => Some(mcp_get_agent(storage, &args).await),
         "delete_agent" => Some(mcp_delete_agent(storage, &args).await),
@@ -1132,7 +1132,11 @@ pub(crate) async fn handle_agent_tool_call(
 }
 
 /// Create a workflow from CNCF DSL 1.0.3 YAML (clawdflow layer interceptor)
-async fn mcp_create_flow_cncf(storage: &Arc<dyn StorageBackend>, args: &Value) -> CallToolResult {
+async fn mcp_create_flow_cncf(
+    storage: &Arc<dyn StorageBackend>,
+    principal: &Principal,
+    args: &Value,
+) -> CallToolResult {
     let yaml_str = if let Some(y) = args.get("yaml").and_then(|v| v.as_str()) {
         y.to_string()
     } else if let Some(json_obj) = args.get("json") {
@@ -1142,10 +1146,23 @@ async fn mcp_create_flow_cncf(storage: &Arc<dyn StorageBackend>, args: &Value) -
     };
 
     // Parse with swf-parser, store as WorkflowRecord
-    let record = match flowr_types::WorkflowRecord::from_yaml(&yaml_str) {
+    let mut record = match flowr_types::WorkflowRecord::from_yaml(&yaml_str) {
         Ok(r) => r,
         Err(e) => return CallToolResult::error(format!("Invalid CNCF SWF YAML: {}", e)),
     };
+
+    // This path is save-over-existing (delete + register below), so it is also
+    // the EDIT path. Ownership must survive an edit: whoever created the flow
+    // stays its owner, or anyone able to save would silently take it over —
+    // and with it the authority bounding what the flow's agent may be granted.
+    // Only a genuinely new flow takes the current caller as owner.
+    let existing_owner = storage
+        .workflows()
+        .get(record.namespace(), record.name())
+        .await
+        .ok()
+        .and_then(|r| r.metadata.owner.clone());
+    record.metadata.owner = existing_owner.or_else(|| Some(principal.id().to_string()));
 
     let namespace = record.namespace().to_string();
     let name = record.name().to_string();
@@ -1217,7 +1234,11 @@ async fn mcp_get_agent_template(storage: &Arc<dyn StorageBackend>, args: &Value)
     }
 }
 
-async fn mcp_create_agent(storage: &Arc<dyn StorageBackend>, args: &Value) -> CallToolResult {
+async fn mcp_create_agent(
+    storage: &Arc<dyn StorageBackend>,
+    principal: &Principal,
+    args: &Value,
+) -> CallToolResult {
     let template_ref = match args.get("template").and_then(|v| v.as_str()) {
         Some(t) => t,
         None => return CallToolResult::error("template is required".to_string()),
@@ -1244,6 +1265,14 @@ async fn mcp_create_agent(storage: &Arc<dyn StorageBackend>, args: &Value) -> Ca
     }
 
     // Store agent registration in state
+    // `owner` comes from the authenticated caller, never from `args` — an agent
+    // that could name its own owner could name whose authority bounds its grants.
+    // It is also written into `config.owner` so the agent handler sees it on the
+    // principal without a second lookup (AgentSettings::owner).
+    let owner = principal.id().to_string();
+    if let Value::Object(cfg) = &mut merged_config {
+        cfg.insert("owner".to_string(), Value::String(owner.clone()));
+    }
     let agent_state = json!({
         "agent_id": agent_id,
         "template": template_ref,
@@ -1251,6 +1280,8 @@ async fn mcp_create_agent(storage: &Arc<dyn StorageBackend>, args: &Value) -> Ca
         "namespace": ns,
         "config": merged_config,
         "status": "active",
+        "owner": owner,
+        "created_by": owner,
         "created_at": chrono::Utc::now().to_rfc3339(),
     });
 

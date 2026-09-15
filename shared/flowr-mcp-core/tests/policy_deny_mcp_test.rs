@@ -16,8 +16,8 @@ use std::sync::Arc;
 use flowr_mcp_core::handle_tool_call;
 use flowr_mcp_core::protocol::ToolContent;
 use flowr_storage::{
-    CheckpointStore, EventBus, ExecutionQueue, ExecutionStore, ResourceStore, StateStore,
-    StorageBackend, TriggerStore, WorkflowStore,
+    CheckpointStore, EventBus, ExecutionQueue, ExecutionStore, ResourceStore, SettingsStore,
+    StateStore, StorageBackend, TriggerStore, WorkflowStore,
 };
 use flowr_types::error::FlowResult;
 use serde_json::json;
@@ -51,6 +51,9 @@ impl StorageBackend for PanicStorage {
         unimplemented!("storage must not be reached on a denied call")
     }
     fn triggers(&self) -> &dyn TriggerStore {
+        unimplemented!("storage must not be reached on a denied call")
+    }
+    fn settings(&self) -> &dyn SettingsStore {
         unimplemented!("storage must not be reached on a denied call")
     }
     async fn init(&self) -> FlowResult<()> {

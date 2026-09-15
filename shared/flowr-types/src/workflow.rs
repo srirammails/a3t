@@ -51,6 +51,17 @@ pub struct WorkflowRecord {
 }
 
 impl WorkflowRecord {
+    /// Create from raw CNCF YAML, recording who is creating it.
+    ///
+    /// Separate from [`from_yaml`] because parsing happens in read-only paths
+    /// too (`propose_flow` validates a draft without saving), and those have no
+    /// owner to record.
+    pub fn from_yaml_owned(yaml: &str, owner: Option<String>) -> Result<Self, swf_parser::SwfError> {
+        let mut rec = Self::from_yaml(yaml)?;
+        rec.metadata.owner = owner;
+        Ok(rec)
+    }
+
     /// Create from raw CNCF YAML
     pub fn from_yaml(yaml: &str) -> Result<Self, swf_parser::SwfError> {
         let swf = swf_parser::parse_yaml(yaml)?;
@@ -125,6 +136,16 @@ pub struct WorkflowMetadata {
     /// Last update timestamp
     #[serde(default = "Utc::now")]
     pub updated_at: DateTime<Utc>,
+
+    /// The principal that created this flow.
+    ///
+    /// `None` means genuinely unowned — a flow created before ownership was
+    /// recorded, or one registered by internal machinery. It is deliberately NOT
+    /// defaulted to any real identity: an invented owner is worse than an absent
+    /// one, because the owner is the default authority over what the flow's agent
+    /// may be granted (see .ai/policy-implementation.md §2.3).
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -150,6 +171,7 @@ impl WorkflowMetadata {
             enabled: true,
             created_at: now,
             updated_at: now,
+            owner: None,
         }
     }
 
@@ -158,6 +180,13 @@ impl WorkflowMetadata {
             dsl: Some(doc.dsl.clone()),
             ..Self::new(&doc.namespace, &doc.name, &doc.version)
         }
+    }
+
+    /// Record who created this. Called at the write path, which is the only
+    /// place that knows the authenticated caller.
+    pub fn with_owner(mut self, owner: Option<String>) -> Self {
+        self.owner = owner;
+        self
     }
 
     pub fn key(&self) -> String {

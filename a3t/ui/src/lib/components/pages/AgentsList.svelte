@@ -64,7 +64,7 @@
   let creatingNew = $state(false);
   let agent = $derived(
     creatingNew
-      ? { ...newAgent, id: '(new)', isNew: true, status: 'draft', created_by: 'usr-superadmin' }
+      ? { ...newAgent, id: '(new)', isNew: true, status: 'draft', created_by: '' }
       : (selected ? allAgents.find(a => a.id === selected) : null)
   );
 
@@ -109,7 +109,7 @@
         mode: r.mode ?? 'session', status: r.status ?? 'draft',
         template_id: r.template_id, template_version: r.template_version ?? '1.0.0',
         variables: r.variables, resource_bindings: r.resource_bindings,
-        created_at: r.created_at, created_by: r.created_by ?? 'usr-superadmin',
+        created_at: r.created_at, created_by: r.owner ?? r.created_by ?? '',
       }));
     } else { error = res.error ?? 'Failed to load agents'; }
     loading = false;
@@ -661,7 +661,17 @@
           <div class="pf">
             <h3>Ownership & Access</h3>
             <div class="pf-kv">
-              <div class="pf-row"><span class="pf-k">Created by</span><span class="pf-v">{agent.created_by}</span></div>
+              <!-- Ownership is stamped server-side from the authenticated caller.
+                   An agent created before that existed genuinely has no owner —
+                   say so, rather than substituting a plausible-looking identity.
+                   The owner bounds what the agent may be granted, so a wrong one
+                   is worse than an absent one. -->
+              <div class="pf-row">
+                <span class="pf-k">Created by</span>
+                <span class="pf-v" class:pf-unset={!agent.created_by}>
+                  {agent.created_by || (agent.isNew ? 'you, once saved' : 'unowned')}
+                </span>
+              </div>
               <div class="pf-row"><span class="pf-k">Org</span><span class="pf-v">org-default</span></div>
               {#if agent.created_at}<div class="pf-row"><span class="pf-k">Created</span><span class="pf-v">{new Date(agent.created_at).toLocaleString()}</span></div>{/if}
               <div class="pf-row"><span class="pf-k">Namespace</span><span class="pf-v">{agent.namespace}</span></div>
@@ -808,6 +818,8 @@
   .pf-row:last-child { border-bottom: 0; }
   .pf-k { color: var(--text-3); flex-shrink: 0; }
   .pf-v { color: var(--text-1); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* An absent value reads as absent, not as data. */
+  .pf-v.pf-unset { color: var(--text-4); font-style: italic; }
   .pf-hint { font-size: 12px; color: var(--text-4); margin-bottom: 12px; }
   .pf-select { width: auto; }
 

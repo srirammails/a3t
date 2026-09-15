@@ -844,7 +844,7 @@ pub async fn handle_tool_call_with_attributes(
         "list_flows" => list_flows(storage, &args).await,
         "get_flow" => get_flow(storage, &args).await,
         "propose_flow" => propose_flow(&args),
-        "create_flow" => create_flow(storage, &args).await,
+        "create_flow" => create_flow(storage, principal, &args).await,
         "update_flow" => update_flow(storage, &args).await,
         "delete_flow" => delete_flow(storage, &args).await,
 
@@ -1359,7 +1359,11 @@ fn propose_flow(args: &Value) -> CallToolResult {
     }
 }
 
-async fn create_flow(storage: &dyn StorageBackend, args: &Value) -> CallToolResult {
+async fn create_flow(
+    storage: &dyn StorageBackend,
+    principal: &flowr_policy::Principal,
+    args: &Value,
+) -> CallToolResult {
     // Accept YAML string or JSON object
     let yaml_str = if let Some(y) = args.get("yaml").and_then(|v| v.as_str()) {
         y.to_string()
@@ -1373,11 +1377,23 @@ async fn create_flow(storage: &dyn StorageBackend, args: &Value) -> CallToolResu
         return CallToolResult::error("Either 'yaml' or 'json' is required".to_string());
     };
 
-    // Parse with swf-parser (CNCF DSL 1.0.3)
-    let record = match WorkflowRecord::from_yaml(&yaml_str) {
+    // Parse with swf-parser (CNCF DSL 1.0.3). Ownership is stamped from the
+    // authenticated caller, never from the payload — a flow that could name its
+    // own owner could name anyone's authority as the bound on its grants.
+    let mut record = match WorkflowRecord::from_yaml(&yaml_str) {
         Ok(r) => r,
         Err(e) => return CallToolResult::error(format!("Invalid CNCF SWF workflow: {}", e)),
     };
+    // Whoever created the flow stays its owner across re-saves; only a genuinely
+    // new flow takes the current caller. Otherwise anyone able to save could take
+    // ownership, and with it the authority that bounds the flow's agent grants.
+    let existing_owner = storage
+        .workflows()
+        .get(record.namespace(), record.name())
+        .await
+        .ok()
+        .and_then(|r| r.metadata.owner.clone());
+    record.metadata.owner = existing_owner.or_else(|| Some(principal.id().to_string()));
 
     let namespace = record.namespace().to_string();
     let name = record.name().to_string();
