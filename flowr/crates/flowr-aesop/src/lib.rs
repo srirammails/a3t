@@ -173,14 +173,41 @@ fn to_aesop_principal(p: &Principal) -> AesopPrincipal {
             user_id: user_id.clone(),
             roles: roles.clone(),
         },
-        Principal::Agent { agent_id, on_behalf_of, flow_id } => AesopPrincipal::Agent {
+        Principal::Agent { agent_id, on_behalf_of, flow_id, roles, owner } => AesopPrincipal::Agent {
             agent_id: AesopAgentId(agent_id.0.clone()),
             on_behalf_of: on_behalf_of.clone(),
+            roles: roles.clone(),
+            owner: owner.clone(),
             flow_id: flow_id.clone(),
         },
         Principal::Service { service_id } => AesopPrincipal::Service {
             service_id: service_id.clone(),
         },
+    }
+}
+
+impl CedarHook {
+    /// The human who could answer an approval prompt for this principal, as a
+    /// Cedar principal carrying their *own* authority.
+    ///
+    /// Only an agent acting for a human has one. A human needs no approver (they
+    /// are already the decision), and a service principal has nobody behind it —
+    /// an event-triggered run must stand on its own policy rather than borrow a
+    /// human's, which is why `Service` returns `None` and its denials stay
+    /// denials.
+    ///
+    /// The approver's roles are the agent's inherited `roles`. That is sound
+    /// because inheritance is attenuate-only (`Principal::agent_for`): the agent
+    /// never holds a role its invoker lacked, so reconstructing the invoker from
+    /// them cannot over-state what the human can do.
+    fn approver_of(&self, p: &Principal) -> Option<AesopPrincipal> {
+        match p {
+            Principal::Agent { on_behalf_of, roles, .. } => {
+                let user_id = on_behalf_of.clone()?;
+                Some(AesopPrincipal::Human { user_id, roles: roles.clone() })
+            }
+            _ => None,
+        }
     }
 }
 
@@ -214,9 +241,42 @@ impl PolicyHook for CedarHook {
 
         match self.engine.enforce(&ctx, &action, &resource) {
             Ok(_allowed) => PolicyDecision::Allow,
-            Err(AesopError::Denied { policy_ids, action, resource_type, resource_id }) => {
+            Err(AesopError::Denied { policy_ids, action: denied_action, resource_type, resource_id }) => {
+                // ── Deny, or a question? ──
+                //
+                // Cedar only ever answers allow/deny; `Ask` is derived, not
+                // declared. Re-run the SAME request as the human the agent acts
+                // for. If the human would have been allowed, the agent is merely
+                // exceeding a delegation the human is entitled to widen — that is
+                // a question, and chat can put it to them. If the human would
+                // also be denied, it stays a denial.
+                //
+                // This is what keeps approval from becoming privilege escalation:
+                // nobody is ever asked to grant authority they do not already
+                // hold, so the worst a prompt can do is re-delegate what the
+                // approver could have done by hand.
+                if let Some(approver) = self.approver_of(&req.principal) {
+                    let approver_ctx = SecurityContext {
+                        principal: approver,
+                        attributes: req.attributes.clone(),
+                    };
+                    if self.engine.enforce(&approver_ctx, &action, &resource).is_ok() {
+                        return PolicyDecision::Ask {
+                            reason: format!(
+                                "{denied_action} on {resource_type}::{resource_id} is outside this agent's \
+                                 grants, but you can authorize it"
+                            ),
+                            policy_ids,
+                            scopes: vec![
+                                flowr_policy::GrantScope::Once,
+                                flowr_policy::GrantScope::Session,
+                                flowr_policy::GrantScope::Agent,
+                            ],
+                        };
+                    }
+                }
                 PolicyDecision::Deny {
-                    reason: format!("cedar denied {action} on {resource_type}::{resource_id}"),
+                    reason: format!("cedar denied {denied_action} on {resource_type}::{resource_id}"),
                     policy_ids,
                 }
             }

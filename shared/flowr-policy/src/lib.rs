@@ -91,6 +91,21 @@ pub enum Principal {
         on_behalf_of: Option<String>,
         #[serde(default)]
         flow_id: Option<String>,
+        /// The authority this agent actually carries, **inherited from the
+        /// invoking human and attenuated** — see [`Principal::agent_for`].
+        ///
+        /// Without this an agent acting for a Viewer and one acting for an Admin
+        /// were indistinguishable to policy: `on_behalf_of` carried the user's
+        /// *name* but none of their *authority*, so every agent got the same
+        /// blanket permit. Rules can now say `principal.roles.contains("Admin")`
+        /// for an Agent exactly as they already do for a User.
+        #[serde(default)]
+        roles: Vec<String>,
+        /// Who owns this agent — the principal that created it. The owner is the
+        /// default authority over what the agent may be granted; anything beyond
+        /// the owner's own reach has to be requested from InfoSec.
+        #[serde(default)]
+        owner: Option<String>,
     },
     Service {
         service_id: String,
@@ -130,6 +145,70 @@ impl Principal {
         match self {
             Principal::Agent { on_behalf_of, .. } => on_behalf_of.as_deref(),
             _ => None,
+        }
+    }
+
+    /// The roles this principal carries, whether human or agent.
+    pub fn roles(&self) -> &[String] {
+        match self {
+            Principal::Human { roles, .. } => roles,
+            Principal::Agent { roles, .. } => roles,
+            Principal::Service { .. } => &[],
+        }
+    }
+
+    /// Who owns this principal, where that is meaningful (agents only today).
+    pub fn owner(&self) -> Option<&str> {
+        match self {
+            Principal::Agent { owner, .. } => owner.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Derive the principal an agent runs as when invoked by `caller`.
+    ///
+    /// **Attenuate-only.** The agent inherits the caller's authority and may
+    /// declare *less*, never more:
+    ///
+    /// - invoked by a human → inherits that human's roles, intersected with
+    ///   `role_ceiling` when the agent declares one;
+    /// - invoked by another agent → inherits that agent's already-attenuated
+    ///   roles, so a chain of agents can only ever narrow;
+    /// - invoked by a service → carries no roles at all. A service has no roles
+    ///   to lend, and an agent must not manufacture authority from ambient trust.
+    ///
+    /// An agent that declares no ceiling inherits the caller's roles unchanged —
+    /// the same "declaring nothing does not narrow" rule the tool ceiling uses
+    /// (`exposedTools`/`enabledTools`), so the two read consistently.
+    pub fn agent_for(
+        agent_id: AgentId,
+        caller: &Principal,
+        flow_id: Option<String>,
+        owner: Option<String>,
+        role_ceiling: Option<&[String]>,
+    ) -> Principal {
+        let inherited: Vec<String> = match caller {
+            Principal::Human { roles, .. } => roles.clone(),
+            Principal::Agent { roles, .. } => roles.clone(),
+            Principal::Service { .. } => Vec::new(),
+        };
+        let roles = match role_ceiling {
+            Some(ceiling) => inherited
+                .into_iter()
+                .filter(|r| ceiling.iter().any(|c| c == r))
+                .collect(),
+            None => inherited,
+        };
+        Principal::Agent {
+            agent_id,
+            on_behalf_of: match caller {
+                Principal::Human { user_id, .. } => Some(user_id.clone()),
+                Principal::Agent { on_behalf_of, .. } => on_behalf_of.clone(),
+                Principal::Service { .. } => None,
+            },
+            flow_id,
+            roles,
+            owner,
         }
     }
 }
@@ -264,6 +343,35 @@ pub struct ExecutionRequest {
     pub params: serde_json::Value,
 }
 
+/// How widely an interactive approval applies once granted. Narrowest first —
+/// the approver is offered these in order, and the UI defaults to the narrowest.
+///
+/// All three are the *same mechanism*: a grant is a Cedar `permit` layered over
+/// the baseline. Only its lifetime and where it is stored differ, so a
+/// session-scoped "yes" and a persisted one cannot drift apart in behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GrantScope {
+    /// This one call. Consumed on use; never stored.
+    Once,
+    /// Every matching call for the rest of this chat session. In memory, dies
+    /// with the session — the dev-time default.
+    Session,
+    /// Persisted against the agent, surviving restarts. Written as an
+    /// `agent-grant` registry resource, bounded by the owner's own authority.
+    Agent,
+}
+
+impl GrantScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GrantScope::Once => "once",
+            GrantScope::Session => "session",
+            GrantScope::Agent => "agent",
+        }
+    }
+}
+
 /// The outcome of a policy check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolicyDecision {
@@ -272,17 +380,53 @@ pub enum PolicyDecision {
         reason: String,
         policy_ids: Vec<String>,
     },
+    /// The policy cannot settle this alone — a human must decide.
+    ///
+    /// Distinct from `Deny` in one way that matters: `Ask` is only ever returned
+    /// where the *approver* already holds the authority being asked for. It is a
+    /// delegation prompt, never a privilege-escalation path, so a user cannot be
+    /// asked to grant something they could not do themselves.
+    ///
+    /// Treated as NOT allowed everywhere (`is_allow()` is false). A caller that
+    /// cannot conduct an interactive prompt must degrade to denial, which is why
+    /// every consumer matches exhaustively rather than `if let ... Deny`.
+    Ask {
+        reason: String,
+        policy_ids: Vec<String>,
+        /// Which scopes this approver may choose from, narrowest first.
+        scopes: Vec<GrantScope>,
+    },
 }
 
 impl PolicyDecision {
+    /// True only for `Allow`. `Ask` is deliberately false: an unanswered
+    /// question is not permission, so any site that has not been taught to
+    /// prompt fails closed instead of leaking access.
     pub fn is_allow(&self) -> bool {
         matches!(self, PolicyDecision::Allow)
+    }
+    /// Whether this decision needs a human before anything can proceed.
+    pub fn is_ask(&self) -> bool {
+        matches!(self, PolicyDecision::Ask { .. })
     }
     /// Telemetry value (`aesop.decision`).
     pub fn label(&self) -> &'static str {
         match self {
             PolicyDecision::Allow => "allow",
             PolicyDecision::Deny { .. } => "deny",
+            PolicyDecision::Ask { .. } => "ask",
+        }
+    }
+    /// Collapse an `Ask` to a `Deny` — for choke points with no way to reach a
+    /// human (a triggered run, a worker). The reason is preserved so the audit
+    /// trail shows an approval was wanted and nobody was there to give it.
+    pub fn non_interactive(self) -> Self {
+        match self {
+            PolicyDecision::Ask { reason, policy_ids, .. } => PolicyDecision::Deny {
+                reason: format!("{reason} (approval required, but this run has no interactive approver)"),
+                policy_ids,
+            },
+            other => other,
         }
     }
 }
@@ -338,6 +482,8 @@ mod tests {
                 agent_id: AgentId("agt-1".into()),
                 on_behalf_of: Some("user::sriram".into()),
                 flow_id: Some("flow-1".into()),
+                roles: vec![],
+                owner: None,
             },
             action: Action::new(action).unwrap(),
             resource: Resource::new("Tool", "http_fetch").with_attr("destructive", destructive),
@@ -380,6 +526,8 @@ mod tests {
             agent_id: AgentId("agt-1".into()),
             on_behalf_of: Some("user::x".into()),
             flow_id: None,
+            roles: vec![],
+            owner: None,
         };
         assert_eq!(p.kind(), "agent");
         assert_eq!(p.id(), "agt-1");
@@ -398,8 +546,95 @@ mod tests {
         let d = DenyAll.check(&agent_req("tool:invoke", true)).await;
         match d {
             PolicyDecision::Deny { policy_ids, .. } => assert_eq!(policy_ids, vec!["deny-all"]),
-            PolicyDecision::Allow => panic!("expected Deny"),
+            other => panic!("expected Deny, got {other:?}"),
         }
+    }
+
+    fn human(roles: &[&str]) -> Principal {
+        Principal::human("usr-sriram", roles.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn agent_inherits_caller_roles_when_it_declares_no_ceiling() {
+        let p = Principal::agent_for(
+            AgentId("agt-1".into()), &human(&["Admin", "Viewer"]), None, None, None,
+        );
+        assert_eq!(p.roles(), ["Admin", "Viewer"]);
+        assert_eq!(p.on_behalf_of(), Some("usr-sriram"));
+    }
+
+    #[test]
+    fn agent_ceiling_narrows_but_never_widens() {
+        // Caller is only a Viewer; the agent's ceiling naming Admin must NOT
+        // conjure it. This is the whole point of attenuate-only.
+        let p = Principal::agent_for(
+            AgentId("agt-1".into()), &human(&["Viewer"]), None, None,
+            Some(&["Admin".to_string(), "Viewer".to_string()]),
+        );
+        assert_eq!(p.roles(), ["Viewer"]);
+
+        // Caller is an Admin but the agent declares a Viewer-only ceiling.
+        let p = Principal::agent_for(
+            AgentId("agt-1".into()), &human(&["Admin", "Viewer"]), None, None,
+            Some(&["Viewer".to_string()]),
+        );
+        assert_eq!(p.roles(), ["Viewer"]);
+    }
+
+    #[test]
+    fn agent_chain_only_ever_narrows() {
+        let first = Principal::agent_for(
+            AgentId("agt-1".into()), &human(&["Admin", "Viewer"]), None, None,
+            Some(&["Viewer".to_string()]),
+        );
+        // A sub-agent inherits the PARENT AGENT's already-attenuated roles, not
+        // the original human's — so delegation cannot launder authority back in.
+        let second = Principal::agent_for(AgentId("agt-2".into()), &first, None, None, None);
+        assert_eq!(second.roles(), ["Viewer"]);
+        assert_eq!(second.on_behalf_of(), Some("usr-sriram"));
+    }
+
+    #[test]
+    fn agent_invoked_by_a_service_carries_no_roles() {
+        // A service has no roles to lend. An event-triggered agent must not
+        // manufacture authority out of ambient trust.
+        let p = Principal::agent_for(
+            AgentId("agt-1".into()), &Principal::service("trigger"), None, None, None,
+        );
+        assert!(p.roles().is_empty());
+        assert_eq!(p.on_behalf_of(), None);
+    }
+
+    #[test]
+    fn ask_is_not_allow() {
+        let ask = PolicyDecision::Ask {
+            reason: "needs approval".into(),
+            policy_ids: vec!["p1".into()],
+            scopes: vec![GrantScope::Once, GrantScope::Session],
+        };
+        // The fail-closed contract: anything that has not learned to prompt
+        // must treat Ask as "no".
+        assert!(!ask.is_allow());
+        assert!(ask.is_ask());
+        assert_eq!(ask.label(), "ask");
+    }
+
+    #[test]
+    fn ask_collapses_to_deny_without_an_approver() {
+        let ask = PolicyDecision::Ask {
+            reason: "needs approval".into(),
+            policy_ids: vec!["p1".into()],
+            scopes: vec![GrantScope::Session],
+        };
+        match ask.non_interactive() {
+            PolicyDecision::Deny { reason, policy_ids } => {
+                assert!(reason.contains("no interactive approver"), "{reason}");
+                assert_eq!(policy_ids, vec!["p1"]);
+            }
+            other => panic!("expected Deny, got {other:?}"),
+        }
+        // Allow and Deny pass through untouched.
+        assert!(PolicyDecision::Allow.non_interactive().is_allow());
     }
 
     #[test]

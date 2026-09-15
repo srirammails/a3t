@@ -86,6 +86,18 @@ struct AgentSettings {
     memory_config: MemoryTierConfig,
     #[serde(default = "default_ttl")]
     ttl: u64,
+    /// Role ceiling: the most authority this agent may ever carry, regardless of
+    /// who runs it. Attenuate-only — the effective roles are the caller's roles
+    /// INTERSECTED with this, so naming a role here can never grant it. `None`
+    /// (the default) means "do not narrow", matching how `enabled_tools` treats
+    /// an empty set.
+    #[serde(default)]
+    role_ceiling: Option<Vec<String>>,
+    /// The principal that created this agent. Default authority over what the
+    /// agent may be granted; anything beyond the owner's own reach must be
+    /// requested from InfoSec rather than self-granted.
+    #[serde(default)]
+    owner: Option<String>,
 }
 
 fn default_system_prompt() -> String { "You are a helpful assistant.".to_string() }
@@ -379,15 +391,20 @@ impl TaskHandler for AgentHandler {
         // It acts on behalf of whoever started the flow (ctx.principal). Local
         // tool calls are dispatched in-process through the gated choke point
         // (site A) as this identity — see call_mcp_tool / list_mcp_tools.
-        let agent_principal = flowr_mcp_core::Principal::Agent {
-            agent_id: flowr_mcp_core::AgentId(format!("agent:{}", config.session_id)),
-            on_behalf_of: match &ctx.principal {
-                flowr_mcp_core::Principal::Human { user_id, .. } => Some(user_id.clone()),
-                flowr_mcp_core::Principal::Agent { on_behalf_of, .. } => on_behalf_of.clone(),
-                flowr_mcp_core::Principal::Service { .. } => None,
-            },
-            flow_id: Some(format!("{}/{}", ctx.namespace, ctx.name)),
-        };
+        //
+        // It also inherits the caller's ROLES, attenuated by any ceiling the
+        // agent declares (`config.role_ceiling`). Carrying `on_behalf_of` alone
+        // was not enough: policy could see whose name the agent acted under but
+        // not what that person was actually allowed to do, so an agent run by a
+        // Viewer had the same authority as one run by an Admin.
+        let role_ceiling = config.config.role_ceiling.as_deref();
+        let agent_principal = flowr_mcp_core::Principal::agent_for(
+            flowr_mcp_core::AgentId(format!("agent:{}", config.session_id)),
+            &ctx.principal,
+            Some(format!("{}/{}", ctx.namespace, ctx.name)),
+            config.config.owner.clone(),
+            role_ceiling,
+        );
 
         let mut state = AgentState::new(&config);
 

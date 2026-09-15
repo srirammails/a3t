@@ -19,7 +19,7 @@ flowr-policy = { workspace = true }
 # EE glue (optional): the Cedar policy hook. `--features ee` produces the
 # enforcing EE binary; the default CE build excludes it — no Cedar in CE.
 flowr-aesop = { path = "../flowr-aesop", optional = true }
-aesop-tower = { path = "../../../../aesop/crates/aesop-tower", optional = true }
+aesop-tower = { path = "../../../../AESOP/crates/aesop-tower", optional = true }
 
 # Axum for additional routes
 axum = "0.7"

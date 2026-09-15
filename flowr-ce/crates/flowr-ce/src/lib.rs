@@ -609,13 +609,15 @@ async fn session_policy_allows(
         attributes: Default::default(),
         params: serde_json::Value::Null,
     };
-    match flowr_policy::policy_hook().check(&req).await {
+    match flowr_policy::policy_hook().check(&req).await.non_interactive() {
         flowr_policy::PolicyDecision::Allow => true,
         flowr_policy::PolicyDecision::Deny { reason, policy_ids } => {
             info!(session_id, principal = %principal.id(), %reason, ?policy_ids,
                   "session access denied by policy");
             false
         }
+        // Reading someone's transcript is not a thing to prompt about mid-request.
+        flowr_policy::PolicyDecision::Ask { .. } => false,
     }
 }
 
@@ -1088,7 +1090,12 @@ pub(crate) async fn handle_agent_tool_call(
         };
         let decision = flowr_policy::policy_hook().check(&req).await;
         flowr_policy::audit::record(&req, &decision);
-        if let flowr_policy::PolicyDecision::Deny { reason, policy_ids } = decision {
+        // Authoring writes are an HTTP-dispatched path with no approver attached,
+        // so `Ask` fails closed here (`non_interactive`) rather than silently
+        // behaving like `Allow`.
+        if let flowr_policy::PolicyDecision::Deny { reason, policy_ids } =
+            decision.non_interactive()
+        {
             return Some(CallToolResult::error(format!(
                 "denied: {name} — {reason} (policies: {})",
                 policy_ids.join(",")

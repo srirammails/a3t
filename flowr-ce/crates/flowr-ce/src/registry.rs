@@ -72,8 +72,11 @@ async fn authorize_resource_write(
         attributes: Default::default(),
         params: serde_json::json!({}),
     };
-    match flowr_policy::policy_hook().check(&req).await {
+    match flowr_policy::policy_hook().check(&req).await.non_interactive() {
         flowr_policy::PolicyDecision::Allow => Ok(()),
+        flowr_policy::PolicyDecision::Ask { .. } => unreachable!(
+            "non_interactive() collapses Ask into Deny"
+        ),
         flowr_policy::PolicyDecision::Deny { policy_ids, reason } => Err((
             StatusCode::FORBIDDEN,
             Json(json!({

@@ -557,12 +557,22 @@ impl WorkflowExecutor {
                     let decision = flowr_policy::policy_hook().check(&policy_req).await;
                     tracing::Span::current().record("aesop.decision", decision.label());
                     flowr_policy::audit::record(&policy_req, &decision);
-                    if let flowr_policy::PolicyDecision::Deny { reason, policy_ids } = decision {
-                        return Err(RuntimeError::Denied {
-                            task: named_task.name.clone(),
-                            reason,
-                            policy_ids,
-                        });
+                    // A flow step has no interactive approver — the run may have
+                    // been started by a trigger with nobody watching. `Ask` therefore
+                    // collapses to `Deny` here, with the reason preserved so the audit
+                    // trail distinguishes "refused" from "nobody was there to ask".
+                    match decision.non_interactive() {
+                        flowr_policy::PolicyDecision::Allow => {}
+                        flowr_policy::PolicyDecision::Deny { reason, policy_ids } => {
+                            return Err(RuntimeError::Denied {
+                                task: named_task.name.clone(),
+                                reason,
+                                policy_ids,
+                            });
+                        }
+                        flowr_policy::PolicyDecision::Ask { .. } => unreachable!(
+                            "non_interactive() collapses Ask into Deny"
+                        ),
                     }
                     handler.execute(named_task, input, ctx).await
                 }

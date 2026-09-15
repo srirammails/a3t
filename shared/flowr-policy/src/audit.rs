@@ -52,6 +52,12 @@ pub fn record(req: &ExecutionRequest, decision: &PolicyDecision) {
         PolicyDecision::Deny { reason, policy_ids } => {
             ("deny".to_string(), policy_ids.clone(), Some(reason.clone()))
         }
+        // An `Ask` is audited at the moment it is raised, separately from
+        // whatever the human then answers — so the trail shows both that
+        // approval was demanded and, later, what was granted.
+        PolicyDecision::Ask { reason, policy_ids, .. } => {
+            ("ask".to_string(), policy_ids.clone(), Some(reason.clone()))
+        }
     };
     let rec = AuditRecord {
         ts_ms,
@@ -107,6 +113,8 @@ mod tests {
                 agent_id: AgentId("agt-1".into()),
                 on_behalf_of: Some("user::sriram".into()),
                 flow_id: None,
+                roles: vec![],
+                owner: None,
             },
             action: actions::tool_invoke(),
             resource: Resource::tool("call:rotate"),

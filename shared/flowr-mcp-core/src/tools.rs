@@ -752,14 +752,69 @@ pub async fn authorize_tool_call(
         .await;
     span.record("aesop.decision", decision.label());
     flowr_policy::audit::record(&policy_req, &decision);
-    if let flowr_policy::PolicyDecision::Deny { reason, policy_ids } = decision {
-        debug!(tool = %name, reason = %reason, "MCP tool call denied by policy");
-        return Some(CallToolResult::error(format!(
-            "denied: {name} — {reason} (policies: {})",
-            policy_ids.join(",")
-        )));
+    match decision {
+        flowr_policy::PolicyDecision::Allow => None,
+        flowr_policy::PolicyDecision::Deny { reason, policy_ids } => {
+            debug!(tool = %name, reason = %reason, "MCP tool call denied by policy");
+            Some(CallToolResult::error(format!(
+                "denied: {name} — {reason} (policies: {})",
+                policy_ids.join(",")
+            )))
+        }
+        // This entry point has no way to reach a human, so it fails closed.
+        // A caller that CAN prompt (the in-process chat agent loop) uses
+        // `authorize_tool_call_decision` below and handles `Ask` itself.
+        flowr_policy::PolicyDecision::Ask { reason, policy_ids, .. } => {
+            debug!(tool = %name, reason = %reason,
+                   "MCP tool call needs approval, but this path cannot prompt");
+            Some(CallToolResult::error(format!(
+                "denied: {name} — {reason} (approval required, no interactive approver) (policies: {})",
+                policy_ids.join(",")
+            )))
+        }
     }
-    None
+}
+
+/// The same check as [`authorize_tool_call`], but handing back the raw decision
+/// instead of a canned error.
+///
+/// Callers that can conduct an interactive approval — today the in-process chat
+/// agent loop — use this so a `PolicyDecision::Ask` becomes a prompt rather than
+/// a refusal. Everything else should keep using `authorize_tool_call`, which
+/// fails closed. Both audit identically, so choosing one does not change the
+/// trail.
+pub async fn authorize_tool_call_decision(
+    principal: &flowr_policy::Principal,
+    name: &str,
+    args: &Value,
+    attributes: serde_json::Map<String, Value>,
+) -> flowr_policy::PolicyDecision {
+    let span = tracing::info_span!(
+        "tool_call",
+        "aesop.principal.kind" = principal.kind(),
+        "aesop.principal.id" = %principal.id(),
+        "aesop.on_behalf_of" = principal.on_behalf_of().unwrap_or(""),
+        "aesop.action" = flowr_policy::actions::MCP_CALL,
+        "aesop.resource.type" = "Tool",
+        "aesop.resource.id" = name,
+        "aesop.task.source" = flowr_policy::telemetry::TASK_SOURCE_BUILTIN,
+        "aesop.decision" = tracing::field::Empty,
+    );
+    let policy_req = flowr_policy::ExecutionRequest {
+        principal: principal.clone(),
+        action: flowr_policy::actions::mcp_call(),
+        resource: flowr_policy::Resource::tool(name),
+        attributes,
+        context: flowr_policy::ExecContext::default(),
+        params: args.clone(),
+    };
+    let decision = flowr_policy::policy_hook()
+        .check(&policy_req)
+        .instrument(span.clone())
+        .await;
+    span.record("aesop.decision", decision.label());
+    flowr_policy::audit::record(&policy_req, &decision);
+    decision
 }
 
 pub async fn handle_tool_call_with_attributes(

@@ -21,7 +21,13 @@ type A3tTemplate = {
 };
 
 entity User { roles?: Set<String>, template?: A3tTemplate };
-entity Agent { on_behalf_of?: String, template?: A3tTemplate };
+// `roles` is authority INHERITED from the invoking principal and already
+// attenuated by the runtime (caller's roles ∩ the agent's declared ceiling), so
+// a rule may trust it as an upper bound — an agent can never present a role its
+// invoker did not hold. Declared under the same name as User.roles so one rule
+// covers both. `owner` is the principal that created the agent: the default
+// authority over what it may be granted, and the bound on self-service grants.
+entity Agent { on_behalf_of?: String, roles?: Set<String>, owner?: String, template?: A3tTemplate };
 entity Service { template?: A3tTemplate };
 
 // A tool/task. `destructive` and `name` are attached by the choke point from

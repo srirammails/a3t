@@ -85,6 +85,8 @@ async fn ctx_principal_reaches_choke_point_and_context_is_populated() {
         agent_id: flowr_policy::AgentId("agent-007".into()),
         on_behalf_of: Some("user::sriram".into()),
         flow_id: Some("acme/campaign".into()),
+        roles: vec!["Viewer".to_string()],
+        owner: Some("user::sriram".into()),
     };
 
     let wf = parse_yaml(WORKFLOW).unwrap();

@@ -9,7 +9,7 @@ license = "Proprietary"
 # CE contract crate (the seam we implement). Dependency direction: flowr-ee → CE.
 flowr-policy = { path = "../../../shared/flowr-policy" }
 # AESOP decision core with the Cedar engine. Direction: flowr-ee → aesop.
-aesop-core = { path = "../../../../aesop/crates/aesop-core", features = ["cedar"] }
+aesop-core = { path = "../../../../AESOP/crates/aesop-core", features = ["cedar"] }
 async-trait = "0.1"
 tracing = "0.1"
 serde_json = "1"

@@ -28,12 +28,17 @@ fn agent_for_user() -> Principal {
         agent_id: AgentId("pc-crawler-7".into()),
         on_behalf_of: Some("user::sriram".into()),
         flow_id: Some("acme/campaign".into()),
+        // No inherited roles: this agent acts for a plain user with no
+        // Admin/SuperAdmin, so the destructive forbid binds the approver too and
+        // the denial stays a denial rather than becoming a question.
+        roles: vec![],
+        owner: Some("user::sriram".into()),
     }
 }
 
 fn agent_ambient() -> Principal {
     // No on_behalf_of — ambient trust, which the baseline refuses.
-    Principal::Agent { agent_id: AgentId("rogue".into()), on_behalf_of: None, flow_id: None }
+    Principal::Agent { agent_id: AgentId("rogue".into()), on_behalf_of: None, flow_id: None, roles: vec![], owner: None }
 }
 
 #[tokio::test]
@@ -62,7 +67,7 @@ async fn agent_denied_on_destructive_tool() {
         PolicyDecision::Deny { policy_ids, reason } => {
             assert!(!policy_ids.is_empty(), "deny cites the forbid policy: {reason}");
         }
-        PolicyDecision::Allow => panic!("destructive tool must be denied"),
+        other => panic!("destructive tool must be denied — got {other:?}"),
     }
 }
 
@@ -145,7 +150,7 @@ async fn service_denied_on_destructive_tool() {
     let p = Principal::Service { service_id: "flow-runtime".into() };
     match hook.check(&req(p, true)).await {
         PolicyDecision::Deny { .. } => {}
-        PolicyDecision::Allow => panic!("destructive tool must be denied even for service"),
+        other => panic!("destructive tool must be denied even for service — got {other:?}"),
     }
 }
 
@@ -187,7 +192,7 @@ async fn plain_user_may_not_write_cedar_policy() {
         PolicyDecision::Deny { policy_ids, reason } => {
             assert!(!policy_ids.is_empty(), "deny cites the SoD forbid: {reason}");
         }
-        PolicyDecision::Allow => panic!("non-InfoSec user must not write a cedar policy"),
+        other => panic!("non-InfoSec user must not write a cedar policy — got {other:?}"),
     }
 }
 
@@ -267,7 +272,7 @@ when { resource has name && resource.name == "call:wire-transfer" };
     };
     match hook.check(&blocked).await {
         PolicyDecision::Deny { policy_ids, .. } => assert!(!policy_ids.is_empty()),
-        PolicyDecision::Allow => panic!("attached registry forbid must deny the named tool"),
+        other => panic!("attached registry forbid must deny the named tool — got {other:?}"),
     }
 }
 
@@ -557,7 +562,7 @@ async fn viewer_may_read_but_not_write_or_delete_through_a_db_handler() {
         PolicyDecision::Deny { policy_ids, reason } => {
             assert!(!policy_ids.is_empty(), "deny cites the operation forbid: {reason}");
         }
-        PolicyDecision::Allow => panic!("viewer must not write through call:lancedb"),
+        other => panic!("viewer must not write through call:lancedb — got {other:?}"),
     }
     assert!(
         matches!(hook.check(&db_step(viewer(), "delete")).await, PolicyDecision::Deny { .. }),
@@ -710,4 +715,65 @@ async fn an_agent_may_not_read_a_users_session_even_on_their_behalf() {
         hook.check(&session_req(agent_for_user(), actions::session_read(), "sriram", false)).await,
         PolicyDecision::Deny { .. }
     ));
+}
+
+// ── Interactive approval: how an allow/deny engine produces a question ────────
+//
+// Cedar never says "ask". `Ask` is derived: when the AGENT is denied, the hook
+// re-runs the identical request as the human it acts for. Allowed for them but
+// not for the agent = a delegation the human may widen, so it becomes a prompt.
+// Denied for both = a real denial. These tests pin that distinction, because
+// getting it wrong turns the chat approval card into a privilege-escalation path.
+
+fn agent_with_roles(roles: &[&str]) -> Principal {
+    Principal::Agent {
+        agent_id: AgentId("dev-agent".into()),
+        on_behalf_of: Some("usr-sriram".into()),
+        flow_id: Some("a3t/dev".into()),
+        roles: roles.iter().map(|r| r.to_string()).collect(),
+        owner: Some("usr-sriram".into()),
+    }
+}
+
+#[tokio::test]
+async fn agent_exceeding_an_admins_delegation_is_a_question_not_a_denial() {
+    // Destructive tool: the baseline forbids it for agents outright, but exempts
+    // Admin humans. The agent inherits Admin, so the human behind it COULD do
+    // this by hand — exactly the case the dev-time prompt exists for.
+    let hook = CedarHook::baseline().unwrap();
+    match hook.check(&req(agent_with_roles(&["Admin"]), true)).await {
+        PolicyDecision::Ask { scopes, reason, .. } => {
+            assert!(!scopes.is_empty(), "an Ask must offer at least one grant scope");
+            assert!(
+                scopes.contains(&flowr_policy::GrantScope::Session),
+                "dev-time default scope must be on offer: {scopes:?}"
+            );
+            assert!(reason.contains("authorize"), "reason should say it can be approved: {reason}");
+        }
+        other => panic!("expected Ask for an Admin's agent — got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn agent_of_a_viewer_is_denied_outright_never_asked() {
+    // The escalation guard. A Viewer cannot run a destructive tool themselves,
+    // so their agent must not be able to prompt them into granting one — that
+    // would let the chat box manufacture authority nobody held.
+    let hook = CedarHook::baseline().unwrap();
+    match hook.check(&req(agent_with_roles(&["Viewer"]), true)).await {
+        PolicyDecision::Deny { .. } => {}
+        other => panic!("a Viewer's agent must be denied, never asked — got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_triggered_run_is_never_asked() {
+    // Requirement: an event-triggered agent stands on its own policy. With no
+    // human behind it there is nobody to prompt, so it must deny rather than
+    // block forever waiting for an approval that cannot arrive.
+    let hook = CedarHook::baseline().unwrap();
+    match hook.check(&req(agent_ambient(), true)).await {
+        PolicyDecision::Deny { .. } => {}
+        other => panic!("an ambient/triggered agent must be denied — got {other:?}"),
+    }
 }
