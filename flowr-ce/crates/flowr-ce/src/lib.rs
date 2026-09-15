@@ -954,6 +954,47 @@ async fn chat_ui_stream_handler(
     info!(%instance_id, session_id = %session_id, principal = %principal.id(),
           "chat run started (ui-message-stream)");
 
+    // ── Watchdog: a failed run must end the stream, not hang it ──
+    //
+    // The SSE ends when a `done` chunk arrives, and the agent publishes that on
+    // its way out. A run that dies BEFORE that point — an LLM 429, a denied step,
+    // a panic in a nested flow — publishes nothing, so the client sat on a typing
+    // indicator forever with no way to know it had failed. Observed live: an
+    // upstream provider rate-limit left the chat spinning indefinitely.
+    //
+    // So watch the execution record and, if it reaches a terminal failure without
+    // the stream having closed itself, say so in the conversation and close it.
+    // Completion needs no handling here: a run that completes has already sent
+    // `done`.
+    {
+        let storage = state.storage.clone();
+        let sid = session_id.clone();
+        tokio::spawn(async move {
+            // Generous cap: long tool chains are legitimate. This only bounds how
+            // long the watchdog itself lives, not the run.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(900);
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+            ticker.tick().await;
+            while std::time::Instant::now() < deadline {
+                ticker.tick().await;
+                let Ok(Some(exec)) = storage.executions().get(instance_id).await else { continue };
+                match exec.status {
+                    flowr_types::ExecutionStatus::Failed
+                    | flowr_types::ExecutionStatus::Cancelled => {
+                        let reason = exec.error.unwrap_or_else(|| "the run failed".to_string());
+                        warn!(%instance_id, session_id = %sid, %reason, "chat run ended without closing its stream");
+                        crate::token_stream::publish(&sid, "token",
+                            format!("\n\n**The run stopped.** {reason}"));
+                        crate::token_stream::publish(&sid, "done", "");
+                        return;
+                    }
+                    flowr_types::ExecutionStatus::Completed => return,
+                    _ => {}
+                }
+            }
+        });
+    }
+
     let sse = Sse::new(ui_message_stream(replay, rx))
         .keep_alive(axum::response::sse::KeepAlive::new()
             .interval(std::time::Duration::from_secs(15)));
