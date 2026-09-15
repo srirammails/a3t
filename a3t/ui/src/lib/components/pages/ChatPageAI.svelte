@@ -150,7 +150,7 @@
     }
   });
   let messagesEl = $state<HTMLDivElement>();
-  let agents = $state<{ id: string; name: string; llm: string; target: string; ep_path: string; system_default: boolean; enabled_tools: string[] }[]>([]);
+  let agents = $state<{ id: string; name: string; llm: string; target: string; ep_path: string; system_default: boolean; enabled_tools?: string[] }[]>([]);
   let selectedAgent = $state<string>(loadLS<string>(LS_AGENT, ''));
   let sessionId = $state<string>('');
 
@@ -226,7 +226,14 @@
             session_id: serverSession(),
             ...(ui ? { ui_context: ui } : {}),
             ...(a?.llm ? { llm_resource: a.llm } : {}),
-            ...(a?.enabled_tools?.length ? { enabled_tools: a.enabled_tools } : {}),
+            // Send the tool restriction whenever the agent HAS one, including an
+            // empty one. Gating this on `.length` meant that removing an agent's
+            // last tool dropped the field entirely, so the server saw no
+            // restriction at all and the agent came back UNRESTRICTED — the exact
+            // opposite of what removing a tool should do. Absent and empty are
+            // different: absent is "never configured", empty is "configured down
+            // to nothing".
+            ...(Array.isArray(a?.enabled_tools) ? { enabled_tools: a.enabled_tools } : {}),
           },
         };
       },
@@ -306,7 +313,12 @@
       target: r.target ?? '',
       ep_path: r.ep_path ?? '',
       system_default: !!r.system_default,
-      enabled_tools: r.enabled_tools ?? [],
+      // Left UNDEFINED when the agent has no tool restriction, rather than
+      // coerced to []. The two mean different things now: undefined is "never
+      // configured" (not narrowed), [] is "configured down to nothing" (every
+      // tool asks). Defaulting to [] here would silently restrict every agent
+      // that had simply never been given a tool list.
+      enabled_tools: Array.isArray(r.enabled_tools) ? r.enabled_tools : undefined,
     }));
     if (!selectedAgent && agents.length > 0) {
       selectedAgent = (agents.find(a => a.system_default) ?? agents[0]).id;

@@ -73,7 +73,17 @@ struct AgentSettings {
     // (every exposed tool is enabled). When set, the template ceiling forbids any
     // tool not in this set even if the agent is offered it.
     #[serde(default)]
-    enabled_tools: Vec<String>,
+    /// The instance-enabled tool set.
+    ///
+    /// `Option` is load-bearing: **absent and empty are different things.**
+    /// `None` means the agent was never given a tool restriction, so it is not
+    /// narrowed (CE parity). `Some([])` means someone configured it down to
+    /// nothing — every tool then falls outside the ceiling and prompts its owner.
+    ///
+    /// Conflating the two was the reported bug: removing the last tool from an
+    /// agent made it LESS restricted rather than more, because an empty set read
+    /// as "no restriction configured".
+    enabled_tools: Option<Vec<String>>,
     #[serde(default)]
     tool_flows: HashMap<String, ToolFlowRef>,
     #[serde(default)]
@@ -1318,9 +1328,9 @@ fn build_ceiling_attributes(
     if !exposed.is_empty() {
         template.insert("exposedTools".to_string(), Value::Array(exposed));
     }
-    if !settings.enabled_tools.is_empty() {
-        let enabled: Vec<Value> = settings
-            .enabled_tools
+    // Present-but-empty must still narrow — see AgentSettings::enabled_tools.
+    if let Some(enabled_list) = &settings.enabled_tools {
+        let enabled: Vec<Value> = enabled_list
             .iter()
             .map(|s| Value::String(s.clone()))
             .collect();
@@ -1583,6 +1593,56 @@ async fn execute_tool_flow(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── The capability ceiling: absent is not the same as empty ──
+    //
+    // Reported bug: removing `list_flows` from an agent left it still able to
+    // list flows. The empty tool set read as "no restriction configured", so the
+    // agent came back UNRESTRICTED — removing a tool made it more powerful, not
+    // less. These pin the three cases apart.
+
+    fn settings_with(enabled: Option<Vec<&str>>, tools: &[&str]) -> AgentSettings {
+        let mut s: AgentSettings = serde_json::from_value(json!({})).expect("defaults");
+        s.tools = tools.iter().map(|t| json!({ "name": t })).collect();
+        s.enabled_tools = enabled.map(|v| v.into_iter().map(String::from).collect());
+        s
+    }
+
+    #[test]
+    fn no_restriction_configured_does_not_narrow() {
+        // CE parity: an agent that was never given a tool list is not narrowed,
+        // so `enabledTools` must be absent from the ceiling entirely.
+        let attrs = build_ceiling_attributes(&settings_with(None, &[]), &Default::default());
+        let template = attrs.get("template").and_then(|v| v.as_object()).unwrap();
+        assert!(!template.contains_key("enabledTools"),
+                "absent means unconstrained: {template:?}");
+    }
+
+    #[test]
+    fn an_emptied_tool_list_still_narrows() {
+        // The bug. Configuring the list down to nothing must produce an EMPTY
+        // enabledTools, not a missing one — an empty allow-list permits nothing,
+        // so every tool falls outside the ceiling and prompts the owner.
+        let attrs = build_ceiling_attributes(&settings_with(Some(vec![]), &[]), &Default::default());
+        let template = attrs.get("template").and_then(|v| v.as_object()).unwrap();
+        let enabled = template.get("enabledTools").expect("an emptied list must still be declared");
+        assert_eq!(enabled.as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_narrowed_list_is_carried_through() {
+        let attrs = build_ceiling_attributes(
+            &settings_with(Some(vec!["get_flow"]), &["get_flow", "list_flows"]),
+            &Default::default(),
+        );
+        let template = attrs.get("template").and_then(|v| v.as_object()).unwrap();
+        let enabled: Vec<&str> = template["enabledTools"].as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(enabled, ["get_flow"], "removing list_flows must leave it out");
+        let exposed: Vec<&str> = template["exposedTools"].as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(exposed.contains(&"list_flows"), "exposed is what it declares, enabled is the subset");
+    }
 
     fn cfg_with_ui(ui: Option<Value>) -> AgentConfig {
         AgentConfig {
