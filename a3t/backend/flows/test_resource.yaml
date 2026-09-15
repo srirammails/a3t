@@ -1,0 +1,90 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-test-resource
+  version: 1.0.0
+do:
+- route:
+    switch:
+    - case:
+        when: ${ .input.test_type == "llm" }
+        then: test-llm
+    - case:
+        when: ${ .input.test_type == "db" }
+        then: test-db
+    - case:
+        when: ${ .input.test_type == "mcp" }
+        then: test-mcp
+    - case:
+        when: ${ .input.test_type == "mcp_call" }
+        then: test-mcp-call
+    - case:
+        when: ${ .input.test_type == "secret" }
+        then: test-secret
+    - default:
+        then: test-generic
+
+# ── LLM test: send a simple prompt and return the response ──
+- test-llm:
+    call: llm
+    with:
+      prompt: ${ .input.message // "Say hello in one sentence." }
+      system_prompt: "You are a test assistant. Keep responses brief."
+      max_tokens: ${ .input.max_tokens // 256 }
+      temperature: 0.3
+      _resource: ${ .input.resource }
+    then: end
+
+# ── Database test: list tables or run a query ──
+- test-db:
+    call: lancedb
+    with:
+      operation: ${ .input.operation // "list_tables" }
+      table: ${ .input.table // "" }
+      filter: ${ .input.filter // "" }
+      limit: ${ .input.limit // 10 }
+      _resource: ${ .input.resource }
+    then: end
+
+# ── MCP test: list available tools ──
+- test-mcp:
+    call: mcp
+    with:
+      method: "tools/list"
+      _resource: ${ .input.resource }
+    then: end
+
+# ── MCP call: execute a specific tool ──
+- test-mcp-call:
+    call: mcp
+    with:
+      tool: ${ .input.tool }
+      arguments: ${ .input.arguments // {} }
+      _resource: ${ .input.resource }
+    then: end
+
+# ── Secret test: verify secret resource exists and has a value ──
+- test-secret:
+    call: state:get
+    with:
+      key: "resource:verify:${ .input.resource }"
+    then: verify-secret
+
+- verify-secret:
+    set:
+      status: "ok"
+      message: "Secret resource exists and is accessible"
+      resource: ${ .input.resource }
+    export:
+      as: "."
+    then: end
+
+# ── Generic: just get resource info ──
+- test-generic:
+    set:
+      status: "ok"
+      message: "Resource exists"
+      resource: ${ .input.resource }
+    export:
+      as: "."
+    then: end

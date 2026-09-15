@@ -1,0 +1,38 @@
+[package]
+name = "flowr-ce-core"
+description = "ClawdFlow Core - Single-node workflow executor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Shared crates
+flowr-core.workspace = true
+flowr-expr.workspace = true
+flowr-types.workspace = true
+flowr-storage.workspace = true
+
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+
+# HTTP client
+reqwest.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Utilities
+uuid.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -1,0 +1,43 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-agent-tools
+  version: 1.0.0
+do:
+- agent-with-tools:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: tool-test-001
+          message: How many task types are available? Use the list_task_types tool
+            to find out. Answer with just the number.
+          config:
+            system_prompt: You are a helpful agent. Always use tools when asked to
+              look something up. Be concise.
+            max_iterations: 3
+            max_tokens: 512
+            temperature: 0.1
+            tools:
+            - name: list_task_types
+              description: List all available task types with their categories
+              input_schema:
+                type: object
+                properties:
+                  category:
+                    type: string
+                    description: Optional category filter
+            mcp_servers:
+            - agent-flows
+            ttl: 60
+    export:
+      as: .
+- verify:
+    set:
+      test_passed: ${ .content != null }
+      got_response: ${ .content }
+      used_tools: ${ .tool_calls_made > 0 }
+      iterations: ${ .iterations }
+    export:
+      as: .

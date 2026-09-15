@@ -1,0 +1,47 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: send-email
+  version: 1.0.0
+do:
+- send:
+    call: http
+    with:
+      method: POST
+      url: ${ .api_url // "https://api.resend.com/emails" }
+      headers:
+        Content-Type: application/json
+        Authorization: ${ "Bearer " + (.api_key // "no-key") }
+      body:
+        from: ${ .from // "noreply@example.com" }
+        to: ${ .to }
+        subject: ${ .subject }
+        html: ${ .body }
+    export:
+      as: .
+- result:
+    set:
+      sent: ${ .status >= 200 and .status < 300 }
+      message_id: ${ .body.id // null }
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    required:
+    - to
+    - subject
+    - body
+    properties:
+      to:
+        type: string
+      subject:
+        type: string
+      body:
+        type: string
+      from:
+        type: string
+      api_url:
+        type: string
+      api_key:
+        type: string

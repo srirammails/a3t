@@ -1,0 +1,42 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-agent-reactive
+  version: 2.0.0
+do:
+- agent-with-tools:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: reactive-test-001
+          message: How many task types are available? Use list_task_types tool. Return
+            just the count.
+          config:
+            system_prompt: You are a reactive agent. Use tools to answer questions.
+            llm_resource: openai-gpt
+            max_iterations: 5
+            max_tokens: 512
+            temperature: 0.3
+            mcp_servers:
+            - agent-flows
+            ttl: 300
+    export:
+      as: .
+- save-result:
+    set:
+      ask_output: ${ .content }
+      tool_calls: ${ .tool_calls_made }
+    export:
+      as: .
+- cleanup:
+    call: state:delete
+    with:
+      key: agent:session:reactive-test-001
+- compile:
+    set:
+      test_passed: true
+      agent_used_tools: ${ ($context.tool_calls // 0) > 0 }
+    export:
+      as: .

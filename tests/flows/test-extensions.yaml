@@ -1,0 +1,51 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-extensions
+  version: 1.0.0
+do:
+- step1-set:
+    set:
+      value: ${ .value }
+      doubled: ${ .value * 2 }
+    export:
+      as: .
+- step2-set:
+    set:
+      tripled: ${ .value * 3 }
+      result: extensions-test-complete
+    export:
+      as: .
+use:
+  extensions:
+  - name: audit-logger
+    extend: all
+    before:
+    - name: log-before
+      type: set
+      config:
+        _audit_before: extension-before-fired
+    after:
+    - name: log-after
+      type: set
+      config:
+        _audit_after: extension-after-fired
+  - name: set-only-hook
+    extend: set
+    when: ${ .enable_hooks == true }
+    before:
+    - name: hook-before-set
+      type: set
+      config:
+        _hook_fired: true
+input:
+  schema:
+    type: object
+    properties:
+      enable_hooks:
+        type: boolean
+      value:
+        type: number
+    required:
+    - enable_hooks
+    - value

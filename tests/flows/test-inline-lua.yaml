@@ -1,0 +1,25 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-inline-lua
+  version: 1.0.0
+do:
+- lua-computation:
+    run:
+      script:
+        language: lua
+        code: "result = {\n  sum = state.a + state.b,\n  product = state.a * state.b,\n\
+          \  difference = state.a - state.b,\n  language = \"lua\"\n}\n"
+    export:
+      as: '{lua_result: .}'
+input:
+  schema:
+    type: object
+    properties:
+      a:
+        type: number
+      b:
+        type: number
+    required:
+    - a
+    - b

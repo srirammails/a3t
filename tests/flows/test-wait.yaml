@@ -1,0 +1,29 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-wait
+  version: 1.0.0
+do:
+- record-start:
+    set:
+      test_label: ${ .label }
+      started: true
+    export:
+      as: .
+- short-wait:
+    wait:
+      seconds: 1
+- record-end:
+    set:
+      completed: true
+      wait_finished: true
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    properties:
+      label:
+        type: string
+    required:
+    - label

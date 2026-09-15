@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlowR — A3T Agent Platform</title>
+  <link rel="stylesheet" href="/ui/style.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body>
+  <nav id="sidebar">
+    <div class="logo">A3T <span class="version">v0.2</span></div>
+    <div class="nav-section">BUILD</div>
+    <a href="#" data-page="templates" class="nav-item">Templates</a>
+    <a href="#" data-page="agents" class="nav-item">Agents</a>
+    <a href="#" data-page="workflows" class="nav-item">Workflows</a>
+    <div class="nav-section">OPERATE</div>
+    <a href="#" data-page="triggers" class="nav-item">Triggers</a>
+    <a href="#" data-page="resources" class="nav-item">Resources</a>
+    <div class="nav-section">INTELLIGENCE</div>
+    <a href="#" data-page="knowledge" class="nav-item">Knowledge</a>
+    <a href="#" data-page="memory" class="nav-item">Memory</a>
+    <div class="nav-section">OBSERVE</div>
+    <a href="#" data-page="dashboard" class="nav-item active">Dashboard</a>
+  </nav>
+
+  <main id="content">
+    <div id="page-dashboard" class="page active">
+      <h1>Dashboard</h1>
+      <div class="stats-grid">
+        <div class="stat-card" id="stat-agents">
+          <div class="stat-value">-</div>
+          <div class="stat-label">Live Agents</div>
+        </div>
+        <div class="stat-card" id="stat-triggers">
+          <div class="stat-value">-</div>
+          <div class="stat-label">Triggers</div>
+        </div>
+        <div class="stat-card" id="stat-templates">
+          <div class="stat-value">-</div>
+          <div class="stat-label">Templates</div>
+        </div>
+        <div class="stat-card" id="stat-resources">
+          <div class="stat-value">-</div>
+          <div class="stat-label">Resources</div>
+        </div>
+      </div>
+      <h2>Live Agents</h2>
+      <div id="agents-list" class="card-list"></div>
+    </div>
+
+    <div id="page-agents" class="page">
+      <h1>Agents</h1>
+      <div id="agents-full-list" class="table-container"></div>
+      <div id="agent-detail" class="detail-panel" style="display:none"></div>
+    </div>
+
+    <div id="page-templates" class="page">
+      <h1>Templates</h1>
+      <button onclick="showCreateTemplate()" class="btn">+ New Template</button>
+      <div id="templates-list" class="table-container"></div>
+      <div id="template-editor" style="display:none">
+        <h3>Create Template</h3>
+        <textarea id="template-yaml" rows="15" placeholder="Paste template YAML..."></textarea>
+        <button onclick="createTemplate()" class="btn">Create</button>
+        <button onclick="hideEditor('template-editor')" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+
+    <div id="page-triggers" class="page">
+      <h1>Triggers</h1>
+      <button onclick="showCreateTrigger()" class="btn">+ New Trigger</button>
+      <div id="triggers-list" class="table-container"></div>
+      <div id="trigger-form" style="display:none">
+        <h3>Create Trigger</h3>
+        <input id="trigger-name" placeholder="Trigger name" />
+        <select id="trigger-type">
+          <option value="webhook">Webhook</option>
+          <option value="cron">Cron</option>
+          <option value="event">Event</option>
+        </select>
+        <input id="trigger-path" placeholder="Path (e.g. /alerts)" />
+        <button onclick="createTrigger()" class="btn">Create</button>
+        <button onclick="hideEditor('trigger-form')" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+
+    <div id="page-workflows" class="page">
+      <h1>Workflows</h1>
+      <button onclick="showCreateWorkflow()" class="btn">+ New Workflow</button>
+      <div id="workflows-list" class="table-container"></div>
+      <div id="workflow-editor" style="display:none">
+        <h3>Create Workflow</h3>
+        <textarea id="workflow-yaml" rows="15" placeholder="Paste workflow YAML..."></textarea>
+        <button onclick="createWorkflow()" class="btn">Create</button>
+        <button onclick="hideEditor('workflow-editor')" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+
+    <div id="page-resources" class="page">
+      <h1>Resources</h1>
+      <button onclick="showCreateResource()" class="btn">+ New Resource</button>
+      <div id="resources-list" class="table-container"></div>
+      <div id="resource-form" style="display:none">
+        <h3>Create Resource</h3>
+        <input id="resource-name" placeholder="Resource name" />
+        <input id="resource-type" placeholder="Type (openai, clawdb, agent, mcp)" />
+        <textarea id="resource-config" rows="8" placeholder='{"provider":"openai",...}'></textarea>
+        <button onclick="createResource()" class="btn">Create</button>
+        <button onclick="hideEditor('resource-form')" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+
+    <div id="page-knowledge" class="page">
+      <h1>Knowledge Base</h1>
+      <div class="knowledge-layout">
+        <div class="knowledge-main">
+          <div class="knowledge-header">
+            <div class="knowledge-stats">
+              <span class="kstat"><strong id="k-total">847</strong> documents</span>
+              <span class="kstat"><strong id="k-clusters">12</strong> clusters</span>
+              <span class="kstat"><strong id="k-indexed">1.2k</strong> vectors</span>
+            </div>
+          </div>
+          <div id="cluster-viz" class="cluster-container"></div>
+        </div>
+        <div class="knowledge-sidebar">
+          <div class="search-box">
+            <input id="k-search" type="text" placeholder="Semantic search..." />
+            <button onclick="searchKnowledge()" class="btn" style="margin-top:4px;width:100%">Search</button>
+          </div>
+          <div id="search-results" class="search-results"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-memory" class="page">
+      <h1>Agent Memory</h1>
+      <div class="memory-layout">
+        <div class="memory-agents-panel">
+          <h3>Agents</h3>
+          <div id="memory-agent-list"></div>
+        </div>
+        <div class="memory-detail-panel">
+          <div id="memory-detail-content">
+            <p style="color:#888;padding:20px">Select an agent to view memory stores</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

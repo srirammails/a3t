@@ -1,0 +1,43 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-timeout
+  version: 1.0.0
+do:
+- fast-task:
+    run:
+      shell:
+        command: echo
+    timeout:
+      after:
+        seconds: 30
+    export:
+      as: .
+- try-slow-task:
+    try:
+      do:
+      - slow-task:
+          run:
+            shell:
+              command: sleep
+          timeout:
+            after:
+              seconds: 30
+      catch:
+        errors:
+        - '*'
+        do:
+        - handle-timeout:
+            set:
+              timed_out: true
+              error_message: Task timed out as expected
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    properties:
+      sleep_seconds:
+        type: number
+    required:
+    - sleep_seconds

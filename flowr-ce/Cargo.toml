@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/flowr-ce-core",
+    "crates/flowr-ce-storage",
+    "crates/flowr-ce-agents",
+    "crates/flowr-ce",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["ClawdFlow Contributors"]
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# CNCF SWF crates (new)
+swf-parser = { path = "../shared/swf-parser" }
+swf-runtime = { path = "../shared/swf-runtime" }
+
+# Shared crates (from ../shared)
+flowr-expr = { path = "../shared/flowr-expr" }
+flowr-types = { path = "../shared/flowr-types" }
+flowr-storage = { path = "../shared/flowr-storage" }
+flowr-core = { path = "../shared/flowr-core" }
+flowr-mcp-core = { path = "../shared/flowr-mcp-core" }
+flowr-policy = { path = "../shared/flowr-policy" }
+
+# Internal crates (ClawdFlow-specific)
+flowr-ce-core = { path = "crates/flowr-ce-core" }
+flowr-ce-storage = { path = "crates/flowr-ce-storage" }
+flowr-ce-agents = { path = "crates/flowr-ce-agents" }
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# Filesystem utilities
+dirs = "6.0"
+
+# LanceDB storage
+lancedb = "0.26"
+arrow = { version = "57", default-features = false }
+arrow-schema = "57"
+arrow-array = "57"
+
+# In-memory channels for queue/events
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# HTTP server (for SSE mode)
+axum = "0.7"
+tower-http = { version = "0.6", features = ["cors"] }
+
+# Static linking for lzma
+lzma-sys = { version = "*", features = ["static"] }
+
+# ClawDB crate (for IPC mode)
+clawdb = { path = "../../AQL/crates/clawdb" }
+aql-parser = { path = "../../AQL/crates/aql-parser" }
+

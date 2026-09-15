@@ -1,0 +1,30 @@
+document:
+  dsl: '1.0.3'
+  namespace: default
+  name: test-switch
+  version: '1.0.0'
+do:
+  - route:
+      switch:
+        - approved:
+            when: "${ .status == \"approved\" }"
+            then: handleApproved
+        - rejected:
+            when: "${ .status == \"rejected\" }"
+            then: handleRejected
+        - fallback:
+            then: handleDefault
+  - handleApproved:
+      set:
+        result: approved
+        action: process
+      then: end
+  - handleRejected:
+      set:
+        result: rejected
+        action: reject
+      then: end
+  - handleDefault:
+      set:
+        result: pending
+        action: review

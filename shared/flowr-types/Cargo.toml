@@ -1,0 +1,28 @@
+[package]
+name = "flowr-types"
+description = "Core types for FlowR workflow engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+# JSON Schema derivation — the published, single-source canvas schema (GET /canvas/schema)
+schemars = "0.8"
+
+# CNCF SWF types — canonical workflow definition
+swf-parser = { path = "../swf-parser" }
+
+# For From<ExprError> implementation
+flowr-expr = { path = "../flowr-expr" }
+
+# CE policy contract — the initiating Principal carried on ExecutionRequest
+flowr-policy = { path = "../flowr-policy" }
+
+[dev-dependencies]
+# Canvas YAML round-trip tests.
+serde_yaml = "0.9"

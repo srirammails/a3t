@@ -1,0 +1,74 @@
+[package]
+name = "flowr-server"
+description = "FlowR EE Server — ClawdFlow CE + UI + optional infrastructure"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+
+[[bin]]
+name = "flowr"
+path = "src/main.rs"
+
+[dependencies]
+# CE server library — runtime + all task handlers (lancedb, LLM, agent, MCP, …)
+flowr-ce = { path = "../../../flowr-ce/crates/flowr-ce" }
+
+# Policy contract — map validated JWT claims → Principal at the AuthN layer (E0.4a)
+flowr-policy = { workspace = true }
+
+# EE glue (optional): the Cedar policy hook. `--features ee` produces the
+# enforcing EE binary; the default CE build excludes it — no Cedar in CE.
+flowr-aesop = { path = "../flowr-aesop", optional = true }
+aesop-tower = { path = "../../../../aesop/crates/aesop-tower", optional = true }
+
+# Axum for additional routes
+axum = "0.7"
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# JWT auth (EE feature)
+jsonwebtoken = "9"
+argon2 = "0.5"
+
+# LanceDB (for reading A3T users table) — use same versions as clawdflow
+lancedb = "0.26"
+arrow-array = "57"
+arrow-schema = "57"
+futures = "0.3"
+
+# Async trait
+async-trait = "0.1"
+
+# Time
+chrono = "0.4"
+
+# RBAC (Casbin)
+
+# HTTP client (for external RBAC provider)
+reqwest = { version = "0.12", features = ["json"] }
+
+# Config file
+serde_yaml = "0.9"
+
+# Async
+tokio = { version = "1.40", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+
+# Filesystem
+dirs = "6.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+# EE build: compile in the Cedar policy hook so security.policy_hook="cedar"
+# enforces. Default (CE) build has no aesop/cedar dependency.
+ee = ["dep:flowr-aesop", "dep:aesop-tower"]

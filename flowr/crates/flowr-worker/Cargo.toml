@@ -1,0 +1,68 @@
+[package]
+name = "flowr-worker"
+description = "FlowR Worker - Executes workflows from the execution queue"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "flowr-worker"
+path = "src/main.rs"
+
+[features]
+default = ["dragonfly"]
+dragonfly = ["redis", "iggy", "flowr-registry", "flowr-hub"]
+adb = ["flowr-ce-storage"]
+
+[dependencies]
+# Core runtime
+flowr-core.workspace = true
+flowr-tasks.workspace = true
+
+# CNCF SWF parser
+swf-parser = { path = "../../../shared/swf-parser" }
+
+# Storage traits and types
+flowr-storage.workspace = true
+flowr-types.workspace = true
+
+# Dragonfly mode - registries
+flowr-registry = { workspace = true, optional = true }
+flowr-hub = { workspace = true, optional = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["full", "signal"] }
+async-trait.workspace = true
+async-recursion = "1.0"
+futures.workspace = true
+
+# Storage - Dragonfly mode
+redis = { workspace = true, optional = true }
+iggy = { workspace = true, optional = true }
+
+# Storage - ADB mode (ClawDB/LanceDB)
+flowr-ce-storage = { workspace = true, optional = true }
+
+# CLI
+clap.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# HTTP client
+reqwest.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Utilities
+uuid.workspace = true
+chrono.workspace = true

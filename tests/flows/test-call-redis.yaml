@@ -1,0 +1,45 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-call-redis
+  version: 1.0.0
+do:
+- redis-set:
+    call: redis
+    with:
+      command: SET
+      args:
+      - ${ .key }
+      - ${ .value }
+      _resource: test-redis
+    export:
+      as: '{redis_set_result: .}'
+- redis-get:
+    call: redis
+    with:
+      command: GET
+      args:
+      - ${ .key }
+      _resource: test-redis
+    export:
+      as: '{redis_get_result: .}'
+- redis-del:
+    call: redis
+    with:
+      command: DEL
+      args:
+      - ${ .key }
+      _resource: test-redis
+    export:
+      as: '{redis_del_result: .}'
+input:
+  schema:
+    type: object
+    properties:
+      key:
+        type: string
+      value:
+        type: string
+    required:
+    - key
+    - value

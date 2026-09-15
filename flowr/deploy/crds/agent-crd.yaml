@@ -1,0 +1,299 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agents.a3t.io
+spec:
+  group: a3t.io
+  names:
+    kind: Agent
+    plural: agents
+    singular: agent
+    shortNames:
+      - ag
+    categories:
+      - a3t
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Mode
+          type: string
+          jsonPath: .spec.mode
+        - name: Template
+          type: string
+          jsonPath: .spec.template
+        - name: Replicas
+          type: integer
+          jsonPath: .spec.replicas
+        - name: Ready
+          type: string
+          jsonPath: .status.ready
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [mode]
+              properties:
+                # === Agent logic (from proven YAML schema) ===
+                mode:
+                  type: string
+                  enum: [ephemeral, session, persistent, reactive]
+                description:
+                  type: string
+                template:
+                  type: string
+                  description: "Template reference (name:version)"
+                parameters:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: "Agent parameters (passed to template or flow context)"
+
+                # === Triggers ===
+                triggers:
+                  type: array
+                  items:
+                    type: object
+                    required: [type]
+                    properties:
+                      type:
+                        type: string
+                        enum: [http, cron, iggy, event, broadcast]
+                      path:
+                        type: string
+                      port:
+                        type: integer
+                      timeout:
+                        type: string
+                      schedule:
+                        type: string
+                      flow:
+                        type: string
+                        description: "Named procedural action to invoke (otherwise baseFlow)"
+                      topic:
+                        type: string
+                      address:
+                        type: string
+                      consumerGroup:
+                        type: string
+                      concurrency:
+                        type: integer
+
+                # === Flows ===
+                baseFlow:
+                  type: object
+                  properties:
+                    path:
+                      type: string
+                    ref:
+                      type: string
+                    inline:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                proceduralActions:
+                  type: array
+                  items:
+                    type: object
+                    required: [name, flow]
+                    properties:
+                      name:
+                        type: string
+                      flow:
+                        type: object
+                        properties:
+                          path:
+                            type: string
+                          ref:
+                            type: string
+                          inline:
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+
+                # === Resource references ===
+                llm:
+                  type: object
+                  properties:
+                    ref:
+                      type: string
+                      description: "Name of LLM resource (created separately)"
+                    secretRef:
+                      type: string
+                      description: "K8s Secret containing API key"
+                memory:
+                  type: object
+                  properties:
+                    ref:
+                      type: string
+                      description: "Name of MemoryStore CR or ClawDB service"
+                    address:
+                      type: string
+                      description: "Direct address (if no CR)"
+                mcpServers:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      ref:
+                        type: string
+                        description: "Name of MCPServer CR or service"
+                      url:
+                        type: string
+                        description: "Direct URL (if no CR)"
+                      name:
+                        type: string
+
+                # === Mode-specific config ===
+                session:
+                  type: object
+                  properties:
+                    ttl:
+                      type: string
+                      description: "Session timeout (30m, 1h, 24h)"
+                    idExpression:
+                      type: string
+                      description: "jq expression to extract session ID from trigger payload"
+                reactive:
+                  type: object
+                  properties:
+                    inbox:
+                      type: object
+                      properties:
+                        capacity:
+                          type: integer
+                        overflow:
+                          type: string
+                          enum: [drop-oldest, block, reject]
+
+                # === Agent behavior ===
+                systemPrompt:
+                  type: string
+                maxIterations:
+                  type: integer
+                durability:
+                  type: string
+                  enum: [completion, checkpoint]
+                aqlNamespace:
+                  type: string
+                  description: "Agent identity in ClawDB. Defaults to CR name."
+
+                # === Deployment (CRD-only, not in agent YAML) ===
+                replicas:
+                  type: integer
+                  default: 1
+                image:
+                  type: string
+                  default: "clawdflow:latest"
+                resources:
+                  type: object
+                  properties:
+                    cpu:
+                      type: string
+                    memory:
+                      type: string
+
+            status:
+              type: object
+              properties:
+                ready:
+                  type: boolean
+                phase:
+                  type: string
+                  enum: [Pending, Creating, Running, Degraded, Failed, Terminating]
+                replicas:
+                  type: integer
+                readyReplicas:
+                  type: integer
+                runtimeUrl:
+                  type: string
+                  description: "ClawdFlow service URL for this agent"
+                dependencies:
+                  type: object
+                  properties:
+                    llm:
+                      type: object
+                      properties:
+                        ready:
+                          type: boolean
+                        ref:
+                          type: string
+                    memory:
+                      type: object
+                      properties:
+                        ready:
+                          type: boolean
+                        ref:
+                          type: string
+                        url:
+                          type: string
+                    mcpServers:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          ref:
+                            type: string
+                          ready:
+                            type: boolean
+                          url:
+                            type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                lastReconciled:
+                  type: string
+                  format: date-time
+                observedGeneration:
+                  type: integer
+                metrics:
+                  type: object
+                  properties:
+                    totalTurns:
+                      type: integer
+                    avgLatencyMs:
+                      type: integer
+                    successRate:
+                      type: number
+                runtimeAgents:
+                  type: array
+                  description: "All agents running in the runtime pod (deployed + runtime-spawned)"
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      origin:
+                        type: string
+                        enum: [deployment, runtime]
+                      spawnedBy:
+                        type: string
+                      mode:
+                        type: string
+                      status:
+                        type: string
+                      toolsCount:
+                        type: integer
+                      totalTurns:
+                        type: integer
+                      hasMemory:
+                        type: boolean

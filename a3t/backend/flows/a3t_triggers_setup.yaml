@@ -1,0 +1,159 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-triggers-setup
+  version: 1.0.0
+do:
+- trigger-templates:
+    call: http
+    with:
+      method: POST
+      endpoint:
+        uri: http://localhost:3002/triggers
+      headers:
+        Content-Type: application/json
+      body:
+        name: a3t-templates-hook
+        namespace: a3t
+        config:
+          type: webhook
+          path: /a3t/templates
+        enabled: true
+        targets:
+        - type: workflow
+          namespace: a3t
+          name: a3t-templates
+    export:
+      as: .
+- trigger-agents:
+    call: http
+    with:
+      method: POST
+      endpoint:
+        uri: http://localhost:3002/triggers
+      headers:
+        Content-Type: application/json
+      body:
+        name: a3t-agents-hook
+        namespace: a3t
+        config:
+          type: webhook
+          path: /a3t/agents
+        enabled: true
+        targets:
+        - type: workflow
+          namespace: a3t
+          name: a3t-agents
+    export:
+      as: .
+- trigger-canvas:
+    call: http
+    with:
+      method: POST
+      endpoint:
+        uri: http://localhost:3002/triggers
+      headers:
+        Content-Type: application/json
+      body:
+        name: a3t-canvas-hook
+        namespace: a3t
+        config:
+          type: webhook
+          path: /a3t/canvas
+        enabled: true
+        targets:
+        - type: workflow
+          namespace: a3t
+          name: a3t-canvas
+    export:
+      as: .
+- trigger-resources:
+    call: http
+    with:
+      method: POST
+      endpoint:
+        uri: http://localhost:3002/triggers
+      headers:
+        Content-Type: application/json
+      body:
+        name: a3t-resources-hook
+        namespace: a3t
+        config:
+          type: webhook
+          path: /a3t/resources
+        enabled: true
+        targets:
+        - type: workflow
+          namespace: a3t
+          name: a3t-resources
+    export:
+      as: .
+- trigger-users:
+    call: http
+    with:
+      method: POST
+      endpoint:
+        uri: http://localhost:3002/triggers
+      headers:
+        Content-Type: application/json
+      body:
+        name: a3t-users-hook
+        namespace: a3t
+        config:
+          type: webhook
+          path: /a3t/users
+        enabled: true
+        targets:
+        - type: workflow
+          namespace: a3t
+          name: a3t-users
+    export:
+      as: .
+- trigger-audit:
+    call: http
+    with:
+      method: POST
+      endpoint:
+        uri: http://localhost:3002/triggers
+      headers:
+        Content-Type: application/json
+      body:
+        name: a3t-audit-hook
+        namespace: a3t
+        config:
+          type: webhook
+          path: /a3t/audit
+        enabled: true
+        targets:
+        - type: workflow
+          namespace: a3t
+          name: a3t-audit
+    export:
+      as: .
+- trigger-schema:
+    call: http
+    with:
+      method: POST
+      endpoint:
+        uri: http://localhost:3002/triggers
+      headers:
+        Content-Type: application/json
+      body:
+        name: a3t-schema-install-hook
+        namespace: a3t
+        config:
+          type: webhook
+          path: /a3t/schema-install
+        enabled: true
+        targets:
+        - type: workflow
+          namespace: a3t
+          name: a3t-schema-install
+    export:
+      as: .
+- verify:
+    call: http
+    with:
+      method: GET
+      endpoint:
+        uri: http://localhost:3002/triggers

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "flowr": {
+      "type": "http",
+      "url": "http://flowr.a3t.svc.cluster.local:3002/message",
+      "description": "FlowR workflow engine — manage flows, resources, triggers, state"
+    }
+  }
+}

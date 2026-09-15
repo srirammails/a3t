@@ -1,0 +1,34 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-for
+  version: 1.0.0
+do:
+- init:
+    set:
+      total: 0
+      processed_names: []
+      items: "${ .items }"
+    export:
+      as: .
+- iterate-items:
+    for:
+      each: item
+      in: "${ .items }"
+      do:
+      - process-item:
+          set:
+            total: ${ .total + $context.item.value }
+            processed_names: ${ .processed_names + [$context.item.name] }
+            last_index: ${ $context.idx }
+      at: idx
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    properties:
+      items:
+        type: array
+    required:
+    - items

@@ -1,0 +1,176 @@
+$schema: http://json-schema.org/draft-07/schema#
+$id: https://example.com/schemas/requirements-v1.yaml
+title: Project Requirements Specification
+description: >
+  Formal specification of project requirements. Designed for LLM-assisted
+  extraction from prose, mechanical validation, traceability to tests,
+  and coverage reporting.
+
+type: object
+required: [project, version, schema_version, requirements]
+additionalProperties: false
+
+properties:
+  project:
+    type: string
+    minLength: 1
+    description: Project name, e.g. "Flowr" or "AQL".
+
+  version:
+    type: string
+    pattern: "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$"
+    description: Project version this requirements doc applies to, e.g. "0.5" or "1.2.0".
+
+  schema_version:
+    type: string
+    const: "1.0"
+    description: Version of THIS schema. Bump when schema changes.
+
+  description:
+    type: string
+    description: Optional one-paragraph project summary.
+
+  glossary:
+    type: object
+    additionalProperties:
+      type: string
+    description: >
+      Domain terms used in requirement statements. Keeps vocabulary
+      consistent and gives the LLM a dictionary when generating tests.
+
+  requirements:
+    type: array
+    minItems: 1
+    items:
+      $ref: "#/definitions/requirement"
+
+definitions:
+
+  requirement:
+    type: object
+    required: [id, kind, priority, statement, acceptance_criteria]
+    additionalProperties: false
+
+    properties:
+
+      id:
+        type: string
+        pattern: "^REQ-[A-Z][A-Z0-9]*-[0-9]{3,}$"
+        description: >
+          Unique requirement ID. Format REQ-<AREA>-<NUMBER>.
+          Examples: REQ-FLOWR-001, REQ-AQL-042, REQ-API-100.
+          Area codes group related requirements; numbers are zero-padded
+          to at least 3 digits for sortability.
+
+      kind:
+        enum:
+          - behavior      # Observable input/output behavior. Testable via scenario.
+          - invariant     # Property that must always hold. Testable via property or assertion.
+          - constraint    # Structural or architectural rule. E.g. "uses Iggy, not RocksDB".
+          - sla           # Quantified performance guarantee. E.g. latency, throughput.
+          - interface     # API surface. Endpoint shape, schema, contract.
+          - security      # Authz, authn, data protection, audit.
+          - compatibility # Backward compat, version interop, standards conformance.
+
+      priority:
+        enum: [must, should, may]
+        description: >
+          RFC 2119 levels.
+          must   = required for this version; failure blocks release.
+          should = strongly recommended; deferring needs justification.
+          may    = optional; implement if cheap or valuable.
+
+      statement:
+        type: string
+        minLength: 10
+        maxLength: 400
+        description: >
+          One sentence describing the requirement. Must be falsifiable —
+          a reader must be able to describe an observation that would
+          prove the system does not meet it. Avoid "should be good",
+          "handle gracefully", "as needed".
+
+      rationale:
+        type: string
+        maxLength: 1000
+        description: >
+          Why this requirement exists. Optional but strongly recommended
+          for non-obvious requirements. Helps future readers (and LLMs)
+          understand intent when the requirement is revisited.
+
+      acceptance_criteria:
+        type: array
+        minItems: 1
+        items:
+          type: string
+          minLength: 10
+        description: >
+          Observable conditions that together verify the requirement.
+          Each criterion should map to at least one test scenario.
+          If you cannot write at least one criterion, the requirement
+          is not testable and must be rewritten.
+
+      source:
+        type: string
+        description: >
+          Where this requirement comes from: spec section, design doc,
+          ticket, stakeholder conversation. Examples: "spec.md §4.2",
+          "JIRA-1234", "architecture review 2026-03-15".
+
+      depends_on:
+        type: array
+        items:
+          type: string
+          pattern: "^REQ-[A-Z][A-Z0-9]*-[0-9]{3,}$"
+        uniqueItems: true
+        description: >
+          REQ-IDs this requirement depends on. Used for implementation
+          ordering and impact analysis. Cycles are invalid and must be
+          caught by a post-parse consistency check.
+
+      conflicts_with:
+        type: array
+        items:
+          type: string
+          pattern: "^REQ-[A-Z][A-Z0-9]*-[0-9]{3,}$"
+        uniqueItems: true
+        description: >
+          REQ-IDs incompatible with this one. Useful when exploring
+          design alternatives or deprecating requirements.
+
+      tests:
+        type: array
+        items:
+          type: string
+        uniqueItems: true
+        description: >
+          Test IDs or scenario tags that verify this requirement.
+          Examples: ["@req-flowr-001", "T-FLOWR-001-a"].
+          Empty initially; populated as tests are written.
+          Coverage script reports REQs with empty tests[] as gaps.
+
+      status:
+        enum: [proposed, accepted, implemented, verified, deprecated]
+        default: proposed
+        description: >
+          proposed    = drafted, not yet reviewed
+          accepted    = reviewed and agreed; ready to implement
+          implemented = code written; tests may not yet pass
+          verified    = implemented AND all linked tests pass
+          deprecated  = no longer applies; kept for history
+
+      tags:
+        type: array
+        items:
+          type: string
+          pattern: "^[a-z][a-z0-9-]*$"
+        uniqueItems: true
+        description: >
+          Free-form labels for filtering and grouping. Examples:
+          "hot-path", "durability", "public-api", "phase-2".
+
+      notes:
+        type: string
+        description: >
+          Free-form notes: open questions, review comments, links
+          to discussions. Not machine-interpreted.

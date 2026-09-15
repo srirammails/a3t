@@ -1,0 +1,65 @@
+[package]
+name = "flowr-api"
+description = "FlowR API - HTTP Admin API for workflow management"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "flowr-server"
+path = "src/main.rs"
+
+[features]
+default = ["dragonfly"]
+dragonfly = ["redis", "deadpool-redis", "iggy"]
+adb = ["flowr-ce-storage"]
+
+[dependencies]
+# Core runtime
+flowr-core.workspace = true
+flowr-tasks.workspace = true
+flowr-registry.workspace = true
+flowr-hub.workspace = true
+
+# Async runtime
+tokio = { workspace = true, features = ["full", "signal"] }
+async-trait.workspace = true
+
+# HTTP server
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Storage - Dragonfly mode
+redis = { workspace = true, optional = true }
+deadpool-redis = { workspace = true, optional = true }
+iggy = { workspace = true, optional = true }
+
+# Storage - ADB mode (ClawDB/LanceDB)
+flowr-ce-storage = { workspace = true, optional = true }
+
+# Shared storage traits and types
+flowr-storage.workspace = true
+flowr-types.workspace = true
+
+# CLI
+clap.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Utilities
+uuid.workspace = true
+chrono.workspace = true

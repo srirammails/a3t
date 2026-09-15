@@ -1,0 +1,25 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-call-sql
+  version: 1.0.0
+do:
+- sql-select:
+    call: sql
+    with:
+      query: SELECT 1 as test_value, 'hello' as test_string
+      result_type: single
+      timeout_ms: 30000
+      _resource: test-database
+    export:
+      as: '{sql_result: .}'
+input:
+  schema:
+    type: object
+    properties:
+      table_name:
+        type: string
+      limit:
+        type: number
+    required:
+    - table_name

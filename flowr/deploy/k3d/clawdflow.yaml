@@ -1,0 +1,97 @@
+# FlowR EE — Workflow Engine + Agent Runtime + Auth + RBAC
+# This is the core "agent pod" that a Canvas controller would manage
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+  namespace: a3t
+  labels:
+    a3t.io/component: agent
+data:
+  # Agent resource configs — injected as environment or mounted
+  # In Canvas CRD, these would come from the Canvas spec
+  CLAWDFLOW_DATA_DIR: "/data/clawdflow"
+  RUST_LOG: "info"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clawdflow
+  namespace: a3t
+  labels:
+    app: clawdflow
+    a3t.io/component: agent
+spec:
+  selector:
+    app: clawdflow
+  ports:
+    - name: http
+      port: 3002
+      targetPort: 3002
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clawdflow
+  namespace: a3t
+  labels:
+    app: clawdflow
+    a3t.io/component: agent
+    a3t.io/template: clawdflow
+    a3t.io/version: "0.1.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clawdflow
+  template:
+    metadata:
+      labels:
+        app: clawdflow
+        a3t.io/component: agent
+    spec:
+      containers:
+        - name: clawdflow
+          image: clawdflow:latest
+          imagePullPolicy: Never
+          args: ["--mode", "http", "--port", "3002"]
+          env:
+            - name: CLAWDFLOW_DATA_DIR
+              value: "/data/clawdflow"
+            - name: RUST_LOG
+              value: "info"
+            - name: A3T_DB_PATH
+              value: "/data/a3t/a3t-platform.lance"
+            - name: FLOWR_CORS_ORIGINS
+              value: "http://localhost:5173,https://console.a3t.io,http://37.27.195.4:30080"
+            - name: FLOWR_AUTH
+              value: "disabled"
+          ports:
+            - containerPort: 3002
+              name: http
+          volumeMounts:
+            - name: data
+              mountPath: /data/clawdflow
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: data
+          emptyDir: {}

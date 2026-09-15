@@ -1,0 +1,89 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-settings
+  version: 1.0.1
+# Key/value platform settings, org-scoped. Each action is a single lancedb
+# step (the runtime replaces context on every `call`, so multi-step upserts
+# lose `.input`). The UI performs an upsert as delete-then-set (two calls).
+do:
+- route:
+    switch:
+    - case:
+        when: ${ .input.action == "list" }
+        then: list
+    - case:
+        when: ${ .input.action == "get" }
+        then: get
+    - case:
+        when: ${ .input.action == "set" }
+        then: set
+    - case:
+        when: ${ .input.action == "delete" }
+        then: delete
+- list:
+    call: lancedb
+    with:
+      operation: query
+      table: settings
+      filter: org_id = "${ .input.org_id }"
+      select: [id, org_id, key, value, updated_by, updated_at]
+      limit: 500
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Setting
+    then: end
+- get:
+    call: lancedb
+    with:
+      operation: query
+      table: settings
+      filter: key = "${ .input.key }" AND org_id = "${ .input.org_id }"
+      select: [id, org_id, key, value, updated_by, updated_at]
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Setting
+    then: end
+- set:
+    call: lancedb
+    with:
+      operation: insert
+      table: settings
+      records:
+      - id: ${ .input.org_id + ":" + .input.key }
+        org_id: ${ .input.org_id }
+        key: ${ .input.key }
+        value: ${ .input.value }
+        updated_by: ${ .input.user_id }
+        updated_at: ${ .input.timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Setting
+    then: end
+- delete:
+    call: lancedb
+    with:
+      operation: delete
+      table: settings
+      filter: key = "${ .input.key }" AND org_id = "${ .input.org_id }"
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: delete
+          resource:
+            type: Setting
+    then: end

@@ -1,0 +1,26 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-mcp-clawdb
+  version: 1.0.0
+do:
+- list-tools:
+    call: mcp
+    with:
+      method: tools/list
+      _resource: enm-mcp
+    export:
+      as: tools_list
+- get-stats:
+    call: mcp
+    with:
+      tool: get_stats
+      arguments: {}
+      _resource: enm-mcp
+    export:
+      as: stats
+- compile-results:
+    set:
+      mcp_clawdb_test_completed: true
+    export:
+      as: .

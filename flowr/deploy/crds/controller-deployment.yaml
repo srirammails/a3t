@@ -1,0 +1,176 @@
+# Shell-based Agent Controller
+# Runs as a Job, scans Agent CRs, creates runtime resources
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: a3t-controller
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: a3t-controller
+rules:
+  - apiGroups: ["a3t.io"]
+    resources: ["agents", "agents/status"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["services", "secrets"]
+    verbs: ["*"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["*"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: a3t-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: a3t-controller
+subjects:
+  - kind: ServiceAccount
+    name: a3t-controller
+    namespace: kube-system
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: a3t-reconcile
+  namespace: kube-system
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 1
+  template:
+    spec:
+      serviceAccountName: a3t-controller
+      restartPolicy: Never
+      containers:
+        - name: controller
+          image: alpine/k8s:1.31.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "=== A3T Controller ==="
+
+              # Get all Agent CRs as JSON
+              AGENTS=$(kubectl get agents -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {.spec.mode} {.spec.replicas} {.spec.image}{"\n"}{end}' 2>/dev/null)
+
+              if [ -z "$AGENTS" ]; then
+                echo "No Agent CRs found"
+                exit 0
+              fi
+
+              echo "$AGENTS" | while read line; do
+                NS=$(echo $line | cut -d'/' -f1)
+                REST=$(echo $line | cut -d'/' -f2)
+                NAME=$(echo $REST | awk '{print $1}')
+                MODE=$(echo $REST | awk '{print $2}')
+                REPLICAS=$(echo $REST | awk '{print $3}')
+                IMAGE=$(echo $REST | awk '{print $4}')
+
+                [ -z "$REPLICAS" ] && REPLICAS=1
+                [ -z "$IMAGE" ] && IMAGE="clawdflow:latest"
+
+                RUNTIME="clawdflow-$NAME"
+                echo ""
+                echo "--- Reconciling $NS/$NAME (mode=$MODE, replicas=$REPLICAS) ---"
+
+                # Create Deployment if not exists
+                if ! kubectl -n $NS get deploy $RUNTIME -o name 2>/dev/null | grep -q deploy; then
+                  echo "  Creating Deployment $RUNTIME"
+                  cat <<DEPLOY | kubectl apply -f -
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: $RUNTIME
+                namespace: $NS
+                labels:
+                  app: $RUNTIME
+                  a3t.io/agent: $NAME
+              spec:
+                replicas: $REPLICAS
+                selector:
+                  matchLabels:
+                    app: $RUNTIME
+                template:
+                  metadata:
+                    labels:
+                      app: $RUNTIME
+                  spec:
+                    containers:
+                    - name: clawdflow
+                      image: $IMAGE
+                      imagePullPolicy: Never
+                      args: ["--mode", "http", "--port", "3002"]
+                      ports:
+                      - containerPort: 3002
+                      livenessProbe:
+                        httpGet:
+                          path: /health
+                          port: 3002
+                        initialDelaySeconds: 5
+                      readinessProbe:
+                        httpGet:
+                          path: /health
+                          port: 3002
+                        initialDelaySeconds: 3
+              DEPLOY
+                else
+                  echo "  Deployment $RUNTIME exists"
+                fi
+
+                # Create Service if not exists
+                if ! kubectl -n $NS get svc $RUNTIME -o name 2>/dev/null | grep -q service; then
+                  echo "  Creating Service $RUNTIME"
+                  cat <<SVC | kubectl apply -f -
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: $RUNTIME
+                namespace: $NS
+              spec:
+                selector:
+                  app: $RUNTIME
+                ports:
+                - port: 3002
+                  targetPort: 3002
+              SVC
+                else
+                  echo "  Service $RUNTIME exists"
+                fi
+
+                # Poll runtime for live agents
+                RUNTIME_URL="http://$RUNTIME:3002"
+                echo "  Polling $RUNTIME_URL/agents..."
+                LIVE_AGENTS=$(wget -qO- "$RUNTIME_URL/agents" 2>/dev/null || echo '{"agents":[],"count":0}')
+                AGENT_COUNT=$(echo "$LIVE_AGENTS" | grep -o '"count":[0-9]*' | cut -d: -f2)
+                echo "  Live agents in runtime: ${AGENT_COUNT:-0}"
+
+                # Build runtimeAgents array for status
+                RUNTIME_AGENTS="[]"
+                if [ "${AGENT_COUNT:-0}" -gt 0 ]; then
+                  RUNTIME_AGENTS=$(echo "$LIVE_AGENTS" | sed 's/.*"agents":\[/[/' | sed 's/\],"count".*/]/' | \
+                    sed 's/"agent_id"/"id"/g' | \
+                    sed "s/\"mode\"/\"mode\"/g" | \
+                    sed "s/\"status\"/\"status\"/g")
+                fi
+
+                # Update status with runtimeAgents
+                STATUS_JSON="{\"status\":{\"ready\":true,\"phase\":\"Running\",\"replicas\":$REPLICAS,\"readyReplicas\":$REPLICAS,\"runtimeUrl\":\"$RUNTIME_URL\",\"runtimeAgents\":$RUNTIME_AGENTS}}"
+                kubectl -n $NS patch agent $NAME --type=merge --subresource=status -p "$STATUS_JSON" 2>/dev/null
+
+                echo "  ✓ $NAME reconciled (${AGENT_COUNT:-0} runtime agents)"
+              done
+
+              echo ""
+              echo "=== Done ==="

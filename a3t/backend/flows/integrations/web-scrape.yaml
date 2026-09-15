@@ -1,0 +1,52 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: web-scrape
+  version: 1.0.0
+do:
+- fetch:
+    call: http
+    with:
+      method: GET
+      url: ${ .url }
+      headers:
+        User-Agent: ${ .user_agent // "Mozilla/5.0 (compatible; FlowR/1.0; +https://flowr.dev)"
+          }
+        Accept: text/html,application/xhtml+xml,*/*
+      timeout: ${ .timeout // 15 }
+    export:
+      as: '{_fetch_status: .status, _fetch_body: .body}'
+- extract-text:
+    run:
+      script:
+        language: js
+        code: "const html = input._fetch_body || '';\n// Strip script and style blocks,\
+          \ then all HTML tags\nconst text = html\n  .replace(/<script[\\s\\S]*?<\\\
+          /script>/gi, '')\n  .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<[^>]+>/g,\
+          \ ' ')\n  .replace(/\\s+/g, ' ')\n  .trim()\n  .slice(0, 10000);\nreturn\
+          \ { text: text };\n"
+    export:
+      as: '{_extracted_text: .text}'
+- result:
+    set:
+      url: ${ .url }
+      status: ${ $context._fetch_status }
+      content: ${ $context._fetch_body }
+      text: ${ $context._extracted_text }
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    required:
+    - url
+    properties:
+      url:
+        type: string
+      selector:
+        type: string
+      user_agent:
+        type: string
+      timeout:
+        type: integer
+        default: 15

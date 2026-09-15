@@ -1,0 +1,5 @@
+# a3t.io — allow all crawlers
+User-agent: *
+Disallow:
+
+Sitemap: https://a3t.io/sitemap.xml

@@ -1,0 +1,32 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-run-shell
+  version: 1.0.0
+do:
+- echo-test:
+    run:
+      shell:
+        command: echo 'Hello, ${ .name }!'
+    export:
+      as: '{echo_result: .}'
+- date-test:
+    run:
+      shell:
+        command: date +%Y-%m-%d
+    export:
+      as: '{date_result: .}'
+- env-test:
+    run:
+      shell:
+        command: echo $TEST_VAR
+    export:
+      as: '{env_result: .}'
+input:
+  schema:
+    type: object
+    properties:
+      name:
+        type: string
+    required:
+    - name

@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: flowr
+  namespace: a3t
+  labels:
+    app: flowr
+spec:
+  type: NodePort
+  selector:
+    app: flowr
+  ports:
+    - name: http
+      port: 3002
+      targetPort: 3002
+      nodePort: 30080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flowr
+  namespace: a3t
+  labels:
+    app: flowr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flowr
+  template:
+    metadata:
+      labels:
+        app: flowr
+    spec:
+      containers:
+        - name: flowr
+          image: ghcr.io/srirammails/flowr:latest
+          imagePullPolicy: Never
+          args: ["--mode", "http", "--port", "3002"]
+          env:
+            - name: CLAWDFLOW_DATA_DIR
+              value: "/data/clawdflow"
+            - name: A3T_DB_PATH
+              value: "/data/a3t/a3t-platform.lance"
+            - name: FLOWR_CORS_ORIGINS
+              value: "http://localhost:5173,https://console.a3t.io,http://37.27.195.4:30080"
+            - name: RUST_LOG
+              value: "info"
+          ports:
+            - containerPort: 3002
+              name: http
+          volumeMounts:
+            - name: clawdflow-data
+              mountPath: /data/clawdflow
+            - name: a3t-data
+              mountPath: /data/a3t
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: clawdflow-data
+          hostPath:
+            path: /data/clawdflow
+            type: DirectoryOrCreate
+        - name: a3t-data
+          hostPath:
+            path: /data/a3t
+            type: DirectoryOrCreate

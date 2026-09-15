@@ -1,0 +1,55 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-try-advanced
+  version: 1.0.0
+do:
+- retry-with-jitter:
+    try:
+      do:
+      - always-fails:
+          raise:
+            error:
+              type: TransientError
+              status: 503
+              title: Service temporarily unavailable
+              detail: Simulated transient failure for retry testing
+      catch:
+        errors:
+        - '*'
+        do:
+        - handle-retry-exhausted:
+            set:
+              retries_exhausted: true
+              message: All retries with jitter failed as expected
+    export:
+      as: .
+- except-when-test:
+    try:
+      do:
+      - raise-typed-error:
+          raise:
+            error:
+              type: ${ .error_type }
+              status: 404
+              title: Resource not found
+              detail: Testing exceptWhen filter
+      catch:
+        errors:
+        - '*'
+        exceptWhen: ${ .error.type == "NotFoundError" }
+        do:
+        - generic-handler:
+            set:
+              handler: generic
+              message: Caught by generic handler (not NotFoundError)
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    properties:
+      error_type:
+        type: string
+    required:
+    - error_type

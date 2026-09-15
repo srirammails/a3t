@@ -1,0 +1,54 @@
+---
+title: Memory
+description: ClawDB agent memory — 5 types, AQL queries.
+---
+
+ClawDB provides 5 memory types for agents, queried via AQL (Agent Query Language).
+
+## Memory types
+
+| Type | Purpose | Persistence |
+|------|---------|-------------|
+| **WORKING** | Current turn scratchpad | Per-turn |
+| **EPISODIC** | Past interactions indexed by time | Long-term |
+| **PROCEDURAL** | Learned procedures and action patterns | Long-term |
+| **SEMANTIC** | Facts, knowledge, structured data | Long-term |
+| **TOOLS** | Tool usage history and preferences | Long-term |
+
+## AQL operations
+
+### STORE
+
+```
+STORE INTO EPISODIC (key = "incident-42", content = "Server restarted at 3am") SCOPE private NAMESPACE "agent"
+```
+
+### RECALL
+
+```
+RECALL FROM EPISODIC WHERE content = "server restart" LIMIT 5
+```
+
+### FORGET
+
+```
+FORGET FROM WORKING WHERE key = "temp-data"
+```
+
+### LINK
+
+```
+LINK "incident-42" TO "runbook-restart" AS "resolved_by"
+```
+
+## In workflows
+
+Use `call:clawdb` to query memory directly, or configure the agent resource with `memory` to enable automatic context loading via the `on_before_turn` and `on_complete` AQL hooks.
+
+```yaml
+- name: recall-context
+  type: call:clawdb
+  resource: agent-memory
+  config:
+    query: 'RECALL FROM SEMANTIC WHERE key = "user_preferences" LIMIT 1'
+```

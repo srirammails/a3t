@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iggy-web-ui
+  namespace: flowr
+  labels:
+    app: iggy-web-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iggy-web-ui
+  template:
+    metadata:
+      labels:
+        app: iggy-web-ui
+    spec:
+      containers:
+        - name: web-ui
+          image: apache/iggy-web-ui:latest
+          ports:
+            - containerPort: 3050
+              name: http
+          env:
+            - name: PUBLIC_IGGY_API_URL
+              value: "http://localhost:3000"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iggy-web-ui
+  namespace: flowr
+  labels:
+    app: iggy-web-ui
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3050
+      targetPort: 3050
+      name: http
+  selector:
+    app: iggy-web-ui

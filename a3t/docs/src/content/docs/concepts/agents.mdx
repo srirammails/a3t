@@ -1,0 +1,47 @@
+---
+title: Agents
+description: ZeroClaw agent modes, configuration, and lifecycle.
+---
+
+Agents are LLM-powered entities with tool access and memory, running within FlowR workflows via ZeroClaw.
+
+## Modes
+
+| Mode | Lifecycle | Use case |
+|------|-----------|----------|
+| **Ephemeral** | Created per step, destroyed after | One-off tasks |
+| **Session** | Lives across calls with TTL, keyed by session_id | Conversations |
+| **Persistent** | Long-lived daemon, accepts messages via inbox | Always-on ops |
+| **Reactive** | Event-driven, wakes on webhooks/cron/events | Automation |
+
+## Agent resource config
+
+```json
+{
+  "name": "my-agent",
+  "type_ref": "agent",
+  "config": {
+    "llm": "claude-sonnet",
+    "memory": "agent-memory",
+    "mode": "session",
+    "agent_id": "my-agent-001",
+    "ttl": 1800,
+    "mcp_servers": [{"url": "http://localhost:3002"}],
+    "system_prompt": "You are a helpful agent.",
+    "max_iterations": 10,
+    "flows": [
+      {"ref": "data-pipeline", "namespace": "default", "role": "data processing"}
+    ]
+  }
+}
+```
+
+## Task types
+
+| Type | Description |
+|------|-------------|
+| `call:agent` | Sync request-response (ephemeral or session) |
+| `send:agent` | Async fire-and-forget to persistent/session agent |
+| `ask:agent` | Async request-reply with polling |
+| `spawn:agent` | Start a persistent/reactive agent |
+| `stop:agent` | Stop a persistent/reactive agent |

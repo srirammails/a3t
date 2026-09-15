@@ -1,0 +1,38 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-run-workflow
+  version: 1.0.0
+do:
+- prepare-nested-input:
+    set:
+      nested_workflow_input:
+        name: ${ .name }
+        value: ${ .value }
+    export:
+      as: .
+- call-nested-workflow:
+    run:
+      workflow:
+        namespace: default
+        name: test-set
+        input: ${ .nested_workflow_input }
+    export:
+      as: '{nested_result: .}'
+- verify-nested:
+    set:
+      workflow_executed: true
+      nested_output_received: ${ .nested_result != null }
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    properties:
+      name:
+        type: string
+      value:
+        type: number
+    required:
+    - name
+    - value

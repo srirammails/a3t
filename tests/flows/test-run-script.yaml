@@ -1,0 +1,29 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-run-script
+  version: 1.0.0
+do:
+- python-script:
+    run:
+      script:
+        language: python
+        script: "import json\nimport sys\n\n# Input comes from stdin as JSON\ndata\
+          \ = json.loads(sys.stdin.read())\nnumbers = data.get('numbers', [])\n\n\
+          result = {\n    'sum': sum(numbers),\n    'count': len(numbers),\n    'average':\
+          \ sum(numbers) / len(numbers) if numbers else 0\n}\n\nprint(json.dumps(result))\n"
+        timeout: 30
+    export:
+      as: '{python_result: .}'
+    input:
+      from: .
+input:
+  schema:
+    type: object
+    properties:
+      numbers:
+        type: array
+        items:
+          type: number
+    required:
+    - numbers

@@ -1,0 +1,155 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: support-agent
+  version: 1.0.0
+do:
+- run-agent:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: ${ .session_id }
+          message: ${ .message }
+          context: ${ .context }
+          config:
+            system_prompt: 'You are a customer support agent for the A3T platform.
+
+
+              ## Behavior
+
+
+              1. Greet the customer and understand their issue.
+
+              2. Search the knowledge base FIRST before answering questions.
+
+              3. If the issue cannot be resolved, create a support ticket.
+
+              4. If the customer is frustrated or the issue is critical, escalate
+              to a human.
+
+              5. Always confirm actions before taking them (e.g. "I''ll create a ticket
+              for this, OK?").
+
+
+              ## Available Tools
+
+
+              - search_kb — Search the knowledge base for articles matching a query
+
+              - create_ticket — Create a support ticket with subject, description,
+              priority
+
+              - escalate — Escalate to a human agent with a summary
+
+
+              ## Tone
+
+
+              - Professional, empathetic, concise
+
+              - Use the customer''s name if available in context
+
+              - Apologize for inconvenience when appropriate
+
+              '
+            llm_resource: a3t/claude-cli-max
+            max_iterations: 8
+            max_tokens: 4096
+            temperature: 0.4
+            memory_resource: agent-memory
+            memory_namespace: support
+            memory_config:
+              working:
+                read: true
+                write: true
+                scope: turn
+              episodic:
+                read: true
+                write: true
+                scope: session
+              semantic:
+                read: true
+                write: false
+              procedural:
+                read: true
+                write: false
+            tools:
+            - name: search_kb
+              description: Search the knowledge base for articles matching a query.
+                Returns top 5 results with title, content snippet, and relevance score.
+              input_schema:
+                type: object
+                required:
+                - query
+                properties:
+                  query:
+                    type: string
+                    description: Search query
+                  limit:
+                    type: integer
+                    default: 5
+            - name: create_ticket
+              description: Create a support ticket. Returns ticket ID and URL.
+              input_schema:
+                type: object
+                required:
+                - subject
+                - description
+                properties:
+                  subject:
+                    type: string
+                  description:
+                    type: string
+                  priority:
+                    type: string
+                    enum:
+                    - low
+                    - medium
+                    - high
+                    - critical
+                    default: medium
+                  customer_id:
+                    type: string
+            - name: escalate
+              description: Escalate the conversation to a human support agent. Provide
+                a summary of the issue and actions taken so far.
+              input_schema:
+                type: object
+                required:
+                - summary
+                properties:
+                  summary:
+                    type: string
+                    description: Summary for the human agent
+                  priority:
+                    type: string
+                    enum:
+                    - normal
+                    - urgent
+                    default: normal
+            tool_flows:
+              search_kb:
+                namespace: a3t
+                name: support-kb-search
+              create_ticket:
+                namespace: a3t
+                name: support-create-ticket
+              escalate:
+                namespace: a3t
+                name: support-escalate
+            mcp_servers:
+            - agent-flows
+            ttl: 3600
+          extensions:
+          - name: audit_tool_calls
+            extend: dispatch_tools
+            after:
+            - name: log_tool_audit
+              type: set
+              config:
+                _audit_log: '${ ($context._audit_log // []) + [{tool: $_tool_call.name,
+                  at: now}] }'
+    export:
+      as: .

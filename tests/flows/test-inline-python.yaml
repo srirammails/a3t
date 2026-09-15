@@ -1,0 +1,24 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-inline-python
+  version: 1.0.0
+do:
+- python-computation:
+    run:
+      script:
+        language: python
+        code: "text = state.get(\"text\", \"\")\nresult = {\n    \"original\": text,\n\
+          \    \"uppercase\": text.upper(),\n    \"lowercase\": text.lower(),\n  \
+          \  \"word_count\": len(text.split()),\n    \"char_count\": len(text),\n\
+          \    \"language\": \"python\"\n}\n"
+    export:
+      as: '{python_result: .}'
+input:
+  schema:
+    type: object
+    properties:
+      text:
+        type: string
+    required:
+    - text

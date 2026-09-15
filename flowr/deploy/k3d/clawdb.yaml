@@ -1,0 +1,75 @@
+# ClawDB — Agent Memory Database
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clawdb
+  namespace: a3t
+  labels:
+    app: clawdb
+    a3t.io/component: memory
+spec:
+  selector:
+    app: clawdb
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clawdb
+  namespace: a3t
+  labels:
+    app: clawdb
+    a3t.io/component: memory
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clawdb
+  template:
+    metadata:
+      labels:
+        app: clawdb
+    spec:
+      containers:
+        - name: clawdb
+          image: clawdb:latest
+          imagePullPolicy: Never
+          command: ["clawdb"]
+          args: ["--path", "/data", "serve", "--port", "3000", "--grpc-port", "50051"]
+          ports:
+            - containerPort: 3000
+              name: http
+            - containerPort: 50051
+              name: grpc
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: data
+          emptyDir: {}

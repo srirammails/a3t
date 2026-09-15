@@ -1,0 +1,107 @@
+---
+title: Integration Tasks
+description: call:sql, call:lancedb, call:qdrant, call:clawdb, call:mcp
+---
+
+## call:lancedb
+
+Query, insert, and delete from LanceDB tables. Requires a `lancedb` resource.
+
+```yaml
+- name: list-users
+  type: call:lancedb
+  resource: a3t/a3t-platform-db
+  config:
+    operation: query
+    table: users
+    filter: "org_id = '${ .org_id }'"
+    select: [id, name, email, role]
+    limit: 100
+```
+
+### Insert
+
+```yaml
+- name: create-user
+  type: call:lancedb
+  resource: a3t/a3t-platform-db
+  config:
+    operation: insert
+    table: users
+    records:
+      - id: "${ .data.id }"
+        name: "${ .data.name }"
+        email: "${ .data.email }"
+        created_at: "${ .timestamp }"
+```
+
+### Delete
+
+```yaml
+- name: remove-user
+  type: call:lancedb
+  resource: a3t/a3t-platform-db
+  config:
+    operation: delete
+    table: users
+    filter: "id = '${ .id }'"
+```
+
+## call:sql
+
+Execute SQL queries against PostgreSQL or MySQL. Requires a `postgres` or `mysql` resource.
+
+```yaml
+- name: query-orders
+  type: call:sql
+  resource: my-postgres
+  config:
+    query: "SELECT * FROM orders WHERE status = $1 LIMIT $2"
+    params: ["${ .status }", "${ .limit }"]
+```
+
+## call:qdrant
+
+Vector database operations. Requires a `qdrant` resource.
+
+```yaml
+- name: search-similar
+  type: call:qdrant
+  resource: my-qdrant
+  config:
+    operation: search
+    collection: documents
+    vector: "${ .embedding }"
+    limit: 5
+    filter:
+      must:
+        - key: category
+          match:
+            value: "${ .category }"
+```
+
+## call:clawdb
+
+Execute AQL (Agent Query Language) against ClawDB for memory operations.
+
+```yaml
+- name: recall-context
+  type: call:clawdb
+  resource: agent-memory
+  config:
+    query: 'RECALL FROM EPISODIC WHERE content = "${ .query }" LIMIT 5'
+```
+
+## call:mcp
+
+Call a tool on an MCP server. Requires an `mcp` resource.
+
+```yaml
+- name: run-tool
+  type: call:mcp
+  resource: my-mcp-server
+  config:
+    tool: list_resources
+    arguments:
+      namespace: default
+```

@@ -1,0 +1,37 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-skill-lookup-order
+  version: 1.0.0
+  metadata:
+    description: >
+      Look up an order by ID from the order database.
+      Returns order status, items, and shipping info.
+input:
+  schema:
+    type: object
+    properties:
+      order_id:
+        type: string
+        description: The order ID to look up (e.g. ORD-12345)
+    required:
+      - order_id
+do:
+- lookup:
+    set:
+      order_id: ${ .order_id // "unknown" }
+      status: shipped
+      items:
+        - name: Widget Pro
+          qty: 2
+          price: 29.99
+        - name: Gadget Mini
+          qty: 1
+          price: 14.99
+      shipping:
+        carrier: FedEx
+        tracking: "1Z999AA10123456784"
+        estimated_delivery: "2026-07-02"
+      _log: "skill-lookup-order called with order_id"
+    export:
+      as: "."

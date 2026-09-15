@@ -1,0 +1,25 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-set
+  version: 1.0.0
+do:
+- set-variables:
+    set:
+      greeting: Hello, ${ .name }!
+      doubled: ${ .value * 2 }
+      computed: ${ .value + 10 }
+      original_name: ${ .name }
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    properties:
+      name:
+        type: string
+      value:
+        type: number
+    required:
+    - name
+    - value

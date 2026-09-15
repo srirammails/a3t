@@ -1,0 +1,55 @@
+---
+title: Triggers
+description: Webhooks, cron schedules, and events that start workflows.
+---
+
+Triggers start workflows or send messages to agents in response to external events.
+
+## Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| **Webhook** | HTTP endpoint that triggers on POST | `/a3t/templates` |
+| **Cron** | Schedule-based trigger | `*/5 * * * *` (every 5 min) |
+| **Event** | Internal event bus trigger | `workflow.completed` |
+
+## Creating a trigger
+
+```bash
+curl -X POST http://localhost:3002/message \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0", "method": "tools/call", "id": 1,
+    "params": {
+      "name": "create_trigger",
+      "arguments": {
+        "name": "on-order",
+        "namespace": "default",
+        "config": {"type": "webhook", "path": "/orders/new"},
+        "targets": [{"type": "workflow", "namespace": "default", "name": "process-order"}]
+      }
+    }
+  }'
+```
+
+## Targets
+
+A trigger can have multiple targets:
+
+- **Workflow** — executes a workflow with the trigger payload as input
+- **Agent** — sends a message to a persistent/reactive agent
+- **Webhook** — forwards the payload to an external URL
+
+## MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `create_trigger` | Create a new trigger |
+| `get_trigger` | Get trigger details |
+| `list_triggers` | List triggers, filter by namespace |
+| `update_trigger` | Update trigger config |
+| `delete_trigger` | Delete a trigger |
+| `attach_trigger` | Add a target to a trigger |
+| `detach_trigger` | Remove a target |
+| `enable_trigger` | Enable a paused trigger |
+| `pause_trigger` | Pause an active trigger |

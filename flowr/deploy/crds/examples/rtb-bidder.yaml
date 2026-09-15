@@ -1,0 +1,69 @@
+# Example: RTB Bidder Agent CR
+apiVersion: a3t.io/v1alpha1
+kind: Agent
+metadata:
+  name: rtb-bidder
+  namespace: production
+spec:
+  mode: reactive
+  template: rtb-bidder:v2.1
+  description: "Real-time bidding agent with learning loop"
+
+  parameters:
+    aql_namespace: prod-bidder
+    floor_multiplier: 1.22
+    max_cpm: 5.00
+
+  triggers:
+    - type: http
+      path: /bid
+      port: 8080
+      timeout: 100ms
+    - type: cron
+      schedule: "*/5 * * * *"
+      flow: aggregate-outcomes
+
+  reactive:
+    inbox:
+      capacity: 1000
+      overflow: drop-oldest
+
+  llm:
+    ref: openai-gpt
+    secretRef: llm-credentials
+
+  memory:
+    ref: shared-clawdb
+
+  mcpServers:
+    - ref: monitoring-tools
+    - url: http://clawdflow-rtb-bidder:3002
+      name: self
+
+  baseFlow:
+    ref: bidder-main
+
+  proceduralActions:
+    - name: score_page
+      flow:
+        ref: score-page
+    - name: place_bid
+      flow:
+        ref: place-bid
+    - name: aggregate-outcomes
+      flow:
+        ref: aggregate-outcomes
+
+  aqlNamespace: prod-bidder
+  maxIterations: 10
+  durability: checkpoint
+  systemPrompt: |
+    You are an RTB bidding agent. Make optimal bid decisions
+    based on historical performance and current context.
+
+  # Deployment concerns (CRD-only)
+  replicas: 3
+  image: clawdflow:latest
+  resources:
+    cpu: 500m
+    memory: 1Gi

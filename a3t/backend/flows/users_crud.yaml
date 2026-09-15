@@ -1,0 +1,208 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-users
+  version: 1.1.0
+do:
+- route:
+    switch:
+    - case:
+        when: ${ .input.action == "list" }
+        then: list
+    - case:
+        when: ${ .input.action == "get" }
+        then: get
+    - case:
+        when: ${ .input.action == "create" }
+        then: create
+    - case:
+        when: ${ .input.action == "update" }
+        then: update
+    - case:
+        when: ${ .input.action == "delete" }
+        then: delete
+    - case:
+        when: ${ .input.action == "update-role" }
+        then: update-role
+    - case:
+        when: ${ .input.action == "change-password" }
+        then: cp-hash
+- list:
+    call: lancedb
+    with:
+      operation: query
+      table: users
+      filter: org_id = "${ .input.org_id }"
+      select:
+      - id
+      - org_id
+      - email
+      - name
+      - role
+      - status
+      - created_at
+      - last_login_at
+      limit: 100
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: User
+    then: end
+- get:
+    call: lancedb
+    with:
+      operation: query
+      table: users
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      select:
+      - id
+      - org_id
+      - email
+      - name
+      - role
+      - status
+      - avatar
+      - created_at
+      - last_login_at
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: User
+            id: ${ .input.id }
+    then: end
+- create:
+    call: lancedb
+    with:
+      operation: insert
+      table: users
+      records:
+      - id: ${ .input.data.id }
+        org_id: ${ .input.org_id }
+        email: ${ .input.data.email }
+        name: ${ .input.data.name }
+        password_hash: ${ .input.data.password_hash }
+        role: ${ .input.data.role }
+        avatar: ''
+        status: active
+        last_login_at: ''
+        created_at: ${ .input.timestamp }
+        updated_at: ${ .input.timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: User
+    then: end
+- update:
+    call: lancedb
+    with:
+      operation: update
+      table: users
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      values:
+        email: ${ .input.data.email // "" }
+        name: ${ .input.data.name // "" }
+        password_hash: ${ .input.data.password_hash // "" }
+        role: ${ .input.data.role // "" }
+        avatar: ${ .input.data.avatar // "" }
+        status: ${ .input.data.status // "active" }
+        last_login_at: ${ .input.data.last_login_at // "" }
+        updated_at: ${ .input.timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: User
+            id: ${ .input.id }
+    then: end
+- update-role:
+    call: lancedb
+    with:
+      operation: update
+      table: users
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      values:
+        role: ${ .input.data.role }
+        updated_at: ${ .input.timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: User
+            id: ${ .input.id }
+    then: end
+- delete:
+    call: lancedb
+    with:
+      operation: delete
+      table: users
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: delete
+          resource:
+            type: User
+            id: ${ .input.id }
+    then: end
+
+# ── Password change ──────────────────────────────────────────────
+# The current password is verified by the UI (it POSTs /auth/login before
+# calling this action), which exercises the server-side Argon2 check. This
+# action stores the new password as an unsalted SHA-256 digest, which the login
+# verifier accepts via its legacy path. Interim only: a proper
+# /auth/change-password endpoint (Argon2, server-side current-password check)
+# is the intended replacement.
+#
+# The script echoes id/org_id/timestamp into its own output so the update step
+# can read them from context — `export: as: .` replaces the context, so
+# `.input` is not available after this step.
+- cp-hash:
+    run:
+      script:
+        language: js
+        code: |
+          function utf8(s){var o='';for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);if(c<128){o+=String.fromCharCode(c);}else if(c<2048){o+=String.fromCharCode(192|(c>>6));o+=String.fromCharCode(128|(c&63));}else{o+=String.fromCharCode(224|(c>>12));o+=String.fromCharCode(128|((c>>6)&63));o+=String.fromCharCode(128|(c&63));}}return o;}
+          function sha256(ascii){function rr(v,a){return (v>>>a)|(v<<(32-a));}var mp=Math.pow;var mw=mp(2,32);var res='';var words=[];var abl=ascii.length*8;var hash=sha256.h=sha256.h||[];var k=sha256.k=sha256.k||[];var pc=k.length;var comp={};for(var cand=2;pc<64;cand++){if(!comp[cand]){for(var i=0;i<313;i+=cand){comp[i]=cand;}hash[pc]=(mp(cand,0.5)*mw)|0;k[pc++]=(mp(cand,1/3)*mw)|0;}}ascii+='\x80';while(ascii.length%64-56){ascii+='\x00';}for(var i=0;i<ascii.length;i++){var j=ascii.charCodeAt(i);if(j>>8){return '';}words[i>>2]|=j<<((3-i)%4)*8;}words[words.length]=((abl/mw)|0);words[words.length]=(abl);for(var j=0;j<words.length;){var w=words.slice(j,j+=16);var oh=hash;hash=hash.slice(0,8);for(var i=0;i<64;i++){var w15=w[i-15],w2=w[i-2];var a=hash[0],e=hash[4];var t1=hash[7]+(rr(e,6)^rr(e,11)^rr(e,25))+((e&hash[5])^((~e)&hash[6]))+k[i]+(w[i]=(i<16)?w[i]:(w[i-16]+(rr(w15,7)^rr(w15,18)^(w15>>>3))+w[i-7]+(rr(w2,17)^rr(w2,19)^(w2>>>10)))|0);var t2=(rr(a,2)^rr(a,13)^rr(a,22))+((a&hash[1])^(a&hash[2])^(hash[1]&hash[2]));hash=[(t1+t2)|0].concat(hash);hash[4]=(hash[4]+t1)|0;}for(var i=0;i<8;i++){hash[i]=(hash[i]+oh[i])|0;}}for(var i=0;i<8;i++){for(var j=3;j+1;j--){var b=(hash[i]>>(j*8))&255;res+=((b<16)?0:'')+b.toString(16);}}return res;}
+          var inp = state.input || {};
+          var pw = inp.new_password || '';
+          result = { password_hash: sha256(utf8(pw)), id: inp.id, org_id: inp.org_id, timestamp: inp.timestamp };
+    export:
+      as: .
+    then: cp-apply
+- cp-apply:
+    call: lancedb
+    with:
+      operation: update
+      table: users
+      filter: id = "${ .id }" AND org_id = "${ .org_id }"
+      values:
+        password_hash: ${ .password_hash }
+        updated_at: ${ .timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: User
+    then: cp-done
+- cp-done:
+    set:
+      ok: true
+      message: Password updated
+    then: end

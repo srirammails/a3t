@@ -1,0 +1,38 @@
+[package]
+name = "flowr-suspend"
+description = "FlowR Suspend Manager - Actor-based suspension for Wait/Listen tasks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Core runtime
+flowr-core.workspace = true
+
+# Async runtime
+tokio = { workspace = true, features = ["full", "time"] }
+async-trait.workspace = true
+futures.workspace = true
+
+# Actor framework
+kameo.workspace = true
+
+# Storage
+redis.workspace = true
+iggy.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Utilities
+uuid.workspace = true
+chrono.workspace = true

@@ -1,0 +1,175 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-agents
+  version: 1.0.0
+do:
+- route:
+    switch:
+    - case:
+        when: ${ .input.action == "list" }
+        then: list
+    - case:
+        when: ${ .input.action == "get" }
+        then: get
+    - case:
+        when: ${ .input.action == "create" }
+        then: create
+    - case:
+        when: ${ .input.action == "update" }
+        then: update
+    - case:
+        when: ${ .input.action == "delete" }
+        then: delete
+    - case:
+        when: ${ .input.action == "events" }
+        then: list-events
+- list:
+    call: lancedb
+    with:
+      operation: query
+      table: agent_configs
+      filter: org_id = "${ .input.org_id }"
+      limit: 100
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Agent
+    then: end
+- get:
+    call: lancedb
+    with:
+      operation: query
+      table: agent_configs
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Agent
+            id: ${ .input.id }
+    then: end
+- create:
+    set:
+      _ag_id: ${ .input.data.id }
+      _ag_org: ${ .input.org_id }
+      _ag_name: ${ .input.data.name }
+      _ag_tpl_id: ${ .input.data.template_id }
+      _ag_tpl_ver: ${ .input.data.template_version }
+      _ag_mode: ${ .input.data.mode }
+      _ag_vars: ${ .input.data.variables }
+      _ag_bindings: ${ .input.data.resource_bindings }
+      _ag_ns: ${ .input.data.namespace }
+      _ag_user: ${ .input.user_id }
+      _ag_ts: ${ .input.timestamp }
+    export:
+      as: "."
+    then: create-insert
+- create-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: agent_configs
+      records:
+      - id: ${ $context._ag_id }
+        org_id: ${ $context._ag_org }
+        name: ${ $context._ag_name }
+        template_id: ${ $context._ag_tpl_id }
+        template_version: ${ $context._ag_tpl_ver }
+        mode: ${ $context._ag_mode }
+        variables: ${ $context._ag_vars }
+        resource_bindings: ${ $context._ag_bindings }
+        namespace: ${ $context._ag_ns }
+        status: draft
+        created_by: ${ $context._ag_user }
+        created_at: ${ $context._ag_ts }
+        updated_at: ${ $context._ag_ts }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Agent
+    then: log-event-create
+- log-event-create:
+    call: lancedb
+    with:
+      operation: insert
+      table: agent_events
+      records:
+      - id: ${ $context._ag_id }-evt-created
+        agent_config_id: ${ $context._ag_id }
+        event_type: created
+        payload: '{}'
+        created_at: ${ $context._ag_ts }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Agent
+    then: end
+- update:
+    call: lancedb
+    with:
+      operation: update
+      table: agent_configs
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      values:
+        name: ${ .input.data.name // "" }
+        template_id: ${ .input.data.template_id // "" }
+        template_version: ${ .input.data.template_version // "" }
+        mode: ${ .input.data.mode // "" }
+        variables: ${ .input.data.variables // "" }
+        resource_bindings: ${ .input.data.resource_bindings // "" }
+        namespace: ${ .input.data.namespace // "" }
+        status: ${ .input.data.status // "draft" }
+        updated_at: ${ .input.timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Agent
+            id: ${ .input.id }
+    then: end
+- delete:
+    call: lancedb
+    with:
+      operation: delete
+      table: agent_configs
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: delete
+          resource:
+            type: Agent
+            id: ${ .input.id }
+    then: end
+- list-events:
+    call: lancedb
+    with:
+      operation: query
+      table: agent_events
+      filter: agent_config_id = "${ .input.id }"
+      limit: 50
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Agent
+            id: ${ .input.id }
+    then: end

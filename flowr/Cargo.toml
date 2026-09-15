@@ -1,0 +1,94 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/flowr-server",
+    "crates/flowr-canvas",
+]
+exclude = [
+    "crates/flowr-api",
+    "crates/flowr-core",
+    "crates/flowr-registry",
+    "crates/flowr-hub",
+    "crates/flowr-worker",
+    "crates/flowr-suspend",
+    # EE glue: pulls aesop/cedar. Built only via `flowr-server --features ee`,
+    # so it stays out of the default (CE) workspace build.
+    "crates/flowr-aesop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+authors = ["FlowR Contributors"]
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# Shared crates
+flowr-expr = { path = "../shared/flowr-expr" }
+flowr-types = { path = "../shared/flowr-types" }
+flowr-storage = { path = "../shared/flowr-storage" }
+flowr-mcp-core = { path = "../shared/flowr-mcp-core" }
+flowr-policy = { path = "../shared/flowr-policy" }
+
+# Legacy crates (excluded from workspace, kept for reference)
+# flowr-core, flowr-tasks, flowr-registry, flowr-hub, flowr-worker, flowr-suspend
+# Replaced by: swf-runtime + shared flowr-core + shared flowr-tasks + StorageBackend
+
+# Async runtime
+tokio = { version = "1.40", features = ["full", "tracing"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Iggy client
+iggy = "0.6.210"
+
+# Redis/Dragonfly
+redis = { version = "0.24", features = ["tokio-comp"] }
+deadpool-redis = "0.15"
+
+# Actor framework
+kameo = "0.12"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging & Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utilities
+uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+bytes = "1.7"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# HTTP server
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# jq Expression engine
+jaq-core = "2.0"
+jaq-std = "2.0"
+jaq-json = { version = "1.0", features = ["serde_json"] }
+
+# PostgreSQL
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-chrono-0_4", "with-uuid-1"] }
+deadpool-postgres = "0.14"
+
+# JSON Schema validation
+jsonschema = "0.29"
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# ADB (Agent Database) - ClawDB/LanceDB storage
+flowr-ce-storage = { path = "../flowr-ce/crates/flowr-ce-storage" }

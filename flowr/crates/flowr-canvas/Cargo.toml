@@ -1,0 +1,47 @@
+[package]
+name = "flowr-canvas"
+description = "FlowR A3T Controller — watches Canvas + Runtime CRs, reconciles to k8s"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+
+[[bin]]
+name = "flowr-controller"
+path = "src/main.rs"
+
+[dependencies]
+# K8s client
+kube = { version = "0.98", features = ["runtime", "derive", "client"] }
+k8s-openapi = { version = "0.24", features = ["latest"] }
+
+# Async
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP client (for Admin API calls)
+reqwest = { version = "0.12", features = ["json"] }
+
+# HTTP server — the in-cluster API flowr (EE) pushes canvases through
+axum = "0.7"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+
+# Schema
+schemars = "0.8"
+serde_yaml = "0.9"
+
+# TLS
+rustls = { version = "0.23", features = ["ring"] }

@@ -1,0 +1,83 @@
+---
+title: Architecture
+description: How A3T components fit together.
+---
+
+## System overview
+
+```
+┌─────────────────────────────────────────────────┐
+│                  A3T Console                     │
+│          (SvelteKit SPA · console.a3t.io)        │
+└──────────────────┬──────────────────────────────┘
+                   │ MCP (JSON-RPC)
+┌──────────────────▼──────────────────────────────┐
+│                 FlowR Server                     │
+│         (Rust · CNCF Workflow Runtime)           │
+│                                                  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────────┐ │
+│  │ Workflow  │ │ Resource │ │ Trigger Manager  │ │
+│  │ Engine   │ │ Registry │ │ (webhook/cron)   │ │
+│  └────┬─────┘ └──────────┘ └──────────────────┘ │
+│       │                                          │
+│  ┌────▼─────────────────────────────────────┐   │
+│  │           Task Executors (26 types)       │   │
+│  │  set · call:http · call:llm · call:agent  │   │
+│  │  call:lancedb · switch · for · fork · ... │   │
+│  └──────────────────────────────────────────┘   │
+└──────────────────┬──────────────────────────────┘
+                   │
+       ┌───────────┼───────────┐
+       ▼           ▼           ▼
+   ┌───────┐  ┌────────┐  ┌────────┐
+   │ LLMs  │  │ClawDB  │  │LanceDB │
+   │       │  │(Memory)│  │(Store) │
+   └───────┘  └────────┘  └────────┘
+```
+
+## Communication protocol
+
+All communication uses **MCP (Model Context Protocol)** over JSON-RPC 2.0:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "id": 1,
+  "params": {
+    "name": "execute_flow",
+    "arguments": { "name": "my-flow", "namespace": "default" }
+  }
+}
+```
+
+The FlowR server exposes MCP tools that the console, CLI, and other MCP clients can call.
+
+## Execution model
+
+1. **Workflow registered** — YAML parsed and stored
+2. **Execution requested** — instance created, queued
+3. **Steps execute sequentially** — each step runs its task executor
+4. **Async completion** — poll `get_execution_status` for result
+5. **Output returned** — final step output is the workflow result
+
+Workflows are **fire-and-forget with polling**. The `execute_flow` call returns immediately with an instance ID. Use `get_execution_status` to check progress.
+
+## Resource model
+
+Resources are named connections to external systems. They're referenced by steps:
+
+```yaml
+- name: query-db
+  type: call:lancedb
+  resource: a3t/a3t-platform-db    # namespace/name reference
+  config:
+    operation: query
+    table: users
+```
+
+Resource types: `openai`, `anthropic`, `ollama`, `postgres`, `mysql`, `lancedb`, `redis`, `qdrant`, `mcp`, `http`, `clawdb`, `agent`.
+
+## Namespace isolation
+
+All entities (workflows, resources, triggers) are scoped to a **namespace**. The default namespace is `default`. A3T platform entities use the `a3t` namespace.

@@ -1,0 +1,26 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-inline-js
+  version: 1.0.0
+do:
+- js-computation:
+    run:
+      script:
+        language: js
+        code: "const items = state.items || [];\nconst sum = items.reduce((a, b) =>\
+          \ a + b, 0);\nconst max = Math.max(...items);\nconst min = Math.min(...items);\n\
+          \nresult = {\n  sum: sum,\n  max: max,\n  min: min,\n  count: items.length,\n\
+          \  language: \"javascript\"\n};\n"
+    export:
+      as: '{js_result: .}'
+input:
+  schema:
+    type: object
+    properties:
+      items:
+        type: array
+        items:
+          type: number
+    required:
+    - items

@@ -1,0 +1,75 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: create-ticket
+  version: 1.0.0
+do:
+- generate-id:
+    set:
+      _ticket_id: ${ "TKT-" + (now | tostring | split(".") | .[0] | .[-8:]) }
+    export:
+      as: .
+- store-ticket:
+    call: lancedb
+    with:
+      operation: insert
+      table: tickets
+      data:
+      - ticket_id: ${ $context._ticket_id }
+        subject: ${ .subject }
+        description: ${ .description }
+        priority: ${ .priority // "medium" }
+        customer_id: ${ .customer_id // null }
+        labels: ${ .labels // [] }
+        status: open
+        created_at: ${ now | tostring }
+      _resource: a3t-platform-db
+    export:
+      as: .
+- notify:
+    call: http
+    with:
+      method: POST
+      url: ${ .notify_url }
+      headers:
+        Content-Type: application/json
+      body:
+        event: ticket_created
+        ticket_id: ${ $context._ticket_id }
+        subject: ${ .subject }
+        priority: ${ .priority // "medium" }
+    if: ${ .notify_url != null }
+- result:
+    set:
+      ticket_id: ${ $context._ticket_id }
+      created: true
+      priority: ${ .priority // "medium" }
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    required:
+    - subject
+    - description
+    properties:
+      subject:
+        type: string
+      description:
+        type: string
+      priority:
+        type: string
+        default: medium
+        enum:
+        - low
+        - medium
+        - high
+        - critical
+      customer_id:
+        type: string
+      labels:
+        type: array
+        items:
+          type: string
+      notify_url:
+        type: string

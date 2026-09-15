@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  # Apache Iggy - Message streaming platform
+  iggy:
+    image: iggyrs/iggy:0.4.214
+    container_name: flowr-iggy
+    ports:
+      - "8090:8090"   # TCP protocol
+      - "3000:3000"   # HTTP API
+    volumes:
+      - iggy-data:/data
+    environment:
+      - IGGY_HTTP_ENABLED=true
+      - IGGY_HTTP_ADDRESS=0.0.0.0:3000
+      - IGGY_TCP_ENABLED=true
+      - IGGY_TCP_ADDRESS=0.0.0.0:8090
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flowr-network
+
+  # Dragonfly - Redis-compatible in-memory store
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    container_name: flowr-dragonfly
+    ports:
+      - "6379:6379"
+    volumes:
+      - dragonfly-data:/data
+    command: >
+      --maxmemory=512mb
+      --proactor_threads=2
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flowr-network
+
+volumes:
+  iggy-data:
+  dragonfly-data:
+
+networks:
+  flowr-network:
+    driver: bridge

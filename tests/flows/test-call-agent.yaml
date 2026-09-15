@@ -1,0 +1,35 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-call-agent
+  version: 2.0.0
+do:
+- agent-run:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: test-call-agent-001
+          message: How many resources are configured in the 'default' namespace? Use
+            the list_resources tool to find out. Return the count as a number.
+          config:
+            system_prompt: You are a helpful test agent. Answer concisely. Use tools
+              when needed.
+            llm_resource: openai-gpt
+            max_iterations: 5
+            max_tokens: 1024
+            temperature: 0.3
+            mcp_servers:
+            - agent-flows
+            ttl: 300
+    export:
+      as: .
+- compile-results:
+    set:
+      agent_test_completed: true
+      agent_output: ${ .content }
+      agent_iterations: ${ .iterations }
+      agent_tool_calls: ${ .tool_calls_made }
+    export:
+      as: .

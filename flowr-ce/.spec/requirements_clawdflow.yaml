@@ -1,0 +1,235 @@
+project: clawdflow
+version: "2.0"
+requirements:
+
+  # ════════════════════════════════════════════════════
+  # CORE ENGINE
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-ENGINE-001
+    kind: behavior
+    priority: must
+    statement: >
+      ClawdFlow runs as a single OS process serving HTTP, MCP, and webhook endpoints without external orchestration.
+    acceptance_criteria:
+      - "A single binary starts and serves on configurable port"
+      - "Health endpoint returns status ok"
+    cncf_ref: ""
+
+  - id: REQ-ENGINE-002
+    kind: behavior
+    priority: must
+    statement: >
+      ClawdFlow implements all CNCF SWF 1.0.3 task types via the swf-parser and swf-runtime crates.
+    acceptance_criteria:
+      - "All 12 CNCF task types have handler implementations"
+      - "Test workflows pass for each task type"
+    cncf_ref: "dsl-reference.md#tasks"
+
+  - id: REQ-ENGINE-003
+    kind: behavior
+    priority: must
+    statement: >
+      The jq expression engine evaluates runtime expressions with $context, $input, $output, $task, $workflow, $runtime, $secrets arguments.
+    acceptance_criteria:
+      - "Expressions in ${ ... } syntax resolve against workflow context"
+      - "All CNCF runtime expression arguments are available in correct scopes"
+    cncf_ref: "dsl-reference.md#runtime-expressions"
+
+  # ════════════════════════════════════════════════════
+  # STORAGE
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-STORE-001
+    kind: invariant
+    priority: must
+    statement: >
+      ClawdFlow uses LanceDB as embedded storage for workflows, resources, executions, and state with no external database required.
+    acceptance_criteria:
+      - "LanceDB tables are created in a configurable data directory"
+      - "All CRUD operations use LanceDB"
+      - "Data persists across process restarts"
+
+  - id: REQ-STORE-002
+    kind: behavior
+    priority: must
+    statement: >
+      The state store supports key-value operations with optional TTL for ephemeral data.
+    acceptance_criteria:
+      - "state:set writes a key-value pair"
+      - "state:get retrieves the value by key"
+      - "Expired TTL entries are not returned"
+      - "state:delete removes a key"
+
+  # ════════════════════════════════════════════════════
+  # MCP PROTOCOL
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-MCP-001
+    kind: interface
+    priority: must
+    statement: >
+      ClawdFlow exposes MCP tools for workflow CRUD, execution, state, resources, and triggers via Model Context Protocol.
+    acceptance_criteria:
+      - "All tools are discoverable via MCP tool listing"
+      - "Each tool executes correctly through MCP protocol"
+      - "Tool count includes agent lifecycle tools (create_agent, send_message, etc.)"
+
+  - id: REQ-MCP-002
+    kind: interface
+    priority: must
+    statement: >
+      ClawdFlow supports both stdio and HTTP/SSE transport modes for MCP connections.
+    acceptance_criteria:
+      - "Starting with --mode stdio connects via stdin/stdout"
+      - "Starting with --mode http serves on configurable port"
+
+  # ════════════════════════════════════════════════════
+  # TRIGGERS
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-TRIG-001
+    kind: behavior
+    priority: must
+    statement: >
+      Triggers are first-class resources with HTTP API for CRUD, enable/pause, and dynamic target attach/detach.
+    acceptance_criteria:
+      - "POST /triggers creates a trigger"
+      - "GET /triggers lists all triggers"
+      - "DELETE /triggers/:id deletes a trigger"
+      - "POST /triggers/:id/enable enables a paused trigger"
+      - "POST /triggers/:id/pause pauses an active trigger"
+      - "POST /triggers/:id/attach adds a target"
+      - "POST /triggers/:id/detach removes a target"
+
+  - id: REQ-TRIG-002
+    kind: behavior
+    priority: must
+    statement: >
+      Three trigger types are supported: webhook (POST path match), cron (5-field expression), and event (internal event bus).
+    acceptance_criteria:
+      - "Webhook trigger fires when POST /webhook?path= matches"
+      - "Cron trigger fires at intervals matching cron expression"
+      - "Event trigger fires when matching internal event is emitted"
+
+  - id: REQ-TRIG-003
+    kind: behavior
+    priority: must
+    statement: >
+      A single trigger can deliver to multiple targets: workflow execution (direct), or external webhook (HTTP forward).
+    acceptance_criteria:
+      - "A trigger with two targets delivers to both on fire"
+      - "Workflow target executes workflow with trigger payload as input"
+      - "Webhook target forwards payload to external URL"
+
+  - id: REQ-TRIG-010
+    kind: behavior
+    priority: must
+    statement: >
+      Triggers are persisted in state store and restored on server restart.
+    acceptance_criteria:
+      - "Triggers survive server restart"
+      - "Active triggers resume firing after restart"
+
+  # ════════════════════════════════════════════════════
+  # AGENT TEMPLATE (A3T layer, runs on ClawdFlow)
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-AGENT-001
+    kind: behavior
+    priority: must
+    statement: >
+      Agents are pure CNCF workflows using system/agent-template with tool dispatch, multi-turn conversation, and session state. No embedded agent runtime.
+    acceptance_criteria:
+      - "Agent turn executes via run:workflow targeting system/agent-template"
+      - "LLM is called via call:llm task within the workflow"
+      - "Tool calls are dispatched via call:mcp or run:workflow"
+      - "No ZeroClaw or embedded agent library dependency"
+
+  - id: REQ-AGENT-002
+    kind: behavior
+    priority: must
+    statement: >
+      Agent template provides 10-point lifecycle via CNCF use.extensions hooks that can be overridden by agent instances.
+    acceptance_criteria:
+      - "10 extension hooks defined: on_turn_start, before_recall, after_recall, before_llm, on_llm_response, on_tool_call, on_tool_error, before_store, after_response, on_turn_end"
+      - "Default hooks are no-ops"
+      - "Agent instances can override hooks with custom task lists"
+
+  - id: REQ-AGENT-003
+    kind: behavior
+    priority: must
+    statement: >
+      Agent sessions persist conversation history across turns via state:get/set with configurable TTL.
+    acceptance_criteria:
+      - "Session state saved after each turn"
+      - "Session state restored at start of next turn with same session_id"
+      - "Conversation history includes user and assistant messages"
+
+  # ════════════════════════════════════════════════════
+  # TEMPLATES
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-TMPL-001
+    kind: behavior
+    priority: must
+    statement: >
+      Template registry API supports creating, listing, retrieving, and versioning agent templates.
+    acceptance_criteria:
+      - "POST /templates creates a versioned template"
+      - "GET /templates lists all templates"
+      - "GET /templates/:name returns the active version"
+
+  - id: REQ-TMPL-002
+    kind: behavior
+    priority: must
+    statement: >
+      Templates support version management with explicit activation.
+    acceptance_criteria:
+      - "POST /templates/:name/activate/:version sets the active version"
+      - "Multiple versions coexist per template name"
+
+  # ════════════════════════════════════════════════════
+  # PERFORMANCE
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-PERF-001
+    kind: sla
+    priority: should
+    statement: >
+      Inline Lua script execution completes in under 100 microseconds p99.
+    acceptance_criteria:
+      - "p99 latency of simple Lua script < 100us over 1000 iterations"
+
+  - id: REQ-PERF-002
+    kind: sla
+    priority: should
+    statement: >
+      Inline JavaScript script execution completes in under 200 microseconds p99.
+    acceptance_criteria:
+      - "p99 latency of simple JS script < 200us over 1000 iterations"
+
+  # ════════════════════════════════════════════════════
+  # SECURITY
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-SEC-001
+    kind: security
+    priority: must
+    statement: >
+      API keys and credentials in resource configs are masked in API responses.
+    acceptance_criteria:
+      - "GET /resources masks fields containing key, secret, password, token"
+
+  # ════════════════════════════════════════════════════
+  # DEPLOYMENT
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-DEPLOY-001
+    kind: invariant
+    priority: must
+    statement: >
+      ClawdFlow is packaged as a single Docker container that runs the complete system.
+    acceptance_criteria:
+      - "docker build produces a runnable image"
+      - "Container serves HTTP on configurable port with persistent data via volume mount"

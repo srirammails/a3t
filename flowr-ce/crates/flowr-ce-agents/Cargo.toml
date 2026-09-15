@@ -1,0 +1,36 @@
+[package]
+name = "flowr-ce-agents"
+description = "ClawdFlow Agent Runtime - CNCF workflow agents, triggers, and lifecycle management"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+# Core
+flowr-ce-core.workspace = true
+flowr-storage.workspace = true
+flowr-types.workspace = true
+
+# Async
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+async-trait.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Utilities
+uuid.workspace = true
+chrono.workspace = true
+
+# HTTP client (for MCP tool discovery + ClawDB adapter)
+reqwest.workspace = true

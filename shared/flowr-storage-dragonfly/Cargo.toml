@@ -1,0 +1,27 @@
+[package]
+name = "flowr-storage-dragonfly"
+description = "Redis/Dragonfly storage backend for FlowR distributed mode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flowr-types.workspace = true
+flowr-storage.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+
+# Redis/Dragonfly
+redis = { version = "0.27", features = ["tokio-comp", "aio"] }
+
+# In-memory channels for queue/events (same pattern as LanceStorage)
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

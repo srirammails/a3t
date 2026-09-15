@@ -1,0 +1,81 @@
+---
+title: MCP Tools Reference
+description: All MCP tools exposed by the FlowR server.
+---
+
+FlowR exposes its API as MCP (Model Context Protocol) tools over JSON-RPC 2.0.
+
+## Endpoint
+
+```
+POST http://localhost:3002/message
+Content-Type: application/json
+```
+
+## Workflows
+
+| Tool | Description |
+|------|-------------|
+| `create_flow` | Create a workflow from YAML or JSON |
+| `get_flow` | Get full workflow definition |
+| `list_flows` | List workflows, optional namespace filter |
+| `update_flow` | Enable/disable, set active version |
+| `delete_flow` | Delete a workflow |
+| `execute_flow` | Execute a workflow, returns instance ID |
+| `get_execution_status` | Poll execution status and output |
+
+## Resources
+
+| Tool | Description |
+|------|-------------|
+| `create_resource` | Create a resource (name, type_ref, config) |
+| `get_resource` | Get resource details |
+| `list_resources` | List resources, optional namespace filter |
+| `delete_resource` | Delete a resource |
+| `list_resource_types` | List built-in resource types |
+
+## Task types
+
+| Tool | Description |
+|------|-------------|
+| `list_task_types` | List all 26 task types with descriptions |
+| `get_task_type` | Get config schema for a task type |
+
+## State store
+
+| Tool | Description |
+|------|-------------|
+| `get_state` | Get a value by key |
+| `set_state` | Set a value with optional TTL |
+
+## Triggers
+
+| Tool | Description |
+|------|-------------|
+| `create_trigger` | Create webhook/cron/event trigger |
+| `get_trigger` | Get trigger by ID |
+| `list_triggers` | List triggers, optional namespace filter |
+| `update_trigger` | Update trigger config |
+| `delete_trigger` | Delete trigger |
+| `attach_trigger` | Add target to trigger |
+| `detach_trigger` | Remove target |
+| `enable_trigger` | Enable paused trigger |
+| `pause_trigger` | Pause active trigger |
+
+## Request format
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "id": 1,
+  "params": {
+    "name": "execute_flow",
+    "arguments": {
+      "name": "my-flow",
+      "namespace": "default",
+      "input": {"key": "value"}
+    }
+  }
+}
+```

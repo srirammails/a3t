@@ -1,0 +1,165 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-templates
+  version: 1.0.0
+do:
+- route:
+    switch:
+    - case:
+        when: ${ .input.action == "list" }
+        then: list
+    - case:
+        when: ${ .input.action == "get" }
+        then: get
+    - case:
+        when: ${ .input.action == "create" }
+        then: create
+    - case:
+        when: ${ .input.action == "update" }
+        then: update
+    - case:
+        when: ${ .input.action == "delete" }
+        then: delete
+- list:
+    call: lancedb
+    with:
+      operation: query
+      table: template_registry
+      filter: org_id = "${ .input.org_id }"
+      limit: 100
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Template
+    then: end
+- get:
+    call: lancedb
+    with:
+      operation: query
+      table: template_registry
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Template
+            id: ${ .input.id }
+    then: end
+- create:
+    set:
+      _cr_id: ${ .input.data.id }
+      _cr_org: ${ .input.org_id }
+      _cr_name: ${ .input.data.name }
+      _cr_version: ${ .input.data.version }
+      _cr_source: ${ .input.data.source }
+      _cr_spec: ${ .input.data.spec_yaml }
+      _cr_tags: ${ .input.data.tags }
+      _cr_vertical: ${ .input.data.vertical }
+      _cr_user: ${ .input.user_id }
+      _cr_ts: ${ .input.timestamp }
+    export:
+      as: "."
+    then: create-check
+- create-check:
+    call: lancedb
+    with:
+      operation: query
+      table: template_registry
+      filter: name = "${ $context._cr_name }" AND org_id = "${ $context._cr_org }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Template
+    then: create-decide
+- create-decide:
+    switch:
+    - case:
+        when: ${ (. | length) > 0 }
+        then: create-exists
+    - default:
+        then: create-insert
+- create-exists:
+    set:
+      error: Template with this name already exists
+      name: ${ $context._cr_name }
+    then: end
+- create-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: template_registry
+      records:
+      - id: ${ $context._cr_id }
+        org_id: ${ $context._cr_org }
+        name: ${ $context._cr_name }
+        version: ${ $context._cr_version }
+        source: ${ $context._cr_source }
+        spec_yaml: ${ $context._cr_spec }
+        digest: ''
+        signed_by: ''
+        tags: ${ $context._cr_tags }
+        vertical: ${ $context._cr_vertical }
+        published: 'false'
+        created_by: ${ $context._cr_user }
+        created_at: ${ $context._cr_ts }
+        updated_at: ${ $context._cr_ts }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Template
+    then: end
+- update:
+    call: lancedb
+    with:
+      operation: update
+      table: template_registry
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      values:
+        name: ${ .input.data.name // "" }
+        version: ${ .input.data.version // "1.0.0" }
+        source: ${ .input.data.source // "my" }
+        spec_yaml: ${ .input.data.spec_yaml // "" }
+        tags: ${ .input.data.tags // "" }
+        vertical: ${ .input.data.vertical // "" }
+        digest: ${ .input.data.digest // "" }
+        signed_by: ${ .input.data.signed_by // "" }
+        published: ${ .input.data.published // "false" }
+        updated_at: ${ .input.timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Template
+            id: ${ .input.id }
+    then: end
+- delete:
+    call: lancedb
+    with:
+      operation: delete
+      table: template_registry
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: delete
+          resource:
+            type: Template
+            id: ${ .input.id }
+    then: end

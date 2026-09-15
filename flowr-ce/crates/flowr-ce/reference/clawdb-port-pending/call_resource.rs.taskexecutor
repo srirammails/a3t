@@ -1,0 +1,111 @@
+//! Resource-Aware Task Executors
+//!
+//! Base utilities for executors that use Hub resources.
+//!
+//! # Resource Access Pattern
+//!
+//! Resources are resolved by the worker before task execution and made available
+//! in the TaskContext scope as `$resource`. Executors can access the resolved
+//! resource configuration to connect to external services.
+//!
+//! ```yaml
+//! steps:
+//!   - name: query-db
+//!     type: call:sql
+//!     resource: prod-mysql    # Resolved from Hub
+//!     config:
+//!       query: "SELECT * FROM users WHERE id = ?"
+//!       params: [${ .input.user_id }]
+//! ```
+
+use serde_json::Value;
+use flowr_core::{FlowError, FlowResult, TaskContext};
+
+/// Extract resource config from task context scope
+///
+/// Returns the resolved resource configuration if present.
+pub fn get_resource_config(ctx: &TaskContext) -> FlowResult<&Value> {
+    let resource = &ctx.scope.resource;
+    if resource.is_null() {
+        return Err(FlowError::Internal(
+            "Task requires a resource but none was provided. \
+             Add 'resource: <name>' to the step definition."
+                .to_string(),
+        ));
+    }
+    Ok(resource)
+}
+
+/// Extract optional resource config from task context scope
+///
+/// Returns None if no resource is provided, Some(&Value) otherwise.
+pub fn get_resource_config_opt(ctx: &TaskContext) -> Option<&Value> {
+    let resource = &ctx.scope.resource;
+    if resource.is_null() {
+        None
+    } else {
+        Some(resource)
+    }
+}
+
+/// Extract a required string field from resource config
+pub fn get_resource_string(config: &Value, field: &str) -> FlowResult<String> {
+    config
+        .get(field)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            FlowError::Internal(format!(
+                "Resource config missing required field: {}",
+                field
+            ))
+        })
+}
+
+/// Extract an optional string field from resource config
+pub fn get_resource_string_opt(config: &Value, field: &str) -> Option<String> {
+    config.get(field).and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+/// Extract a required integer field from resource config
+pub fn get_resource_int(config: &Value, field: &str, default: i64) -> i64 {
+    config
+        .get(field)
+        .and_then(|v| v.as_i64())
+        .unwrap_or(default)
+}
+
+/// Extract a boolean field from resource config
+pub fn get_resource_bool(config: &Value, field: &str, default: bool) -> bool {
+    config
+        .get(field)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_get_resource_string() {
+        let config = json!({
+            "host": "localhost",
+            "port": 3306
+        });
+
+        assert_eq!(get_resource_string(&config, "host").unwrap(), "localhost");
+        assert!(get_resource_string(&config, "missing").is_err());
+    }
+
+    #[test]
+    fn test_get_resource_int() {
+        let config = json!({
+            "port": 3306
+        });
+
+        assert_eq!(get_resource_int(&config, "port", 0), 3306);
+        assert_eq!(get_resource_int(&config, "missing", 5432), 5432);
+    }
+}

@@ -1,0 +1,20 @@
+# Git
+.git
+.gitignore
+
+# Rust build artifacts
+**/target
+**/*.rs.bk
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Documentation
+*.md
+!README.md
+
+# Other projects
+poc

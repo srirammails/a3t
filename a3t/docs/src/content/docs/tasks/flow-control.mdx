@@ -1,0 +1,121 @@
+---
+title: Flow Control Tasks
+description: set, switch, for, fork, try, raise, wait
+---
+
+## set
+
+Assign values to the workflow context.
+
+```yaml
+- name: init
+  type: set
+  config:
+    status: active
+    count: "${ .input.items | length }"
+  export.as: "."
+```
+
+## switch
+
+Conditional branching. Config is an array of `when`/`then` pairs with inline steps.
+
+```yaml
+- name: route
+  type: switch
+  config:
+    - when: "${ .status == \"approved\" }"
+      then:
+        - name: approve
+          type: set
+          config:
+            result: approved
+    - default:
+        - name: fallback
+          type: set
+          config:
+            result: pending
+  export.as: "."
+```
+
+## for
+
+Iterate over a collection.
+
+```yaml
+- name: process-items
+  type: for
+  config:
+    in: "${ .items }"
+    each: item
+    at: idx
+    do:
+      - name: handle
+        type: call:http
+        config:
+          method: POST
+          endpoint:
+            uri: "${ .item.url }"
+```
+
+## fork
+
+Execute branches in parallel.
+
+```yaml
+- name: parallel
+  type: fork
+  config:
+    branches:
+      - name: branch-a
+        steps: [...]
+      - name: branch-b
+        steps: [...]
+```
+
+## try
+
+Error handling with optional retry.
+
+```yaml
+- name: safe-call
+  type: try
+  config:
+    do:
+      - name: risky
+        type: call:http
+        config:
+          method: GET
+          endpoint:
+            uri: https://unstable-api.example.com
+    catch:
+      - name: handle-error
+        type: set
+        config:
+          fallback: true
+    retry: 2
+```
+
+## raise
+
+Throw an error to stop execution.
+
+```yaml
+- name: fail
+  type: raise
+  config:
+    error:
+      status: 400
+      message: "Validation failed"
+```
+
+## wait
+
+Pause execution for a duration (ISO 8601).
+
+```yaml
+- name: delay
+  type: wait
+  config:
+    duration: "PT5S"
+```

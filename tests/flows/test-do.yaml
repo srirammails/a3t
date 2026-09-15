@@ -1,0 +1,17 @@
+document:
+  dsl: '1.0.3'
+  namespace: default
+  name: test-do
+  version: '1.0.0'
+do:
+  - nestedBlock:
+      do:
+        - step1:
+            set:
+              value: 10
+        - step2:
+            set:
+              doubled: 20
+  - result:
+      set:
+        do_test_completed: true

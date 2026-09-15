@@ -1,0 +1,173 @@
+# Agent Instance Schema
+# =====================
+# Defines the input contract for creating agent instances from agent-template.
+# An agent instance = template + concrete bindings.
+#
+# Usage:
+#   Create an agent by running the agent-template workflow with this input shape.
+#   The template handles the 10-point lifecycle; this schema defines what you configure.
+
+namespace: system
+name: agent-instance-schema
+version: "1.0.0"
+title: "Agent Instance Schema"
+description: "Input contract for instantiating agents from system/agent-template"
+
+input_schema:
+  type: object
+  required: [session_id, message, config]
+  properties:
+
+    # ── Per-request fields (change every call) ──────
+    session_id:
+      type: string
+      description: "Conversation session key. Reuses session state within TTL."
+
+    message:
+      type: string
+      description: "User message text for this turn."
+
+    context:
+      type: object
+      description: "Optional caller-provided context (metadata, trace_id, user_id, etc.)"
+
+    # ── Agent configuration (set once at creation) ──
+    config:
+      type: object
+      required: [system_prompt, llm_resource]
+      properties:
+
+        # Identity
+        system_prompt:
+          type: string
+          description: "Agent personality and behavioral instructions."
+
+        # Model
+        llm_resource:
+          type: string
+          description: "LLM resource ref (e.g. 'qwen-3-235b-a22b-instruct')"
+
+        max_iterations:
+          type: integer
+          default: 10
+          description: "Max reasoning loop iterations before forced stop."
+
+        max_tokens:
+          type: integer
+          default: 4096
+          description: "LLM max output tokens per call."
+
+        temperature:
+          type: number
+          default: 0.7
+          description: "LLM sampling temperature."
+
+        # Memory
+        memory_resource:
+          type: string
+          description: "ClawDB resource ref (e.g. 'agent-memory'). Null disables memory."
+
+        memory_namespace:
+          type: string
+          default: "default"
+          description: "ClawDB namespace for scoping memory across agents."
+
+        memory_config:
+          type: object
+          description: "Per-tier read/write/scope settings."
+          default:
+            working:   { read: true, write: true, scope: turn }
+            episodic:  { read: true, write: true, scope: session }
+            semantic:  { read: true, write: false, scope: global }
+            procedural: { read: true, write: false, scope: global }
+          properties:
+            working:
+              type: object
+              properties:
+                read:  { type: boolean, default: true }
+                write: { type: boolean, default: true }
+                scope: { type: string, default: turn }
+            episodic:
+              type: object
+              properties:
+                read:  { type: boolean, default: true }
+                write: { type: boolean, default: true }
+                scope: { type: string, default: session }
+            semantic:
+              type: object
+              properties:
+                read:  { type: boolean, default: true }
+                write: { type: boolean, default: false }
+            procedural:
+              type: object
+              properties:
+                read:  { type: boolean, default: true }
+                write: { type: boolean, default: false }
+
+        # Tools
+        tools:
+          type: array
+          description: "Tool definitions sent to LLM. Each: {name, description, input_schema}."
+          items:
+            type: object
+            required: [name, description, input_schema]
+            properties:
+              name:         { type: string }
+              description:  { type: string }
+              input_schema: { type: object }
+
+        tool_flows:
+          type: object
+          description: "Map of tool_name → {namespace, name} for flow-backed tools."
+          additionalProperties:
+            type: object
+            properties:
+              namespace: { type: string }
+              name:      { type: string }
+
+        mcp_servers:
+          type: array
+          description: "MCP server resource refs for tool discovery."
+          items:
+            type: string
+
+        # Session
+        ttl:
+          type: integer
+          default: 1800
+          description: "Session TTL in seconds."
+
+    # ── Extension overrides (optional) ──────────────
+    extensions:
+      type: array
+      description: >
+        Override or add lifecycle hooks. Each extension matches the CNCF
+        use.extensions format: {name, extend, when, before, after}.
+        These merge with the template's default (empty) extensions.
+      items:
+        type: object
+        properties:
+          name:   { type: string }
+          extend: { type: string }
+          when:   { type: string }
+          before: { type: array }
+          after:  { type: array }
+
+output_schema:
+  type: object
+  properties:
+    content:
+      type: string
+      description: "Agent response text."
+    session_id:
+      type: string
+      description: "Session ID used."
+    tool_calls_made:
+      type: integer
+      description: "Number of tool calls executed during this turn."
+    iterations:
+      type: integer
+      description: "Number of reasoning loop iterations."
+    procedural_hit:
+      type: boolean
+      description: "Whether procedural memory skipped the LLM."

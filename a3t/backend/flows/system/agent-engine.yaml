@@ -1,0 +1,73 @@
+document:
+  dsl: '1.0.3'
+  namespace: system
+  name: agent-engine
+  version: '2.0.0'
+  metadata:
+    description: >
+      Rust-native agent engine. Calls the call:a3t:agent handler which
+      implements the full 10-phase lifecycle in native code.
+      Extensions defined here are the hook points — wrapper workflows
+      can override them with before/after tasks.
+
+use:
+  extensions:
+    - on_turn_start:
+        extend: all
+        when: "${ $task.name == \"init_turn\" }"
+        before: []
+        after: []
+
+    - before_recall:
+        extend: all
+        when: "${ $task.name == \"recall_memory\" }"
+        before: []
+        after: []
+
+    - before_llm:
+        extend: call
+        before: []
+        after: []
+
+    - on_llm_response:
+        extend: call
+        before: []
+        after: []
+
+    - on_tool_call:
+        extend: all
+        when: "${ $task.name == \"dispatch_tools\" }"
+        before: []
+        after: []
+
+    - on_tool_error:
+        extend: all
+        when: "${ $task.name == \"dispatch_tools\" and $context._tool_error != null }"
+        before: []
+        after: []
+
+    - before_store:
+        extend: all
+        when: "${ $task.name == \"store_memory\" }"
+        before: []
+        after: []
+
+    - after_response:
+        extend: all
+        when: "${ $task.name == \"emit_response\" }"
+        before: []
+        after: []
+
+    - on_turn_end:
+        extend: all
+        when: "${ $task.name == \"save_session\" }"
+        before: []
+        after: []
+
+do:
+  - run_agent:
+      call: a3t:agent
+      with:
+        config: "${ .config }"
+        session_id: "${ .session_id // \"default\" }"
+        message: "${ .message }"

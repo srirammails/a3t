@@ -1,0 +1,73 @@
+---
+title: AI Tasks
+description: call:llm, call:agent, call:human
+---
+
+## call:llm
+
+Call an LLM provider for text generation. Requires an LLM resource (`openai`, `anthropic`, or `ollama`).
+
+```yaml
+- name: summarize
+  type: call:llm
+  resource: my-claude
+  config:
+    prompt: "Summarize this text: ${ .input.text }"
+    model: claude-sonnet-4-20250514
+    temperature: 0.3
+    max_tokens: 1024
+```
+
+### Structured output
+
+```yaml
+- name: classify
+  type: call:llm
+  resource: my-openai
+  config:
+    prompt: "Classify this support ticket"
+    output_schema:
+      type: object
+      properties:
+        category:
+          type: string
+          enum: [billing, technical, general]
+        priority:
+          type: number
+```
+
+## call:agent
+
+Run a ZeroClaw agent with LLM reasoning + tool use + memory. Requires an `agent` resource.
+
+```yaml
+- name: analyze
+  type: call:agent
+  resource: my-agent
+  config:
+    prompt: "Analyze the incident and recommend actions"
+    max_iterations: 5
+```
+
+### Session mode
+
+```yaml
+- name: chat-turn
+  type: call:agent
+  resource: session-agent
+  config:
+    session_id: "${ .session_id }"
+    prompt: "${ .user_message }"
+```
+
+## call:human
+
+Human-in-the-loop approval. Pauses workflow until a human responds.
+
+```yaml
+- name: approve-deploy
+  type: call:human
+  config:
+    prompt: "Approve deployment of v2.1 to production?"
+    timeout: 3600
+```

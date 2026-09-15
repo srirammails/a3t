@@ -1,0 +1,100 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-install
+  version: 1.0.0
+  metadata:
+    description: >
+      Full A3T platform install — schema + seed agent-template.
+      Idempotent. Requires: a3t-platform-db and flowr-system-db resources.
+
+do:
+  # 1. INSTALL SCHEMA
+  - install-schema:
+      run:
+        workflow:
+          namespace: a3t
+          name: a3t-schema-install
+          input: {}
+
+  # 2. CLEAN EXISTING SYSTEM TEMPLATES
+  - clean-seed-templates:
+      call: lancedb
+      with:
+        operation: delete
+        table: template_registry
+        filter: created_by = 'system'
+        _resource: a3t/a3t-platform-db
+
+  # 3. READ flow definitions from workflows table
+  - read-templates:
+      call: lancedb
+      with:
+        operation: query
+        table: workflows
+        filter: (namespace = 'system' AND name = 'agent-template') OR (namespace = 'system' AND name = 'agent-engine')
+        limit: 2
+        _resource: a3t/flowr-system-db
+      export:
+        as: "{_tpl_rows: .}"
+
+  # 4. SEED agent-template (YAML-based, legacy)
+  - seed-agent-template:
+      call: lancedb
+      with:
+        operation: insert
+        table: template_registry
+        records:
+          - id: tpl-agent-template
+            org_id: org-default
+            name: agent-template
+            version: '2.0.0'
+            source: system
+            spec_yaml: ${ ($context._tpl_rows | map(select(.name == "agent-template")) | .[0].definition | fromjson | .raw_yaml) // "system/agent-template" }
+            digest: ''
+            signed_by: system
+            tags: 'core,lifecycle,multi-turn,tool-use,memory,yaml'
+            vertical: platform
+            published: 'true'
+            created_by: system
+            created_at: '2026-05-29T00:00:00Z'
+            updated_at: '2026-05-29T00:00:00Z'
+        _resource: a3t/a3t-platform-db
+
+  # 5. SEED agent-engine (Rust-native, call:a3t:agent)
+  - seed-agent-engine:
+      call: lancedb
+      with:
+        operation: insert
+        table: template_registry
+        records:
+          - id: tpl-agent-engine
+            org_id: org-default
+            name: agent-engine
+            version: '2.0.0'
+            source: system
+            spec_yaml: ${ ($context._tpl_rows | map(select(.name == "agent-engine")) | .[0].definition | fromjson | .raw_yaml) // "system/agent-engine" }
+            digest: ''
+            signed_by: system
+            tags: 'core,lifecycle,multi-turn,tool-use,memory,rust-native'
+            vertical: platform
+            published: 'true'
+            created_by: system
+            created_at: '2026-05-29T00:00:00Z'
+            updated_at: '2026-05-29T00:00:00Z'
+        _resource: a3t/a3t-platform-db
+
+  # 6. VERIFY
+  - verify:
+      call: lancedb
+      with:
+        operation: query
+        table: template_registry
+        filter: created_by = 'system'
+        select:
+          - id
+          - name
+          - version
+          - tags
+        limit: 10
+        _resource: a3t/a3t-platform-db

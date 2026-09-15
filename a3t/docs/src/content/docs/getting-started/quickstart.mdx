@@ -1,0 +1,98 @@
+---
+title: Quick Start
+description: Create and run your first workflow in 5 minutes.
+---
+
+import { Steps, Code, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Prerequisites
+
+- FlowR server running (default: `http://localhost:3002`)
+- `curl` or the A3T Console
+
+## Create your first workflow
+
+<Steps>
+
+1. **Define a workflow**
+
+   Create a file `hello.yaml`:
+
+   ```yaml
+   namespace: default
+   name: hello-world
+   version: "1.0.0"
+   enabled: true
+   steps:
+     - name: greet
+       type: set
+       config:
+         message: "Hello from A3T!"
+         timestamp: "${ now() }"
+       export.as: "."
+   ```
+
+2. **Deploy it**
+
+   ```bash
+   curl -X POST http://localhost:3002/message \
+     -H "Content-Type: application/json" \
+     -d '{
+       "jsonrpc": "2.0",
+       "method": "tools/call",
+       "id": 1,
+       "params": {
+         "name": "create_flow",
+         "arguments": {
+           "yaml": "namespace: default\nname: hello-world\nversion: \"1.0.0\"\nenabled: true\nsteps:\n  - name: greet\n    type: set\n    config:\n      message: \"Hello from A3T!\"\n    export.as: \".\""
+         }
+       }
+     }'
+   ```
+
+3. **Execute it**
+
+   ```bash
+   curl -X POST http://localhost:3002/message \
+     -H "Content-Type: application/json" \
+     -d '{
+       "jsonrpc": "2.0",
+       "method": "tools/call",
+       "id": 1,
+       "params": {
+         "name": "execute_flow",
+         "arguments": {
+           "name": "hello-world",
+           "namespace": "default"
+         }
+       }
+     }'
+   ```
+
+4. **Check the result**
+
+   Use the instance ID from the response:
+
+   ```bash
+   curl -X POST http://localhost:3002/message \
+     -H "Content-Type: application/json" \
+     -d '{
+       "jsonrpc": "2.0",
+       "method": "tools/call",
+       "id": 1,
+       "params": {
+         "name": "get_execution_status",
+         "arguments": {
+           "instance_id": "<your-instance-id>"
+         }
+       }
+     }'
+   ```
+
+</Steps>
+
+## Next steps
+
+- [Architecture](/getting-started/architecture) — understand how the pieces fit together
+- [Workflows](/concepts/workflows) — learn workflow structure in depth
+- [Task Types](/concepts/task-types) — explore all 26 built-in task types

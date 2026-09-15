@@ -1,0 +1,65 @@
+// A3T EE authorization schema (v1). Entity types mirror the CE contract's
+// Principal/Resource shapes so the CedarHook maps ExecutionRequest 1:1.
+
+// The acting flow/agent's template data (E2 #2a), lifted from `metadata.a3t`
+// and threaded onto the principal as `principal.template.*`. Rules stay central
+// in policy resources; this per-template *data* is what they read (§6.3). The
+// attribute bag is open-ended at runtime (entities are not schema-validated);
+// the known A3T keys are declared here so policies referencing them validate.
+// `policyRef`/`tags` are the *attachment* data (E2 #2c, §6.3). Rules stay
+// central in the policy resource; a flow opts a policy in by listing its name in
+// `metadata.a3t.policyRef`, or a policy auto-attaches to flows carrying a
+// matching `metadata.a3t.tags` entry. Both are just guards the central rule
+// reads (`principal.template.policyRef.contains("…")` / `.tags.contains("…")`);
+// a policy with no such guard is a *default* that applies to every flow.
+type A3tTemplate = {
+  exposedTools?: Set<String>,
+  enabledTools?: Set<String>,
+  runtimePolicy?: String,
+  policyRef?: Set<String>,
+  tags?: Set<String>,
+};
+
+entity User { roles?: Set<String>, template?: A3tTemplate };
+entity Agent { on_behalf_of?: String, template?: A3tTemplate };
+entity Service { template?: A3tTemplate };
+
+// A tool/task. `destructive` and `name` are attached by the choke point from
+// tool metadata; `name` lets policies gate a specific tool by id (e.g. the
+// template-exposed-tools capability check, or a named-tool forbid). `operation`
+// is attached by DB-shaped handlers via flowr_policy::op_policy — a coarse
+// read/write/delete/execute bucket derived from the step's `with.operation`,
+// letting policy distinguish operations within a single handler/task_type
+// (e.g. call:lancedb's list vs delete) without a dedicated Cedar action per verb.
+entity Tool { destructive?: Bool, name?: String, operation?: String, object_type?: String, object_id?: String };
+
+// A registry resource (LLM, MCP, cedar policy, …). `type` mirrors the
+// resource's `type_ref`; the SoD guardrail gates writes to `type == "cedar"`.
+entity Resource { type?: String };
+
+// A persisted chat conversation. `owner` is the principal id that created it and
+// `is_owner` is resolved by the choke point (the endpoint knows who is asking), so
+// the policy can express "your own sessions" without Cedar needing entity-reference
+// attributes that the string-attr Resource builder cannot carry.
+entity Session { owner?: String, is_owner?: Bool };
+
+// An LLM the flow calls (`call:llm`) and a subflow it runs (`run:workflow`) —
+// named targets the executor materializes per step (E2 #4). Distinct types so
+// policy can gate *which* model or subflow, separately from tool invocation.
+entity Llm { model?: String, name?: String };
+entity Flow { name?: String };
+
+action "tool:invoke" appliesTo { principal: [User, Agent, Service], resource: [Tool] };
+action "mcp:call"    appliesTo { principal: [User, Agent, Service], resource: [Tool] };
+action "llm:call"    appliesTo { principal: [User, Agent, Service], resource: [Llm] };
+action "flow:start"  appliesTo { principal: [User, Agent, Service], resource: [Flow] };
+
+// Registry resource governance — the separation-of-duties seam (§6.4).
+// Chat transcript access (§ session persistence). Reading somebody's conversation
+// is a policy decision, not a hardcoded if: owners always, InfoSec by exception.
+action "session:read"   appliesTo { principal: [User, Agent, Service], resource: [Session] };
+action "session:delete" appliesTo { principal: [User, Agent, Service], resource: [Session] };
+
+action "resource:create" appliesTo { principal: [User, Agent, Service], resource: [Resource] };
+action "resource:update" appliesTo { principal: [User, Agent, Service], resource: [Resource] };
+action "resource:delete" appliesTo { principal: [User, Agent, Service], resource: [Resource] };

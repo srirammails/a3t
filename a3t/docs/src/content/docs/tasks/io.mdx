@@ -1,0 +1,72 @@
+---
+title: I/O Tasks
+description: call:http, input:file, output:file, state:get, state:set
+---
+
+## call:http
+
+Make HTTP requests. Requires no resource (or an `http` resource for base URL/auth).
+
+```yaml
+- name: fetch-user
+  type: call:http
+  config:
+    method: GET
+    endpoint:
+      uri: "https://api.example.com/users/${ .user_id }"
+    headers:
+      Authorization: "Bearer ${ .token }"
+    timeout: 10
+```
+
+### POST with body
+
+```yaml
+- name: create-order
+  type: call:http
+  config:
+    method: POST
+    endpoint:
+      uri: https://api.example.com/orders
+    headers:
+      Content-Type: application/json
+    body:
+      customer_id: "${ .customer.id }"
+      total: "${ .cart.total }"
+```
+
+## state:get / state:set
+
+Read and write from the FlowR state store (global key-value).
+
+```yaml
+- name: read-counter
+  type: state:get
+  config:
+    key: "request_count"
+  export.as: "."
+
+- name: increment
+  type: state:set
+  config:
+    key: "request_count"
+    value: "${ .value + 1 }"
+    ttl_secs: 3600
+```
+
+## input:file / output:file
+
+Read from and write to files on disk.
+
+```yaml
+- name: read-config
+  type: input:file
+  config:
+    path: /data/config.json
+
+- name: write-report
+  type: output:file
+  config:
+    path: /data/report.json
+    content: "${ .results }"
+```

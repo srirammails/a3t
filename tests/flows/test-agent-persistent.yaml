@@ -1,0 +1,40 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-agent-persistent
+  version: 2.0.0
+do:
+- turn-1:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: persistent-test-001
+          message: What is 2+2? Reply with just the number.
+          config:
+            system_prompt: You are a persistent ops agent. Remember everything told
+              to you.
+            llm_resource: openai-gpt
+            max_iterations: 3
+            max_tokens: 256
+            temperature: 0.1
+            ttl: 600
+    export:
+      as: .
+- save-result:
+    set:
+      ask_output: ${ .content }
+      ask_iterations: ${ .iterations }
+    export:
+      as: .
+- cleanup:
+    call: state:delete
+    with:
+      key: agent:session:persistent-test-001
+- compile:
+    set:
+      test_passed: true
+      agent_responded: ${ $context.ask_output != null }
+    export:
+      as: .

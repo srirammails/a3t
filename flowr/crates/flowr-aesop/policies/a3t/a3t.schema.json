@@ -1,0 +1,278 @@
+{
+  "": {
+    "commonTypes": {
+      "A3tTemplate": {
+        "type": "Record",
+        "attributes": {
+          "exposedTools": {
+            "type": "Set",
+            "element": {
+              "type": "String"
+            },
+            "required": false
+          },
+          "enabledTools": {
+            "type": "Set",
+            "element": {
+              "type": "String"
+            },
+            "required": false
+          },
+          "runtimePolicy": {
+            "type": "String",
+            "required": false
+          },
+          "policyRef": {
+            "type": "Set",
+            "element": {
+              "type": "String"
+            },
+            "required": false
+          },
+          "tags": {
+            "type": "Set",
+            "element": {
+              "type": "String"
+            },
+            "required": false
+          }
+        }
+      }
+    },
+    "entityTypes": {
+      "User": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "roles": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              },
+              "required": false
+            },
+            "template": {
+              "type": "A3tTemplate",
+              "required": false
+            }
+          }
+        }
+      },
+      "Agent": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "on_behalf_of": {
+              "type": "String",
+              "required": false
+            },
+            "template": {
+              "type": "A3tTemplate",
+              "required": false
+            }
+          }
+        }
+      },
+      "Service": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "template": {
+              "type": "A3tTemplate",
+              "required": false
+            }
+          }
+        }
+      },
+      "Tool": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "destructive": {
+              "type": "Boolean",
+              "required": false
+            },
+            "name": {
+              "type": "String",
+              "required": false
+            },
+            "operation": {
+              "type": "String",
+              "required": false
+            },
+            "object_type": {
+              "type": "String",
+              "required": false
+            },
+            "object_id": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
+      },
+      "Resource": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "type": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
+      },
+      "Llm": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "model": {
+              "type": "String",
+              "required": false
+            },
+            "name": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
+      },
+      "Flow": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "name": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
+      },
+      "Session": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "owner": {
+              "type": "String",
+              "required": false
+            },
+            "is_owner": {
+              "type": "Boolean",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "tool:invoke": {
+        "appliesTo": {
+          "principalTypes": [
+            "User",
+            "Agent",
+            "Service"
+          ],
+          "resourceTypes": [
+            "Tool"
+          ]
+        }
+      },
+      "mcp:call": {
+        "appliesTo": {
+          "principalTypes": [
+            "User",
+            "Agent",
+            "Service"
+          ],
+          "resourceTypes": [
+            "Tool"
+          ]
+        }
+      },
+      "llm:call": {
+        "appliesTo": {
+          "principalTypes": [
+            "User",
+            "Agent",
+            "Service"
+          ],
+          "resourceTypes": [
+            "Llm"
+          ]
+        }
+      },
+      "flow:start": {
+        "appliesTo": {
+          "principalTypes": [
+            "User",
+            "Agent",
+            "Service"
+          ],
+          "resourceTypes": [
+            "Flow"
+          ]
+        }
+      },
+      "resource:create": {
+        "appliesTo": {
+          "principalTypes": [
+            "User",
+            "Agent",
+            "Service"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ]
+        }
+      },
+      "resource:update": {
+        "appliesTo": {
+          "principalTypes": [
+            "User",
+            "Agent",
+            "Service"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ]
+        }
+      },
+      "resource:delete": {
+        "appliesTo": {
+          "principalTypes": [
+            "User",
+            "Agent",
+            "Service"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ]
+        }
+      },
+      "session:read": {
+        "appliesTo": {
+          "principalTypes": [
+            "User",
+            "Agent",
+            "Service"
+          ],
+          "resourceTypes": [
+            "Session"
+          ]
+        }
+      },
+      "session:delete": {
+        "appliesTo": {
+          "principalTypes": [
+            "User",
+            "Agent",
+            "Service"
+          ],
+          "resourceTypes": [
+            "Session"
+          ]
+        }
+      }
+    }
+  }
+}

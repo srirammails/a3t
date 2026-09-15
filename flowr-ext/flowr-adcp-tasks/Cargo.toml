@@ -1,0 +1,47 @@
+[package]
+name = "flowr-adcp-tasks"
+description = "ADCP Protocol Tasks - Ad Campaign Protocol (AdCP) task executors for ClawdFlow"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["ADCP Contributors"]
+license = "Apache-2.0"
+
+[features]
+default = []
+
+[dependencies]
+# ClawdFlow core (for TaskExecutor trait)
+flowr-ce-core = { path = "../../flowr-ce/crates/flowr-ce-core" }
+flowr-expr = { path = "../../shared/flowr-expr" }
+flowr-types = { path = "../../shared/flowr-types" }
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+
+# Utilities
+uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP client (for ADCP API calls)
+reqwest = { version = "0.12", features = ["json"] }
+
+# URL handling
+url = "2.5"
+
+[dev-dependencies]
+tokio = { version = "1.40", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"

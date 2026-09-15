@@ -1,0 +1,34 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-agent-no-memory
+  version: 1.0.0
+do:
+- agent-no-mem:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: no-mem-test-001
+          message: What is 2+2? Reply with just the number.
+          config:
+            system_prompt: You are a calculator. Reply with just the number.
+            max_iterations: 1
+            max_tokens: 32
+            temperature: 0.0
+            ttl: 60
+    export:
+      as: .
+- verify:
+    set:
+      test_passed: ${ .content != null }
+      response: ${ .content }
+      procedural_hit: ${ .procedural_hit }
+      no_memory_error: ${ .content != null }
+    export:
+      as: .
+- cleanup:
+    call: state:delete
+    with:
+      key: agent:session:no-mem-test-001

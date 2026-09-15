@@ -1,0 +1,19 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-network-check
+  version: 1.0.0
+do:
+- check-clawdb-health:
+    call: http
+    with:
+      method: GET
+      url: http://172.17.0.2:3000/health
+      timeout_ms: 5000
+    export:
+      as: health_result
+- compile-results:
+    set:
+      network_test_completed: true
+    export:
+      as: .

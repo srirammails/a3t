@@ -1,0 +1,41 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-call-http
+  version: 1.0.0
+do:
+- http-get-test:
+    call: http
+    with:
+      method: GET
+      endpoint:
+        uri: https://httpbin.org/get
+      headers:
+        Accept: application/json
+        X-Test-Id: ${ .test_id }
+      timeout: 30
+    export:
+      as: '{get_response: .}'
+- http-post-test:
+    call: http
+    with:
+      method: POST
+      endpoint:
+        uri: https://httpbin.org/post
+      headers:
+        Content-Type: application/json
+        X-Test-Id: ${ .test_id }
+      body:
+        message: Test from ClawdFlow
+        test_id: ${ .test_id }
+      timeout: 30
+    export:
+      as: '{post_response: .}'
+input:
+  schema:
+    type: object
+    properties:
+      test_id:
+        type: string
+    required:
+    - test_id

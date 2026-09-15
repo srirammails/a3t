@@ -1,0 +1,45 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-file-io
+  version: 1.0.0
+do:
+- write-json-file:
+    call: output:file
+    with:
+      path: /tmp/clawdflow-test-output.json
+      data: ${ .test_data }
+      format: json
+      create_dirs: true
+    export:
+      as: '{write_result: .}'
+- read-json-file:
+    call: input:file
+    with:
+      path: /tmp/clawdflow-test-output.json
+      format: json
+    export:
+      as: '{read_result: .}'
+- write-text-file:
+    call: output:file
+    with:
+      path: /tmp/clawdflow-test-output.txt
+      data: Test text content from ClawdFlow
+      format: text
+    export:
+      as: '{text_write_result: .}'
+- read-text-file:
+    call: input:file
+    with:
+      path: /tmp/clawdflow-test-output.txt
+      format: text
+    export:
+      as: '{text_read_result: .}'
+input:
+  schema:
+    type: object
+    properties:
+      test_data:
+        type: object
+    required:
+    - test_data

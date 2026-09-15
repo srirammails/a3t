@@ -1,0 +1,52 @@
+# ── Rust ──
+target/
+**/*.rs.bk
+
+# ── Node ──
+node_modules/
+.svelte-kit/
+.output/
+dist/
+.astro/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# The SvelteKit static build output. It is a deploy artifact (Bunny / dash.dev),
+# not source — every `npm run build` regenerates it.
+a3t/ui/build/
+
+# ── Secrets ──
+# Nothing here is ever safe to commit: Bunny storage keys, kubeconfigs,
+# OpenRouter/LLM keys and the Keycloak client secrets all live in these.
+.env
+.env.*
+!.env.example
+!.env.test
+*.kubeconfig
+*.pem
+*.key
+!**/*.key.example
+secrets/
+
+# ── Local / editor ──
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Local run state ──
+*.log
+data/lancedb/
+
+# ── Excluded from the initial import: these carry LIVE credentials inline ──
+# Left on disk untouched, kept out of git history. Parameterize them (env var or
+# a k8s Secret reference) and remove these lines to bring them under version
+# control. See the commit message for the full list.
+a3t/backend/resources/a3t-resources.yaml
+flowr/deploy/k3d/my-agent.yaml
+deployment/iggy/connectors.yaml
+tests/run_tests.py

@@ -1,0 +1,41 @@
+[package]
+name = "flowr-registry"
+description = "FlowR Registry - Workflow definition storage and management"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Core runtime
+flowr-core.workspace = true
+flowr-tasks.workspace = true
+
+# CNCF SWF types
+swf-parser = { path = "../../../shared/swf-parser" }
+flowr-types.workspace = true
+
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+async-recursion = "1.0"
+
+# Storage
+redis.workspace = true
+deadpool-redis.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+
+# Error handling
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Utilities
+uuid.workspace = true
+chrono.workspace = true

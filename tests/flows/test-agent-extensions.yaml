@@ -1,0 +1,45 @@
+document:
+  dsl: '1.0.3'
+  namespace: default
+  name: test-agent-extensions
+  version: '1.0.0'
+
+use:
+  extensions:
+    - test-audit:
+        extend: set
+        after:
+          - mark-extension-fired:
+              set:
+                _ext_fired: true
+
+do:
+  - agent-turn:
+      run:
+        workflow:
+          namespace: system
+          name: agent-template
+          input:
+            session_id: ext-test-001
+            message: Say hello
+            config:
+              system_prompt: 'Reply with just: hello'
+              max_iterations: 1
+              max_tokens: 64
+              temperature: 0.0
+              ttl: 60
+      export:
+        as: "."
+
+  - verify:
+      set:
+        test_passed: "${ .content != null }"
+        agent_response: "${ .content }"
+        iterations: "${ .iterations }"
+      export:
+        as: "."
+
+  - cleanup:
+      call: state:delete
+      with:
+        key: agent:session:ext-test-001

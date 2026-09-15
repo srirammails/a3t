@@ -1,0 +1,51 @@
+document:
+  dsl: '1.0.3'
+  namespace: test
+  name: cncf-flow-control
+  version: '1.0.0'
+do:
+  - init:
+      set:
+        count: 0
+      export:
+        as: "."
+
+  - conditional:
+      if: "${ true }"
+      set:
+        ran_conditional: true
+      export:
+        as: "."
+
+  - skipped:
+      if: "${ false }"
+      set:
+        should_not_appear: true
+      export:
+        as: "."
+
+  - tryBlock:
+      try:
+        do:
+          - willFail:
+              raise:
+                error:
+                  type: https://example.com/test
+                  status: 400
+                  title: Test
+        catch:
+          do:
+            - recover:
+                set:
+                  caught: true
+                export:
+                  as: "."
+
+  - earlyExit:
+      set:
+        completed: true
+      then: end
+
+  - neverReached:
+      set:
+        unreachable: true

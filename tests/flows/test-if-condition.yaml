@@ -1,0 +1,44 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-if-condition
+  version: 1.0.0
+do:
+- always-runs:
+    set:
+      base_value: ${ .value }
+      ran_always: true
+    export:
+      as: .
+- expensive-step:
+    set:
+      expensive_result: ${ .value * 100 }
+      ran_expensive: true
+    if: ${ .skip_expensive == false }
+    export:
+      as: .
+- conditional-on-value:
+    set:
+      high_value: true
+      message: Value is above threshold
+    if: ${ .value > 50 }
+    export:
+      as: .
+- final-summary:
+    set:
+      summary: completed
+      had_expensive: ${ $context.ran_expensive // false }
+      had_high_value: ${ $context.high_value // false }
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    properties:
+      skip_expensive:
+        type: boolean
+      value:
+        type: number
+    required:
+    - skip_expensive
+    - value

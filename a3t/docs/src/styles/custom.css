@@ -1,0 +1,168 @@
+/* A3T Docs — comprehensive Starlight theme override
+ *
+ * Design tokens from /a3t/www/index.html:
+ *   Fonts: Playfair Display (headings), Inter (body), IBM Plex Mono (code)
+ *   Accent: #c47028 (amber/checkpoint)
+ *   Page bg: #faf9f6 (warm ivory)
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;450;500;550;600&display=swap');
+
+/* ══════════════════════════════════════════════════════
+   1. Starlight design tokens (light mode)
+   Only override the documented semantic tokens.
+   Do NOT touch --sl-color-white / --sl-color-black.
+   ══════════════════════════════════════════════════════ */
+
+:root {
+  /* Fonts */
+  --sl-font: 'Inter', system-ui, sans-serif;
+  --sl-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* Accent (amber) */
+  --sl-color-accent-low: #fbf0e0;
+  --sl-color-accent: #c47028;
+  --sl-color-accent-high: #7a4710;
+
+  /* Text */
+  --sl-color-text: #0f0f0f;
+  --sl-color-text-accent: #c47028;
+
+  /* Grays — Starlight uses these for surfaces, borders, muted text */
+  --sl-color-gray-1: #3a3833;
+  --sl-color-gray-2: #6e6a60;
+  --sl-color-gray-3: #9c9789;
+  --sl-color-gray-4: #c8c3b6;
+  --sl-color-gray-5: #eae6dc;
+  --sl-color-gray-6: #f4f2ed;
+  --sl-color-gray-7: #faf9f6;
+
+  /* Font rendering */
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11", "cv02";
+}
+
+/* ══════════════════════════════════════════════════════
+   2. Dark mode tokens
+   ══════════════════════════════════════════════════════ */
+
+[data-theme='dark'] {
+  --sl-color-accent-low: #2a1d0e;
+  --sl-color-accent: #e08838;
+  --sl-color-accent-high: #f5c88a;
+
+  --sl-color-text: #e8e4dc;
+  --sl-color-text-accent: #e08838;
+
+  --sl-color-gray-1: #d4d1cc;
+  --sl-color-gray-2: #9c9789;
+  --sl-color-gray-3: #6e6a60;
+  --sl-color-gray-4: #4a4740;
+  --sl-color-gray-5: #3a3835;
+  --sl-color-gray-6: #2a2928;
+  --sl-color-gray-7: #1e1d1c;
+}
+
+/* ══════════════════════════════════════════════════════
+   3. Typography — Playfair Display for all headings
+   ══════════════════════════════════════════════════════ */
+
+:is(h1, h2, h3, h4, h5, h6) {
+  font-family: 'Playfair Display', Georgia, serif !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.02em;
+}
+
+h1 { font-weight: 600 !important; }
+
+/* ══════════════════════════════════════════════════════
+   4. Nav / site title — brand styling with blue dot
+   ══════════════════════════════════════════════════════ */
+
+.site-title {
+  font-family: 'Playfair Display', Georgia, serif !important;
+  font-weight: 600 !important;
+  font-size: 20px !important;
+  letter-spacing: -0.015em !important;
+}
+
+/* Blue dot after brand name */
+.site-title::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: #3a7fff;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+  margin-bottom: 2px;
+}
+
+/* ══════════════════════════════════════════════════════
+   5. Page background
+   ══════════════════════════════════════════════════════ */
+
+html {
+  background: var(--sl-color-gray-7);
+}
+
+/* ══════════════════════════════════════════════════════
+   6. Code blocks
+   ══════════════════════════════════════════════════════ */
+
+.sl-markdown-content pre {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 10px;
+}
+
+.sl-markdown-content :not(pre) > code {
+  font-size: 0.85em;
+  background: var(--sl-color-gray-6);
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 4px;
+  padding: 0.15em 0.35em;
+}
+
+/* ══════════════════════════════════════════════════════
+   7. Sidebar
+   ══════════════════════════════════════════════════════ */
+
+nav.sidebar {
+  border-right: 1px solid var(--sl-color-gray-5);
+}
+
+/* ══════════════════════════════════════════════════════
+   8. Links
+   ══════════════════════════════════════════════════════ */
+
+a { text-decoration: none; }
+
+/* ══════════════════════════════════════════════════════
+   9. Selection color
+   ══════════════════════════════════════════════════════ */
+
+::selection {
+  background: rgba(196, 112, 40, 0.2);
+}
+
+/* ══════════════════════════════════════════════════════
+   10. Tables
+   ══════════════════════════════════════════════════════ */
+
+.sl-markdown-content table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.sl-markdown-content th {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sl-markdown-content td,
+.sl-markdown-content th {
+  border-color: var(--sl-color-gray-5);
+}

@@ -1,0 +1,15 @@
+document:
+  dsl: '1.0.3'
+  namespace: test
+  name: cncf-shell
+  version: '1.0.0'
+do:
+  - echoTest:
+      run:
+        shell:
+          command: "echo hello-from-cncf"
+      output:
+        as: "${ {output: .stdout} }"
+  - result:
+      set:
+        shell_works: true

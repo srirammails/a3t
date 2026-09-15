@@ -1,0 +1,63 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-test-agent-full
+  version: 1.0.0
+  metadata:
+    description: >
+      Full agent test — exercises LLM, tool_flows (skills), MCP tools, and extension hooks.
+      Call with: { "message": "Look up order ORD-12345", "session_id": "test-1" }
+
+use:
+  extensions:
+    - on_turn_start:
+        extend: all
+        when: "${ $task.name == \"init_turn\" }"
+        before: []
+        after: []
+
+    - before_llm:
+        extend: call
+        before: []
+        after: []
+
+    - on_tool_call:
+        extend: all
+        when: "${ $task.name == \"dispatch_tools\" }"
+        before: []
+        after: []
+
+    - after_response:
+        extend: all
+        when: "${ $task.name == \"emit_response\" }"
+        before: []
+        after: []
+
+do:
+- run_agent:
+    call: a3t:agent
+    with:
+      message: ${ .message // "Hello" }
+      session_id: ${ .session_id // "test-session" }
+      config:
+        system_prompt: >
+          You are a helpful support agent. You have access to tools:
+          - lookup_order: look up order details by order ID
+          - create_ticket: create a support ticket for customer issues
+
+          When a user asks about an order, use lookup_order.
+          When a user wants to file a complaint, use create_ticket.
+          Always use the tools when relevant. Be concise.
+        llm_resource: a3t/groq-llama70b
+        max_iterations: 5
+        max_tokens: 1024
+        temperature: 0.3
+        tool_flows:
+          lookup_order:
+            namespace: a3t
+            name: a3t-skill-lookup-order
+          create_ticket:
+            namespace: a3t
+            name: a3t-skill-create-ticket
+        mcp_servers:
+          - a3t/flowr-mcp

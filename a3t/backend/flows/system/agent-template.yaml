@@ -1,0 +1,370 @@
+document:
+  dsl: '1.0.3'
+  namespace: system
+  name: agent-template
+  version: '2.0.0'
+
+use:
+  functions:
+    recallWorking:
+      call: clawdb
+      with:
+        query: >
+          RECALL FROM WORKING
+          WHERE session_id = "${ $context.session_id }"
+          SCOPE private NAMESPACE "${ $context._memory_namespace }"
+          LIMIT 20
+        _resource: default/default-memory
+
+    recallEpisodic:
+      call: clawdb
+      with:
+        query: >
+          RECALL FROM EPISODIC
+          WHERE session_id = "${ $context.session_id }"
+          SCOPE session NAMESPACE "${ $context._memory_namespace }"
+          LIMIT 20
+        _resource: default/default-memory
+
+    recallSemantic:
+      call: clawdb
+      with:
+        query: >
+          RECALL FROM SEMANTIC
+          WHERE content ~ "${ $context.message }"
+          NAMESPACE "${ $context._memory_namespace }"
+          LIMIT 5
+        _resource: default/default-memory
+
+    recallProcedural:
+      call: clawdb
+      with:
+        query: >
+          RECALL FROM PROCEDURAL
+          WHERE pattern ~ "${ $context.message }"
+          NAMESPACE "${ $context._memory_namespace }"
+          LIMIT 1
+        _resource: default/default-memory
+
+    storeWorking:
+      call: clawdb
+      with:
+        query: >
+          STORE INTO WORKING (
+            session_id = "${ $context.session_id }",
+            role = "${ $context._store_role }",
+            content = "${ $context._store_content }"
+          ) SCOPE private NAMESPACE "${ $context._memory_namespace }"
+        _resource: default/default-memory
+
+    storeEpisodic:
+      call: clawdb
+      with:
+        query: >
+          STORE INTO EPISODIC (
+            session_id = "${ $context.session_id }",
+            role = "assistant",
+            content = "${ $context._agent_response }",
+            tool_calls_made = "${ $context._tool_calls_made }",
+            iterations = "${ $context._iteration }"
+          ) SCOPE session NAMESPACE "${ $context._memory_namespace }"
+        _resource: default/default-memory
+
+  extensions:
+    - on_turn_start:
+        extend: all
+        when: "${ $task.name == \"init_turn\" }"
+        before: []
+
+    - before_recall:
+        extend: all
+        when: "${ $task.name == \"recall_memory\" }"
+        before: []
+
+    - after_recall:
+        extend: all
+        when: "${ $task.name == \"recall_memory\" }"
+        after: []
+
+    - before_llm:
+        extend: call
+        before: []
+
+    - on_llm_response:
+        extend: call
+        after: []
+
+    - on_tool_call:
+        extend: all
+        when: "${ $task.name == \"dispatch_tools\" }"
+        before: []
+
+    - on_tool_error:
+        extend: all
+        when: "${ $task.name == \"dispatch_tools\" and $context._tool_error != null }"
+        after: []
+
+    - before_store:
+        extend: all
+        when: "${ $task.name == \"store_memory\" }"
+        before: []
+
+    - after_response:
+        extend: all
+        when: "${ $task.name == \"emit_response\" }"
+        after: []
+
+    - on_turn_end:
+        extend: all
+        when: "${ $task.name == \"save_session\" }"
+        after: []
+
+do:
+  # ═══════════════════════════════════════════════════
+  # 1. INIT TURN
+  # ═══════════════════════════════════════════════════
+  - init_turn:
+      set:
+        _iteration: 0
+        _should_continue: true
+        _tool_calls_made: 0
+        _agent_response: null
+        _procedural_hit: false
+        _messages: []
+        _tool_error: null
+        _config: "${ .config // {} }"
+        _system_prompt: "${ .config.system_prompt // \"You are a helpful assistant.\" }"
+        _max_iterations: "${ .config.max_iterations // 10 }"
+        _max_tokens: "${ .config.max_tokens // 4096 }"
+        _temperature: "${ .config.temperature // 0.7 }"
+        _tools: "${ .config.tools // [] }"
+        _tool_flows: "${ .config.tool_flows // {} }"
+        _mcp_servers: "${ .config.mcp_servers // [] }"
+        _memory_namespace: "${ .config.memory_namespace // \"default\" }"
+        session_id: "${ .session_id // \"default\" }"
+        message: "${ .message }"
+      export:
+        as: "."
+
+  # ═══════════════════════════════════════════════════
+  # 2. LOAD SESSION
+  # ═══════════════════════════════════════════════════
+  - load_session:
+      call: state:get
+      with:
+        key: "agent:session:${ $context.session_id }"
+      export:
+        as: "{_session: .}"
+
+  - restore_session:
+      set:
+        _messages: "${ (if $context._session then ($context._session.messages // []) else [] end) }"
+      export:
+        as: "."
+
+  # ═══════════════════════════════════════════════════
+  # 3. RECALL MEMORY
+  # ═══════════════════════════════════════════════════
+  - recall_memory:
+      do:
+        - recall_working:
+            if: "${ $context._config.memory_resource != null and ($context._config.memory_config.working.read // true) }"
+            call: recallWorking
+            export:
+              as: "{_working_memories: .data}"
+
+        - recall_episodic:
+            if: "${ $context._config.memory_resource != null and ($context._config.memory_config.episodic.read // true) }"
+            call: recallEpisodic
+            export:
+              as: "{_episodic_memories: .data}"
+
+        - recall_semantic:
+            if: "${ $context._config.memory_resource != null and ($context._config.memory_config.semantic.read // false) }"
+            call: recallSemantic
+            export:
+              as: "{_semantic_memories: .data}"
+
+        - recall_procedural:
+            if: "${ $context._config.memory_resource != null and ($context._config.memory_config.procedural.read // false) }"
+            call: recallProcedural
+            export:
+              as: "{_procedural_result: .data}"
+
+  # ═══════════════════════════════════════════════════
+  # 4. PROCEDURAL CHECK
+  # ═══════════════════════════════════════════════════
+  - procedural_check:
+      if: "${ $context._procedural_result != null and ($context._procedural_result | length) > 0 }"
+      set:
+        _procedural_hit: true
+        _agent_response: "${ $context._procedural_result[0].content // $context._procedural_result[0].response }"
+        _should_continue: false
+      export:
+        as: "."
+
+  # ═══════════════════════════════════════════════════
+  # 5. DISCOVER TOOLS FROM MCP SERVERS
+  # ═══════════════════════════════════════════════════
+  - discover_tools:
+      if: "${ $context._procedural_hit != true and ($context._tools | length) == 0 and ($context._mcp_servers | length) > 0 }"
+      do:
+        - fetch_tools:
+            for:
+              each: _server
+              in: "${ $context._mcp_servers }"
+              do:
+                - list_server_tools:
+                    call: mcp
+                    with:
+                      method: "tools/list"
+                      _resource: "${ $_server }"
+                    export:
+                      as: "{_discovered: .}"
+                - merge_tools:
+                    set:
+                      _tools: "${ $context._tools + ($context._discovered // []) }"
+                    export:
+                      as: "."
+
+  # ═══════════════════════════════════════════════════
+  # 6. BUILD SYSTEM PROMPT
+  # ═══════════════════════════════════════════════════
+  - build_system_prompt:
+      if: "${ $context._procedural_hit != true }"
+      set:
+        _system_prompt_assembled: "${ $context._system_prompt }"
+      export:
+        as: "."
+
+  - append_user_message:
+      if: "${ $context._procedural_hit != true }"
+      set:
+        _messages: "${ $context._messages + [{role: \"user\", content: $context.message}] }"
+      export:
+        as: "."
+
+  # ═══════════════════════════════════════════════════
+  # 7. REASONING LOOP
+  # ═══════════════════════════════════════════════════
+  - reasoning_loop:
+      if: "${ $context._procedural_hit != true }"
+      for:
+        each: _iter
+        in: "${ [range(10)] }"
+        while: "${ $context._should_continue == true }"
+        do:
+          - call_llm:
+              call: llm
+              with:
+                prompt: "${ $context.message // \"hello\" }"
+                system_prompt: "${ $context._system_prompt_assembled // $context._system_prompt // \"You are a helpful assistant.\" }"
+                messages: "${ $context._messages }"
+                tools: "${ $context._tools }"
+                max_tokens: "${ $context._max_tokens // 4096 }"
+                temperature: "${ $context._temperature // 0.7 }"
+                _resource: "${ $context._config.llm_resource // \"default-llm\" }"
+              export:
+                as: "{_llm_result: .}"
+
+          - update_iteration:
+              set:
+                _iteration: "${ $context._iteration + 1 }"
+              export:
+                as: "."
+
+          - check_and_dispatch:
+              do:
+                - dispatch_tools:
+                    if: "${ $context._llm_result.tool_calls != null and ($context._llm_result.tool_calls | length) > 0 }"
+                    for:
+                      each: _tool_call
+                      in: "${ $context._llm_result.tool_calls }"
+                      do:
+                        - execute_tool_mcp:
+                            if: "${ $context._tool_flows == null or $context._tool_flows[$_tool_call.name] == null }"
+                            call: mcp
+                            with:
+                              tool: "${ $_tool_call.name }"
+                              arguments: "${ $_tool_call.input }"
+                              _resource: "${ $context._mcp_servers[0] // \"agent-flows\" }"
+                            export:
+                              as: "{_tool_result: .}"
+
+                        - execute_tool_flow:
+                            if: "${ $context._tool_flows != null and $context._tool_flows[$_tool_call.name] != null }"
+                            run:
+                              workflow:
+                                namespace: "${ $context._tool_flows[$_tool_call.name].namespace }"
+                                name: "${ $context._tool_flows[$_tool_call.name].name }"
+                                input: "${ $_tool_call.input }"
+                            export:
+                              as: "{_tool_result: .}"
+
+                        - track_tool:
+                            set:
+                              _tool_calls_made: "${ $context._tool_calls_made + 1 }"
+                              _tool_error: null
+                            export:
+                              as: "."
+
+                        - append_tool_result:
+                            set:
+                              _messages: "${ $context._messages + [{role: \"tool\", tool_call_id: ($_tool_call.id // \"tool\"), content: (($context._tool_result // {}) | tostring)}] }"
+                            export:
+                              as: "."
+
+                - set_response_if_done:
+                    if: "${ $context._llm_result.tool_calls == null or ($context._llm_result.tool_calls | length) == 0 }"
+                    set:
+                      _agent_response: "${ $context._llm_result.content }"
+                      _should_continue: false
+                    export:
+                      as: "."
+
+          - append_assistant_message:
+              set:
+                _messages: "${ $context._messages + [{role: \"assistant\", content: ($context._llm_result.content // \"\"), tool_calls: ($context._llm_result.tool_calls // null)}] }"
+              export:
+                as: "."
+
+  # ═══════════════════════════════════════════════════
+  # 8. STORE MEMORY
+  # ═══════════════════════════════════════════════════
+  - store_memory:
+      if: "${ $context._config.memory_resource != null }"
+      do:
+        - store_user_working:
+            if: "${ $context._config.memory_config.working.write // true }"
+            call: storeWorking
+
+        - store_assistant_episodic:
+            if: "${ $context._config.memory_config.episodic.write // true }"
+            call: storeEpisodic
+
+  # ═══════════════════════════════════════════════════
+  # 9. SAVE SESSION
+  # ═══════════════════════════════════════════════════
+  - save_session:
+      call: state:set
+      with:
+        key: "agent:session:${ $context.session_id }"
+        value:
+          messages: "${ $context._messages }"
+          last_response: "${ $context._agent_response }"
+          iteration_count: "${ $context._iteration }"
+          tool_calls_made: "${ $context._tool_calls_made }"
+        ttl: "${ $context._config.ttl // 1800 }"
+
+  # ═══════════════════════════════════════════════════
+  # 10. EMIT RESPONSE
+  # ═══════════════════════════════════════════════════
+  - emit_response:
+      set:
+        content: "${ $context._agent_response }"
+        session_id: "${ $context.session_id }"
+        tool_calls_made: "${ $context._tool_calls_made }"
+        iterations: "${ $context._iteration }"
+        procedural_hit: "${ $context._procedural_hit }"
+      export:
+        as: "."

@@ -1,0 +1,25 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-fork
+  version: 1.0.0
+do:
+- parallel-compute:
+    fork:
+      branches:
+      - branch-add:
+          set: {}
+      - branch-multiply:
+          set: {}
+      - branch-subtract:
+          set: {}
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    properties:
+      base_value:
+        type: number
+    required:
+    - base_value

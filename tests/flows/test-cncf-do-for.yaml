@@ -1,0 +1,42 @@
+document:
+  dsl: '1.0.3'
+  namespace: test
+  name: cncf-do-for
+  version: '1.0.0'
+do:
+  - init:
+      set:
+        count: 0
+        items: [1, 2, 3, 4, 5]
+      export:
+        as: "."
+
+  - nestedDo:
+      do:
+        - step1:
+            set:
+              nested: true
+            export:
+              as: "."
+        - step2:
+            set:
+              nested_count: 2
+            export:
+              as: "."
+
+  - loop:
+      for:
+        each: item
+        in: "${ [range(3)] }"
+        while: "${ $context.count < 3 }"
+        do:
+          - increment:
+              set:
+                count: "${ $context.count + 1 }"
+              export:
+                as: "."
+
+  - result:
+      set:
+        final_count: "${ $context.count }"
+        nested_worked: "${ $context.nested }"

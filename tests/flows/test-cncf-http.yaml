@@ -1,0 +1,17 @@
+document:
+  dsl: '1.0.3'
+  namespace: test
+  name: cncf-http
+  version: '1.0.0'
+do:
+  - fetch:
+      call: http
+      with:
+        method: GET
+        endpoint:
+          uri: https://httpbin.org/get
+      output:
+        as: "${ {status: .status, has_body: (.body != null)} }"
+  - result:
+      set:
+        fetched: true

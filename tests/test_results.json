@@ -1,0 +1,238 @@
+{
+  "summary": {
+    "passed": 20,
+    "failed": 18,
+    "skipped": 0,
+    "total": 38
+  },
+  "results": [
+    {
+      "name": "test-agent-ephemeral",
+      "success": false,
+      "status": "TIMEOUT",
+      "details": "Workflow did not complete in time"
+    },
+    {
+      "name": "test-agent-persistent",
+      "success": false,
+      "status": "TIMEOUT",
+      "details": "Workflow did not complete in time"
+    },
+    {
+      "name": "test-agent-reactive",
+      "success": false,
+      "status": "TIMEOUT",
+      "details": "Workflow did not complete in time"
+    },
+    {
+      "name": "test-agent-session",
+      "success": false,
+      "status": "TIMEOUT",
+      "details": "Workflow did not complete in time"
+    },
+    {
+      "name": "test-call-agent",
+      "success": false,
+      "status": "TIMEOUT",
+      "details": "Workflow did not complete in time"
+    },
+    {
+      "name": "test-call-clawdb",
+      "success": false,
+      "status": "TIMEOUT",
+      "details": "Workflow did not complete in time"
+    },
+    {
+      "name": "test-call-http",
+      "success": true,
+      "status": "PASS",
+      "details": "{'body': {'args': {}, 'data': '{\"message\":\"Test from ClawdFlow\",\"test_id\":null}', 'files': {}, 'form': {}, 'headers': {'Accept': '*/*', 'Accept-Encoding': 'gzip', 'Content-Length': '48', 'Content-Type"
+    },
+    {
+      "name": "test-call-human",
+      "success": false,
+      "status": "FAIL",
+      "details": "internal error: invalid timeout: invalid duration: pt5m"
+    },
+    {
+      "name": "test-call-lancedb",
+      "success": false,
+      "status": "FAIL",
+      "details": "Failed to build tasks: task 'list-tables' failed: call:lancedb requires a 'resource' field. Flows must not use the system database. Register a LanceDB resource with create_resource first."
+    },
+    {
+      "name": "test-call-llm",
+      "success": true,
+      "status": "PASS",
+      "details": "{'llm_content': '4', 'llm_model': 'gpt-4o-mini-2024-07-18', 'llm_test_completed': True}"
+    },
+    {
+      "name": "test-call-mcp",
+      "success": false,
+      "status": "TIMEOUT",
+      "details": "Workflow did not complete in time"
+    },
+    {
+      "name": "test-call-qdrant",
+      "success": false,
+      "status": "FAIL",
+      "details": "Failed to build tasks: task 'qdrant-search' failed: failed to resolve resource 'test-qdrant': not found: Resource default/test-qdrant not found"
+    },
+    {
+      "name": "test-call-redis",
+      "success": false,
+      "status": "FAIL",
+      "details": "Failed to build tasks: task 'redis-set' failed: unsupported task type: call:redis"
+    },
+    {
+      "name": "test-call-sql",
+      "success": true,
+      "status": "PASS",
+      "details": "{'_message': 'SQL executor requires sqlx feature', '_stub': True, 'affected_rows': 0, 'connection': {'database': 'flowr', 'host': 'flowr-postgres', 'port': 5432, 'username': 'flowr'}, 'params': [], 'q"
+    },
+    {
+      "name": "test-combined-features",
+      "success": true,
+      "status": "PASS",
+      "details": "{'processed_expensive': None, 'status': 'completed', 'total_items': 0}"
+    },
+    {
+      "name": "test-do",
+      "success": true,
+      "status": "PASS",
+      "details": "{'final_result': 13}"
+    },
+    {
+      "name": "test-dsl-metadata",
+      "success": true,
+      "status": "PASS",
+      "details": "{'result': 1, 'workflow_info': 'test-dsl-metadata'}"
+    },
+    {
+      "name": "test-extensions",
+      "success": false,
+      "status": "FAIL",
+      "details": "expression error: eval error at '.': Error(Str([Str(\"cannot calculate \"), Val(Null), Str(\" \"), Str(\"*\"), Str(\" \"), Val(Int(2))]))"
+    },
+    {
+      "name": "test-file-io",
+      "success": true,
+      "status": "PASS",
+      "details": "Test text content from ClawdFlow"
+    },
+    {
+      "name": "test-for",
+      "success": true,
+      "status": "PASS",
+      "details": "[]"
+    },
+    {
+      "name": "test-fork",
+      "success": true,
+      "status": "PASS",
+      "details": "{'branch-add': {'add_result': 110}, 'branch-multiply': {'multiply_result': 100}, 'branch-subtract': {'subtract_result': 5}}"
+    },
+    {
+      "name": "test-if-condition",
+      "success": true,
+      "status": "PASS",
+      "details": "{'had_expensive': False, 'had_high_value': False, 'summary': 'completed'}"
+    },
+    {
+      "name": "test-inline-js",
+      "success": true,
+      "status": "PASS",
+      "details": "{'duration_us': 475, 'language': 'javascript', 'result': {'count': 0, 'language': 'javascript', 'max': None, 'min': None, 'sum': 0}}"
+    },
+    {
+      "name": "test-inline-lua",
+      "success": true,
+      "status": "PASS",
+      "details": "{'duration_us': 339, 'language': 'lua', 'result': {'difference': 2, 'language': 'lua', 'product': 15, 'sum': 8}}"
+    },
+    {
+      "name": "test-inline-python",
+      "success": false,
+      "status": "FAIL",
+      "details": "internal error: Python support not enabled. Compile with --features python"
+    },
+    {
+      "name": "test-mcp-clawdb",
+      "success": false,
+      "status": "TIMEOUT",
+      "details": "Workflow did not complete in time"
+    },
+    {
+      "name": "test-network-check",
+      "success": false,
+      "status": "FAIL",
+      "details": "Failed to build tasks: task 'check-clawdb-health' failed: invalid call:http config: missing field `endpoint`"
+    },
+    {
+      "name": "test-raise",
+      "success": true,
+      "status": "PASS",
+      "details": "{'caught_message': None, 'caught_type': None, 'error_raised': True}"
+    },
+    {
+      "name": "test-run-script",
+      "success": false,
+      "status": "FAIL",
+      "details": "Failed to build tasks: task 'python-script' failed: unsupported task type: run:script"
+    },
+    {
+      "name": "test-run-shell",
+      "success": true,
+      "status": "PASS",
+      "details": "{'exitCode': 0, 'stderr': '', 'stdout': 'Environment variable test: null', 'success': True}"
+    },
+    {
+      "name": "test-run-workflow",
+      "success": false,
+      "status": "FAIL",
+      "details": "Failed to build tasks: task 'call-nested-workflow' failed: unsupported task type: run:workflow"
+    },
+    {
+      "name": "test-set",
+      "success": true,
+      "status": "PASS",
+      "details": "{'computed': 52, 'doubled': 84, 'greeting': 'Hello, World!', 'original_name': 'World'}"
+    },
+    {
+      "name": "test-state",
+      "success": false,
+      "status": "FAIL",
+      "details": "expression error: compile error: File { code: \"retrieved_value\", path: () }: [(\"retrieved_value\", Filter(0))]"
+    },
+    {
+      "name": "test-switch",
+      "success": true,
+      "status": "PASS",
+      "details": "{'action': 'process', 'result': 'Order has been approved'}"
+    },
+    {
+      "name": "test-timeout",
+      "success": true,
+      "status": "PASS",
+      "details": "{'exitCode': 1, 'stderr': \"sleep: invalid time interval 'null'\\nTry 'sleep --help' for more information.\", 'stdout': '', 'success': False}"
+    },
+    {
+      "name": "test-try-advanced",
+      "success": true,
+      "status": "PASS",
+      "details": "{'handler': 'generic', 'message': 'Caught by generic handler (not NotFoundError)'}"
+    },
+    {
+      "name": "test-try",
+      "success": true,
+      "status": "PASS",
+      "details": "{'message': 'Operation completed successfully', 'success': True}"
+    },
+    {
+      "name": "test-wait",
+      "success": true,
+      "status": "PASS",
+      "details": "{'completed': True, 'wait_finished': True}"
+    }
+  ]
+}

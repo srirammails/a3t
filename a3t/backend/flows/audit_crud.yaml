@@ -1,0 +1,70 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-audit
+  version: 1.0.0
+do:
+- route:
+    switch:
+    - case:
+        when: ${ .input.action == "log" }
+        then: log-event
+    - case:
+        when: ${ .input.action == "list" }
+        then: list
+    - case:
+        when: ${ .input.action == "query" }
+        then: query
+- log-event:
+    call: lancedb
+    with:
+      operation: insert
+      table: audit_log
+      records:
+      - id: ${ .input.data.id }
+        org_id: ${ .input.org_id }
+        user_id: ${ .input.user_id }
+        action: ${ .input.data.action }
+        resource_type: ${ .input.data.resource_type }
+        resource_id: ${ .input.data.resource_id }
+        details: ${ .input.data.details }
+        ip: ${ .input.data.ip }
+        created_at: ${ .input.timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: AuditEntry
+    then: end
+- list:
+    call: lancedb
+    with:
+      operation: query
+      table: audit_log
+      filter: org_id = "${ .input.org_id }"
+      limit: 50
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: AuditEntry
+    then: end
+- query:
+    call: lancedb
+    with:
+      operation: query
+      table: audit_log
+      filter: ${ .input.filter }
+      limit: ${ .input.limit }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: AuditEntry
+    then: end

@@ -1,0 +1,38 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-raise
+  version: 1.0.0
+do:
+- wrapped-raise:
+    try:
+      do:
+      - raise-error:
+          raise:
+            error:
+              type: ${ .error_type }
+              status: 400
+              title: Test Error
+              detail: ${ .error_message }
+      catch:
+        errors:
+        - '*'
+        do:
+        - catch-error:
+            set:
+              error_raised: true
+              caught_type: ${ .error_type }
+              caught_message: ${ .error_message }
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    properties:
+      error_type:
+        type: string
+      error_message:
+        type: string
+    required:
+    - error_type
+    - error_message

@@ -1,0 +1,39 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: http-fetch
+  version: 1.0.0
+do:
+- request:
+    call: http
+    with:
+      method: ${ .method // "GET" }
+      url: ${ .url }
+      headers: ${ .headers // {} }
+      body: ${ .body // null }
+      timeout: ${ .timeout // 30 }
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    required:
+    - url
+    properties:
+      url:
+        type: string
+      method:
+        type: string
+        default: GET
+        enum:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - PATCH
+      headers:
+        type: object
+      body: {}
+      timeout:
+        type: integer
+        default: 30

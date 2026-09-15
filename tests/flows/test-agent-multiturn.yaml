@@ -1,0 +1,53 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-agent-multiturn
+  version: 1.0.0
+do:
+- turn-1:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: multiturn-test-001
+          message: 'Remember this code: ALPHA-99. Confirm you got it.'
+          config:
+            system_prompt: You are a helpful assistant. Remember everything told to
+              you.
+            max_iterations: 1
+            max_tokens: 256
+            temperature: 0.1
+            ttl: 300
+    export:
+      as: '{turn1: .}'
+- turn-2:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: multiturn-test-001
+          message: What was the code I told you? Reply with just the code.
+          config:
+            system_prompt: You are a helpful assistant. Remember everything told to
+              you.
+            max_iterations: 1
+            max_tokens: 256
+            temperature: 0.1
+            ttl: 300
+    export:
+      as: '{turn2: .}'
+- cleanup:
+    call: state:delete
+    with:
+      key: agent:session:multiturn-test-001
+- verify:
+    set:
+      test_passed: ${ $context.turn1.content != null and $context.turn2.content !=
+        null }
+      turn1_response: ${ $context.turn1.content }
+      turn2_response: ${ $context.turn2.content }
+      turn2_has_code: ${ ($context.turn2.content // "") | contains("ALPHA") }
+    export:
+      as: .

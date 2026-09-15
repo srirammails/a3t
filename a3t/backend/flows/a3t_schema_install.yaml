@@ -1,0 +1,683 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-schema-install
+  version: 1.0.0
+do:
+- create-orgs:
+    call: lancedb
+    with:
+      operation: create_table
+      table: orgs
+      mode: create_if_not_exists
+      schema:
+        id: string
+        name: string
+        slug: string
+        plan: string
+        settings: string
+        created_at: string
+        updated_at: string
+      _resource: a3t/a3t-platform-db
+- create-users:
+    call: lancedb
+    with:
+      operation: create_table
+      table: users
+      mode: create_if_not_exists
+      schema:
+        id: string
+        org_id: string
+        email: string
+        name: string
+        password_hash: string
+        role: string
+        avatar: string
+        status: string
+        last_login_at: string
+        created_at: string
+        updated_at: string
+      _resource: a3t/a3t-platform-db
+- create-sessions:
+    call: lancedb
+    with:
+      operation: create_table
+      table: sessions
+      mode: create_if_not_exists
+      schema:
+        id: string
+        user_id: string
+        token_hash: string
+        refresh_hash: string
+        ip: string
+        user_agent: string
+        expires_at: string
+        created_at: string
+      _resource: a3t/a3t-platform-db
+- create-api-keys:
+    call: lancedb
+    with:
+      operation: create_table
+      table: api_keys
+      mode: create_if_not_exists
+      schema:
+        id: string
+        user_id: string
+        org_id: string
+        key_hash: string
+        name: string
+        scopes: string
+        last_used_at: string
+        expires_at: string
+        created_at: string
+      _resource: a3t/a3t-platform-db
+- create-invitations:
+    call: lancedb
+    with:
+      operation: create_table
+      table: invitations
+      mode: create_if_not_exists
+      schema:
+        id: string
+        org_id: string
+        email: string
+        role: string
+        invited_by: string
+        token: string
+        status: string
+        expires_at: string
+        created_at: string
+      _resource: a3t/a3t-platform-db
+- create-roles:
+    call: lancedb
+    with:
+      operation: create_table
+      table: roles
+      mode: create_if_not_exists
+      schema:
+        id: string
+        org_id: string
+        name: string
+        description: string
+        is_system: string
+        created_at: string
+      _resource: a3t/a3t-platform-db
+- create-permissions:
+    call: lancedb
+    with:
+      operation: create_table
+      table: permissions
+      mode: create_if_not_exists
+      schema:
+        id: string
+        role_id: string
+        resource_type: string
+        action: string
+        scope: string
+        created_at: string
+      _resource: a3t/a3t-platform-db
+- create-template-registry:
+    call: lancedb
+    with:
+      operation: create_table
+      table: template_registry
+      mode: create_if_not_exists
+      schema:
+        id: string
+        org_id: string
+        name: string
+        version: string
+        source: string
+        spec_yaml: string
+        digest: string
+        signed_by: string
+        tags: string
+        vertical: string
+        published: string
+        created_by: string
+        created_at: string
+        updated_at: string
+      _resource: a3t/a3t-platform-db
+- create-agent-configs:
+    call: lancedb
+    with:
+      operation: create_table
+      table: agent_configs
+      mode: create_if_not_exists
+      schema:
+        id: string
+        org_id: string
+        name: string
+        template_id: string
+        template_version: string
+        mode: string
+        variables: string
+        resource_bindings: string
+        namespace: string
+        status: string
+        created_by: string
+        created_at: string
+        updated_at: string
+      _resource: a3t/a3t-platform-db
+- create-agent-events:
+    call: lancedb
+    with:
+      operation: create_table
+      table: agent_events
+      mode: create_if_not_exists
+      schema:
+        id: string
+        agent_config_id: string
+        event_type: string
+        payload: string
+        created_at: string
+      _resource: a3t/a3t-platform-db
+- create-resource-registry:
+    call: lancedb
+    with:
+      operation: create_table
+      table: resource_registry
+      mode: create_if_not_exists
+      schema:
+        id: string
+        org_id: string
+        name: string
+        type: string
+        config: string
+        health_status: string
+        last_checked_at: string
+        created_by: string
+        created_at: string
+        updated_at: string
+      _resource: a3t/a3t-platform-db
+- create-canvas-specs:
+    call: lancedb
+    with:
+      operation: create_table
+      table: canvas_specs
+      mode: create_if_not_exists
+      schema:
+        id: string
+        org_id: string
+        name: string
+        namespace: string
+        spec_yaml: string
+        generation: string
+        status: string
+        created_by: string
+        created_at: string
+        updated_at: string
+      _resource: a3t/a3t-platform-db
+- create-canvas-events:
+    call: lancedb
+    with:
+      operation: create_table
+      table: canvas_events
+      mode: create_if_not_exists
+      schema:
+        id: string
+        canvas_id: string
+        event_type: string
+        payload: string
+        created_at: string
+      _resource: a3t/a3t-platform-db
+- create-audit-log:
+    call: lancedb
+    with:
+      operation: create_table
+      table: audit_log
+      mode: create_if_not_exists
+      schema:
+        id: string
+        org_id: string
+        user_id: string
+        action: string
+        resource_type: string
+        resource_id: string
+        details: string
+        ip: string
+        created_at: string
+      _resource: a3t/a3t-platform-db
+- create-settings:
+    call: lancedb
+    with:
+      operation: create_table
+      table: settings
+      mode: create_if_not_exists
+      schema:
+        id: string
+        org_id: string
+        key: string
+        value: string
+        updated_by: string
+        updated_at: string
+      _resource: a3t/a3t-platform-db
+- seed-default-org:
+    call: lancedb
+    with:
+      operation: insert
+      table: orgs
+      records:
+      - id: org-default
+        name: Default Organization
+        slug: default
+        plan: pro
+        settings: '{}'
+        created_at: '2026-04-21T00:00:00Z'
+        updated_at: '2026-04-21T00:00:00Z'
+      _resource: a3t/a3t-platform-db
+- seed-superadmin:
+    call: lancedb
+    with:
+      operation: insert
+      table: users
+      records:
+      - id: usr-superadmin
+        org_id: org-default
+        email: superadmin@a3t.local
+        name: Super Admin
+        password_hash: 186cf774c97b60a1c106ef718d10970a6a06e06bef89553d9ae65d938a886eae
+        role: superadmin
+        avatar: ''
+        status: active
+        last_login_at: ''
+        created_at: '2026-04-21T00:00:00Z'
+        updated_at: '2026-04-21T00:00:00Z'
+      _resource: a3t/a3t-platform-db
+- seed-roles:
+    call: lancedb
+    with:
+      operation: insert
+      table: roles
+      records:
+      - id: role-superadmin
+        org_id: org-default
+        name: superadmin
+        description: Full platform access including user management and system config
+        is_system: 'true'
+        created_at: '2026-04-21T00:00:00Z'
+      - id: role-admin
+        org_id: org-default
+        name: admin
+        description: Full access to templates, agents, canvas, resources
+        is_system: 'true'
+        created_at: '2026-04-21T00:00:00Z'
+      - id: role-operator
+        org_id: org-default
+        name: operator
+        description: Deploy and manage agents
+        is_system: 'true'
+        created_at: '2026-04-21T00:00:00Z'
+      - id: role-viewer
+        org_id: org-default
+        name: viewer
+        description: Read-only access
+        is_system: 'true'
+        created_at: '2026-04-21T00:00:00Z'
+      _resource: a3t/a3t-platform-db
+- seed-permissions:
+    call: lancedb
+    with:
+      operation: insert
+      table: permissions
+      records:
+      - id: p-sa-01
+        role_id: role-superadmin
+        resource_type: template
+        action: create
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-02
+        role_id: role-superadmin
+        resource_type: template
+        action: read
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-03
+        role_id: role-superadmin
+        resource_type: template
+        action: update
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-04
+        role_id: role-superadmin
+        resource_type: template
+        action: delete
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-05
+        role_id: role-superadmin
+        resource_type: template
+        action: deploy
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-06
+        role_id: role-superadmin
+        resource_type: agent
+        action: create
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-07
+        role_id: role-superadmin
+        resource_type: agent
+        action: read
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-08
+        role_id: role-superadmin
+        resource_type: agent
+        action: update
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-09
+        role_id: role-superadmin
+        resource_type: agent
+        action: delete
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-10
+        role_id: role-superadmin
+        resource_type: agent
+        action: execute
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-11
+        role_id: role-superadmin
+        resource_type: canvas
+        action: create
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-12
+        role_id: role-superadmin
+        resource_type: canvas
+        action: read
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-13
+        role_id: role-superadmin
+        resource_type: canvas
+        action: update
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-14
+        role_id: role-superadmin
+        resource_type: canvas
+        action: delete
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-15
+        role_id: role-superadmin
+        resource_type: canvas
+        action: deploy
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-16
+        role_id: role-superadmin
+        resource_type: resource
+        action: create
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-17
+        role_id: role-superadmin
+        resource_type: resource
+        action: read
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-18
+        role_id: role-superadmin
+        resource_type: resource
+        action: update
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-19
+        role_id: role-superadmin
+        resource_type: resource
+        action: delete
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-20
+        role_id: role-superadmin
+        resource_type: settings
+        action: read
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-21
+        role_id: role-superadmin
+        resource_type: settings
+        action: update
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-22
+        role_id: role-superadmin
+        resource_type: settings
+        action: create
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-sa-23
+        role_id: role-superadmin
+        resource_type: settings
+        action: delete
+        scope: all
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-01
+        role_id: role-admin
+        resource_type: template
+        action: create
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-02
+        role_id: role-admin
+        resource_type: template
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-03
+        role_id: role-admin
+        resource_type: template
+        action: update
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-04
+        role_id: role-admin
+        resource_type: template
+        action: delete
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-05
+        role_id: role-admin
+        resource_type: template
+        action: deploy
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-06
+        role_id: role-admin
+        resource_type: agent
+        action: create
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-07
+        role_id: role-admin
+        resource_type: agent
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-08
+        role_id: role-admin
+        resource_type: agent
+        action: update
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-09
+        role_id: role-admin
+        resource_type: agent
+        action: delete
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-10
+        role_id: role-admin
+        resource_type: agent
+        action: execute
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-11
+        role_id: role-admin
+        resource_type: canvas
+        action: create
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-12
+        role_id: role-admin
+        resource_type: canvas
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-13
+        role_id: role-admin
+        resource_type: canvas
+        action: update
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-14
+        role_id: role-admin
+        resource_type: canvas
+        action: delete
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-15
+        role_id: role-admin
+        resource_type: canvas
+        action: deploy
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-16
+        role_id: role-admin
+        resource_type: resource
+        action: create
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-17
+        role_id: role-admin
+        resource_type: resource
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-18
+        role_id: role-admin
+        resource_type: resource
+        action: update
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-19
+        role_id: role-admin
+        resource_type: resource
+        action: delete
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-20
+        role_id: role-admin
+        resource_type: settings
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-a-21
+        role_id: role-admin
+        resource_type: settings
+        action: update
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-01
+        role_id: role-operator
+        resource_type: template
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-02
+        role_id: role-operator
+        resource_type: template
+        action: deploy
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-03
+        role_id: role-operator
+        resource_type: agent
+        action: create
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-04
+        role_id: role-operator
+        resource_type: agent
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-05
+        role_id: role-operator
+        resource_type: agent
+        action: update
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-06
+        role_id: role-operator
+        resource_type: agent
+        action: delete
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-07
+        role_id: role-operator
+        resource_type: agent
+        action: execute
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-08
+        role_id: role-operator
+        resource_type: canvas
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-09
+        role_id: role-operator
+        resource_type: canvas
+        action: deploy
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-10
+        role_id: role-operator
+        resource_type: resource
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-o-11
+        role_id: role-operator
+        resource_type: settings
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-v-01
+        role_id: role-viewer
+        resource_type: template
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-v-02
+        role_id: role-viewer
+        resource_type: agent
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-v-03
+        role_id: role-viewer
+        resource_type: canvas
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      - id: p-v-04
+        role_id: role-viewer
+        resource_type: resource
+        action: read
+        scope: org
+        created_at: '2026-04-21T00:00:00Z'
+      _resource: a3t/a3t-platform-db
+- verify-install:
+    call: lancedb
+    with:
+      operation: list_tables
+      _resource: a3t/a3t-platform-db

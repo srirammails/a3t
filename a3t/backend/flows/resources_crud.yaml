@@ -1,0 +1,115 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-resources
+  version: 1.0.0
+do:
+- route:
+    switch:
+    - case:
+        when: ${ .input.action == "list" }
+        then: list
+    - case:
+        when: ${ .input.action == "get" }
+        then: get
+    - case:
+        when: ${ .input.action == "create" }
+        then: create
+    - case:
+        when: ${ .input.action == "update" }
+        then: update
+    - case:
+        when: ${ .input.action == "delete" }
+        then: delete
+- list:
+    call: lancedb
+    with:
+      operation: query
+      table: resource_registry
+      filter: org_id = "${ .input.org_id }"
+      limit: 100
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Resource
+    then: end
+- get:
+    call: lancedb
+    with:
+      operation: query
+      table: resource_registry
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Resource
+            id: ${ .input.id }
+    then: end
+- create:
+    call: lancedb
+    with:
+      operation: insert
+      table: resource_registry
+      records:
+      - id: ${ .input.data.id }
+        org_id: ${ .input.org_id }
+        name: ${ .input.data.name }
+        type: ${ .input.data.type }
+        config: ${ .input.data.config }
+        health_status: unknown
+        last_checked_at: ''
+        created_by: ${ .input.user_id }
+        created_at: ${ .input.timestamp }
+        updated_at: ${ .input.timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Resource
+    then: end
+- update:
+    call: lancedb
+    with:
+      operation: update
+      table: resource_registry
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      values:
+        name: ${ .input.data.name // "" }
+        type: ${ .input.data.type // "" }
+        config: ${ .input.data.config // "" }
+        health_status: ${ .input.data.health_status // "unknown" }
+        last_checked_at: ${ .input.data.last_checked_at // "" }
+        updated_at: ${ .input.timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Resource
+            id: ${ .input.id }
+    then: end
+- delete:
+    call: lancedb
+    with:
+      operation: delete
+      table: resource_registry
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: delete
+          resource:
+            type: Resource
+            id: ${ .input.id }
+    then: end

@@ -1,0 +1,78 @@
+[package]
+# FlowR-CE: the community-edition runtime (executor + LanceDB + MCP, no AuthN).
+# The CE server/MCP crate; sits alongside flowr-ce-core / -storage / -agents in
+# the flowr-ce/ workspace (all renamed from the historical clawdflow-* scheme).
+name = "flowr-ce"
+description = "FlowR-CE — community runtime: executor + LanceDB storage, exposed as MCP (no AuthN)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "flowr_ce"
+path = "src/lib.rs"
+
+[[bin]]
+name = "flowr-ce"
+path = "src/main.rs"
+
+[dependencies]
+# CNCF SWF crates
+swf-parser.workspace = true
+swf-runtime.workspace = true
+
+# Shared crates
+flowr-core.workspace = true
+flowr-types.workspace = true
+flowr-storage.workspace = true
+flowr-mcp-core.workspace = true
+flowr-policy.workspace = true
+
+# ClawdFlow crates
+flowr-ce-storage.workspace = true
+flowr-ce-agents.workspace = true
+
+# LanceDB
+lancedb.workspace = true
+arrow-array = "57"
+arrow-schema = "57"
+serde_yaml = "0.9"
+rand = "0.8"
+
+# Inline script runtimes
+mlua = { version = "0.9", features = ["lua54", "serialize", "vendored"] }
+rquickjs = { version = "0.6", features = ["bindgen", "classes", "loader"] }
+rustpython = "0.3"
+rustpython-vm = "0.3"
+
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Utilities
+uuid.workspace = true
+chrono.workspace = true
+
+# HTTP client
+reqwest = { workspace = true, features = ["stream"] }
+
+# HTTP server (for SSE mode)
+axum.workspace = true
+tower-http.workspace = true
+tokio-stream.workspace = true
+
+# Filesystem utilities
+dirs.workspace = true

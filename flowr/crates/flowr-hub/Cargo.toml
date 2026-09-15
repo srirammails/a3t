@@ -1,0 +1,36 @@
+[package]
+name = "flowr-hub"
+description = "FlowR Hub - Resource type registry and resource management"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+
+# Storage
+redis.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# JSON Schema validation
+jsonschema.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Utilities
+uuid.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

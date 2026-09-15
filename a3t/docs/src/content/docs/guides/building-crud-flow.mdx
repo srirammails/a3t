@@ -1,0 +1,148 @@
+---
+title: Building a CRUD Flow
+description: Step-by-step guide to building CRUD operations with call:lancedb.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+This guide walks through building list, create, get, and delete flows using `call:lancedb`.
+
+<Steps>
+
+1. **Create the database resource**
+
+   ```bash
+   # Create a LanceDB resource
+   curl -X POST http://localhost:3002/message \
+     -H "Content-Type: application/json" \
+     -d '{
+       "jsonrpc": "2.0", "method": "tools/call", "id": 1,
+       "params": {
+         "name": "create_resource",
+         "arguments": {
+           "name": "my-db", "namespace": "default",
+           "type_ref": "lancedb",
+           "config": {"db_path": "/data/my-app.lance"}
+         }
+       }
+     }'
+   ```
+
+2. **Create the table (schema install)**
+
+   ```yaml
+   namespace: default
+   name: products-schema
+   version: "1.0.0"
+   enabled: true
+   steps:
+     - name: create-table
+       type: call:lancedb
+       resource: my-db
+       config:
+         operation: create_table
+         mode: create_if_not_exists
+         table: products
+         schema:
+           id: string
+           name: string
+           price: string
+           created_at: string
+       then: end
+   ```
+
+3. **List flow**
+
+   ```yaml
+   namespace: default
+   name: products-list
+   version: "1.0.0"
+   enabled: true
+   steps:
+     - name: query
+       type: call:lancedb
+       resource: my-db
+       config:
+         operation: query
+         table: products
+         limit: 100
+       then: end
+   ```
+
+4. **Create flow**
+
+   Input: `{ data: { id, name, price }, timestamp }`
+
+   ```yaml
+   namespace: default
+   name: products-create
+   version: "1.0.0"
+   enabled: true
+   steps:
+     - name: insert
+       type: call:lancedb
+       resource: my-db
+       config:
+         operation: insert
+         table: products
+         records:
+           - id: "${ .data.id }"
+             name: "${ .data.name }"
+             price: "${ .data.price }"
+             created_at: "${ .timestamp }"
+       then: end
+   ```
+
+5. **Get flow**
+
+   Input: `{ id }`
+
+   ```yaml
+   namespace: default
+   name: products-get
+   version: "1.0.0"
+   enabled: true
+   steps:
+     - name: query
+       type: call:lancedb
+       resource: my-db
+       config:
+         operation: query
+         table: products
+         filter: "id = '${ .id }'"
+         limit: 1
+       then: end
+   ```
+
+6. **Delete flow**
+
+   Input: `{ id }`
+
+   ```yaml
+   namespace: default
+   name: products-delete
+   version: "1.0.0"
+   enabled: true
+   steps:
+     - name: del
+       type: call:lancedb
+       resource: my-db
+       config:
+         operation: delete
+         table: products
+         filter: "id = '${ .id }'"
+       then: end
+   ```
+
+</Steps>
+
+## Calling from the UI
+
+The UI service calls these flows directly:
+
+```typescript
+const result = await flows.execute('products-list', 'default');
+// Poll for completion
+const status = await flows.status(instanceId);
+// status.output = { count: N, rows: [...] }
+```

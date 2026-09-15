@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: iggy-pg-test
+  namespace: flowr
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: test
+          image: postgres:16-alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "=== Testing PostgreSQL connection ==="
+              PGPASSWORD=flowr_poc_2024 psql -h postgres.flowr.svc.cluster.local -U flowr -d flowr -c "SELECT version();"
+
+              echo ""
+              echo "=== Checking iggy_msg_src table ==="
+              PGPASSWORD=flowr_poc_2024 psql -h postgres.flowr.svc.cluster.local -U flowr -d flowr -c "SELECT COUNT(*) as count FROM iggy_msg_src;"
+
+              echo ""
+              echo "=== Checking iggy_msg_sync table ==="
+              PGPASSWORD=flowr_poc_2024 psql -h postgres.flowr.svc.cluster.local -U flowr -d flowr -c "SELECT COUNT(*) as count FROM iggy_msg_sync;"
+
+              echo ""
+              echo "=== Testing Iggy HTTP endpoint ==="
+              apk add --no-cache curl
+              curl -s http://iggy.flowr.svc.cluster.local:3000/ | head -c 200
+
+              echo ""
+              echo "=== All connectivity tests passed ==="

@@ -1,0 +1,89 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-agent-dispatch
+  version: 1.0.0
+  metadata:
+    description: >
+      Dispatch a message to any configured agent.
+      Reads agent config + template spec, then runs call:a3t:agent.
+      Input: { agent_id, message, session_id, org_id }
+do:
+- load-agent:
+    call: lancedb
+    with:
+      operation: query
+      table: agent_configs
+      filter: id = "${ .agent_id }" AND org_id = "${ .org_id // "org-default" }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    then: check-agent
+- check-agent:
+    switch:
+    - case:
+        when: ${ (. | length) == 0 }
+        then: agent-not-found
+    - default:
+        then: extract-agent
+- agent-not-found:
+    set:
+      error: Agent not found
+    then: end
+- extract-agent:
+    set:
+      _agent_id: ${ .[0].id }
+      _agent_name: ${ .[0].name }
+      _template_id: ${ .[0].template_id }
+      _bindings: ${ .[0].resource_bindings }
+      _variables: ${ .[0].variables }
+      _message: ${ $context.message }
+      _session_id: ${ $context.session_id }
+    export:
+      as: "."
+    then: load-template
+- load-template:
+    call: lancedb
+    with:
+      operation: query
+      table: template_registry
+      filter: id = "${ $context._template_id }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    then: check-template
+- check-template:
+    switch:
+    - case:
+        when: ${ (. | length) == 0 }
+        then: template-not-found
+    - default:
+        then: prepare-config
+- template-not-found:
+    set:
+      error: Template not found
+      template_id: ${ $context._template_id }
+    then: end
+- prepare-config:
+    set:
+      _spec_yaml: ${ .[0].spec_yaml }
+    export:
+      as: "."
+    then: run-agent
+- run-agent:
+    call: a3t:agent
+    with:
+      message: ${ $context._message }
+      session_id: ${ $context._session_id // "default" }
+      config:
+        system_prompt: ${ $context._spec_yaml }
+        llm_resource: ${ "a3t/" + $context._bindings }
+        max_iterations: 5
+        max_tokens: 1024
+        temperature: 0.3
+        tool_flows:
+          lookup_order:
+            namespace: a3t
+            name: a3t-skill-lookup-order
+          create_ticket:
+            namespace: a3t
+            name: a3t-skill-create-ticket
+    then: end

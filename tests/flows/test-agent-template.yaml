@@ -1,0 +1,45 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-agent-template
+  version: 1.0.0
+do:
+- save-session:
+    call: state:set
+    with:
+      key: agent:session:template-test-001
+      value:
+        messages:
+        - role: user
+          content: hello
+        - role: assistant
+          content: Hi there!
+        last_response: Hi there!
+        updated_at: '2026-05-22T00:00:00Z'
+      ttl: 300
+- read-session:
+    call: state:get
+    with:
+      key: agent:session:template-test-001
+    export:
+      as: '{_session: .}'
+- verify-session:
+    set:
+      session_found: ${ $context._session != null }
+      message_count: ${ $context._session.messages | length }
+      last_response: ${ $context._session.last_response }
+    export:
+      as: .
+- cleanup:
+    call: state:delete
+    with:
+      key: agent:session:template-test-001
+- result:
+    set:
+      test_passed: ${ $context.session_found == true and $context.message_count ==
+        2 }
+      session_found: ${ $context.session_found }
+      message_count: ${ $context.message_count }
+      last_response: ${ $context.last_response }
+    export:
+      as: .

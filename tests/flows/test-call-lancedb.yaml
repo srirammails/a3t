@@ -1,0 +1,113 @@
+document:
+  dsl: 1.0.3
+  namespace: test
+  name: test-call-lancedb
+  version: 1.0.0
+do:
+- list-tables:
+    call: lancedb
+    with:
+      operation: list_tables
+    export:
+      as: tables_before
+- create-test-table:
+    call: lancedb
+    with:
+      operation: create_table
+      table: test_lancedb_vectors
+      schema:
+        id: string
+        content: string
+        embedding: vector[4]
+        score: float64
+      mode: create_if_not_exists
+    export:
+      as: create_result
+- insert-records:
+    call: lancedb
+    with:
+      operation: insert
+      table: test_lancedb_vectors
+      records:
+      - id: vec1
+        content: Hello world
+        embedding:
+        - 0.1
+        - 0.2
+        - 0.3
+        - 0.4
+        score: 0.95
+      - id: vec2
+        content: Goodbye world
+        embedding:
+        - 0.5
+        - 0.6
+        - 0.7
+        - 0.8
+        score: 0.85
+      - id: vec3
+        content: Test document
+        embedding:
+        - 0.2
+        - 0.3
+        - 0.4
+        - 0.5
+        score: 0.75
+    export:
+      as: insert_result
+- query-records:
+    call: lancedb
+    with:
+      operation: query
+      table: test_lancedb_vectors
+      filter: score > 0.8
+      select:
+      - id
+      - content
+      - score
+      limit: 10
+    export:
+      as: query_result
+- vector-search:
+    call: lancedb
+    with:
+      operation: vector_search
+      table: test_lancedb_vectors
+      vector:
+      - 0.1
+      - 0.2
+      - 0.3
+      - 0.4
+      column: embedding
+      metric: cosine
+      limit: 3
+    export:
+      as: search_result
+- describe-table:
+    call: lancedb
+    with:
+      operation: describe
+      table: test_lancedb_vectors
+    export:
+      as: describe_result
+- delete-records:
+    call: lancedb
+    with:
+      operation: delete
+      table: test_lancedb_vectors
+      filter: id = 'vec3'
+    export:
+      as: delete_result
+- verify-delete:
+    call: lancedb
+    with:
+      operation: query
+      table: test_lancedb_vectors
+      limit: 10
+    export:
+      as: final_result
+- compile-results:
+    set:
+      all_operations_completed: true
+    export:
+      as: .

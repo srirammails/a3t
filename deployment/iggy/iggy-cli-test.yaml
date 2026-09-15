@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: iggy-cli-test
+  namespace: flowr
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: test
+          image: iggyrs/iggy:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              IGGY_ADDRESS="iggy.flowr.svc.cluster.local:8090"
+
+              echo "=== Iggy CLI Test ==="
+              echo ""
+
+              echo "1. Creating stream 'flowr-events'..."
+              iggy --tcp-server-address $IGGY_ADDRESS --username iggy --password iggy stream create flowr-events 1 || echo "   (stream may already exist)"
+
+              echo ""
+              echo "2. Creating topic 'checkpoints'..."
+              iggy --tcp-server-address $IGGY_ADDRESS --username iggy --password iggy topic create flowr-events checkpoints 1 1 || echo "   (topic may already exist)"
+
+              echo ""
+              echo "3. Listing streams..."
+              iggy --tcp-server-address $IGGY_ADDRESS --username iggy --password iggy stream list
+
+              echo ""
+              echo "4. Listing topics in flowr-events..."
+              iggy --tcp-server-address $IGGY_ADDRESS --username iggy --password iggy topic list flowr-events
+
+              echo ""
+              echo "5. Sending test messages..."
+              echo '{"event":"checkpoint","step":"step-1","data":"test1"}' | iggy --tcp-server-address $IGGY_ADDRESS --username iggy --password iggy message send flowr-events checkpoints 1
+              echo '{"event":"checkpoint","step":"step-2","data":"test2"}' | iggy --tcp-server-address $IGGY_ADDRESS --username iggy --password iggy message send flowr-events checkpoints 1
+              echo '{"event":"checkpoint","step":"step-3","data":"test3"}' | iggy --tcp-server-address $IGGY_ADDRESS --username iggy --password iggy message send flowr-events checkpoints 1
+              echo "   Sent 3 messages"
+
+              echo ""
+              echo "6. Polling messages..."
+              iggy --tcp-server-address $IGGY_ADDRESS --username iggy --password iggy message poll flowr-events checkpoints 1 0 10 || echo "   No messages or poll failed"
+
+              echo ""
+              echo "7. Getting partition stats..."
+              iggy --tcp-server-address $IGGY_ADDRESS --username iggy --password iggy partition list flowr-events checkpoints
+
+              echo ""
+              echo "=== Iggy CLI Test Complete ==="

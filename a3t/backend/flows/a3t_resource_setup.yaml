@@ -1,0 +1,43 @@
+# A3T Resource Setup Flow
+# Registers the named resources that A3T flows depend on.
+# Run before a3t-schema-install.
+#
+# Execute via MCP:
+#   execute_flow { name: "a3t-resource-setup" }
+
+apiVersion: workflow.a3t.io/v1alpha1
+kind: Flow
+metadata:
+  name: a3t-resource-setup
+  namespace: a3t
+
+spec:
+  document:
+    dsl: "1.0.0"
+    name: a3t-resource-setup
+    version: "1.0.0"
+
+  do:
+    # Register the A3T platform LanceDB resource.
+    # Separate database from the FlowR system DB.
+    - register_platform_db:
+        call: http
+        with:
+          method: POST
+          endpoint:
+            uri: http://localhost:3002/message
+          headers:
+            Content-Type: application/json
+          body:
+            jsonrpc: "2.0"
+            method: tools/call
+            id: 1
+            params:
+              name: create_resource
+              arguments:
+                name: a3t-platform-db
+                namespace: a3t
+                type_ref: lancedb
+                config:
+                  db_path: /data/a3t/a3t-platform.lance
+                  description: "A3T platform database — users, orgs, RBAC, registry, audit"

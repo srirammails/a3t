@@ -1,0 +1,42 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-skill-create-ticket
+  version: 1.0.0
+  metadata:
+    description: >
+      Create a support ticket. Returns the ticket ID and status.
+      Use this when a customer needs to file a complaint or report an issue.
+input:
+  schema:
+    type: object
+    properties:
+      title:
+        type: string
+        description: Short title for the ticket
+      description:
+        type: string
+        description: Detailed description of the issue
+      priority:
+        type: string
+        enum: [low, medium, high, critical]
+        description: Ticket priority level
+      customer_email:
+        type: string
+        description: Customer's email address
+    required:
+      - title
+      - description
+do:
+- create:
+    set:
+      ticket_id: "TKT-20260628-001"
+      title: ${ .title // "No title" }
+      description: ${ .description // "" }
+      priority: ${ .priority // "medium" }
+      customer_email: ${ .customer_email // "" }
+      status: open
+      created_at: "2026-06-28"
+      _log: "skill-create-ticket called"
+    export:
+      as: "."

@@ -1,0 +1,14 @@
+document:
+  dsl: '1.0.3'
+  namespace: test
+  name: cncf-set
+  version: '1.0.0'
+do:
+  - init:
+      set:
+        greeting: hello
+        value: 42
+  - result:
+      set:
+        done: true
+        message: "CNCF runtime works"

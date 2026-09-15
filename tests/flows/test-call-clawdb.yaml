@@ -1,0 +1,38 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-call-clawdb
+  version: 1.0.0
+do:
+- store-working-memory:
+    call: clawdb
+    with:
+      query: "STORE INTO WORKING (\n  test_key = \"clawdb-test-value\",\n  counter\
+        \ = 42\n) SCOPE private NAMESPACE \"test\"\n"
+      _resource: agent-memory
+    export:
+      as: .
+- save-store:
+    set:
+      store_result: ${ .data }
+    export:
+      as: .
+- recall-working-memory:
+    call: clawdb
+    with:
+      query: 'RECALL FROM WORKING
+
+        WHERE test_key = "clawdb-test-value"
+
+        LIMIT 1
+
+        '
+      _resource: agent-memory
+    export:
+      as: .
+- compile-results:
+    set:
+      clawdb_test_completed: true
+      recall_result: ${ .data }
+    export:
+      as: .

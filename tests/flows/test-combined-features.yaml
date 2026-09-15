@@ -1,0 +1,54 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-combined-features
+  version: 1.0.0
+do:
+- prepare:
+    set:
+      item_count: ${ .items | length }
+      status: preparing
+    export:
+      as: .
+- expensive-processing:
+    for:
+      each: item
+      in: ${ .items }
+      do:
+      - process-item:
+          set:
+            processed: ${ $item * 10 }
+      at: idx
+    if: ${ .process_expensive == true }
+    timeout:
+      after:
+        seconds: 30
+    export:
+      as: .
+- summarize:
+    set:
+      status: completed
+      processed_expensive: ${ .process_expensive }
+      total_items: ${ $context.item_count }
+    export:
+      as: .
+use:
+  extensions:
+  - name: timing
+    extend: all
+    before:
+    - name: mark-start
+      type: set
+      config:
+        _ext_timing: started
+input:
+  schema:
+    type: object
+    properties:
+      items:
+        type: array
+      process_expensive:
+        type: boolean
+    required:
+    - items
+    - process_expensive

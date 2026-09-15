@@ -1,0 +1,152 @@
+# A3T Knowledge Graph — RotatE over ConceptNet triples (LanceDB).
+# Consolidated flow routed by .input.action, matching the other a3t-* CRUD flows.
+# Backed by the call:rotate task handler against the a3t-kg-db resource.
+#
+# Actions:
+#   ingest        — add ConceptNet triples (creates entities/relations on the fly)
+#   train         — train RotatE embeddings (epochs, lr, gamma, neg_samples)
+#   score         — score a single (head, relation, tail) fact
+#   predict_tail  — rank candidate tails for (head, relation)
+#   predict_head  — rank candidate heads for (relation, tail)
+#   neighbors     — nearest entities in embedding space
+#   lookup        — filter stored triples by head/relation/tail
+#   entities      — paginated entity list with vector norms (Vectors tab)
+#   relations     — relation list with triple counts
+#   stats         — graph summary + 3D projection + edges (3D Graph tab)
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-knowledge
+  version: 1.0.0
+do:
+- route:
+    switch:
+    - case:
+        when: ${ .input.action == "ingest" }
+        then: ingest
+    - case:
+        when: ${ .input.action == "train" }
+        then: train
+    - case:
+        when: ${ .input.action == "score" }
+        then: score
+    - case:
+        when: ${ .input.action == "predict_tail" }
+        then: predict-tail
+    - case:
+        when: ${ .input.action == "predict_head" }
+        then: predict-head
+    - case:
+        when: ${ .input.action == "neighbors" }
+        then: neighbors
+    - case:
+        when: ${ .input.action == "lookup" }
+        then: lookup
+    - case:
+        when: ${ .input.action == "entities" }
+        then: entities
+    - case:
+        when: ${ .input.action == "relations" }
+        then: relations
+    - case:
+        when: ${ .input.action == "stats" }
+        then: stats
+
+- ingest:
+    call: rotate
+    with:
+      operation: ingest
+      triples: ${ .input.triples }
+      dim: ${ .input.dim // 256 }
+      _resource: a3t/a3t-kg-db
+    then: end
+
+- train:
+    call: rotate
+    with:
+      operation: train
+      epochs: ${ .input.epochs // 200 }
+      lr: ${ .input.lr // 0.001 }
+      gamma: ${ .input.gamma // 12.0 }
+      neg_samples: ${ .input.neg_samples // 8 }
+      _resource: a3t/a3t-kg-db
+    then: end
+
+- score:
+    call: rotate
+    with:
+      operation: score
+      head: ${ .input.head }
+      relation: ${ .input.relation }
+      tail: ${ .input.tail }
+      gamma: ${ .input.gamma // 12.0 }
+      _resource: a3t/a3t-kg-db
+    then: end
+
+- predict-tail:
+    call: rotate
+    with:
+      operation: predict_tail
+      head: ${ .input.head }
+      relation: ${ .input.relation }
+      limit: ${ .input.limit // 10 }
+      gamma: ${ .input.gamma // 12.0 }
+      _resource: a3t/a3t-kg-db
+    then: end
+
+- predict-head:
+    call: rotate
+    with:
+      operation: predict_head
+      relation: ${ .input.relation }
+      tail: ${ .input.tail }
+      limit: ${ .input.limit // 10 }
+      gamma: ${ .input.gamma // 12.0 }
+      _resource: a3t/a3t-kg-db
+    then: end
+
+- neighbors:
+    call: rotate
+    with:
+      operation: neighbors
+      entity: ${ .input.entity }
+      limit: ${ .input.limit // 10 }
+      _resource: a3t/a3t-kg-db
+    then: end
+
+- lookup:
+    call: rotate
+    with:
+      operation: lookup
+      head: ${ .input.head }
+      relation: ${ .input.relation }
+      tail: ${ .input.tail }
+      limit: ${ .input.limit // 100 }
+      _resource: a3t/a3t-kg-db
+    then: end
+
+- entities:
+    call: rotate
+    with:
+      operation: entities
+      query: ${ .input.query }
+      limit: ${ .input.limit // 100 }
+      offset: ${ .input.offset // 0 }
+      _resource: a3t/a3t-kg-db
+    then: end
+
+- relations:
+    call: rotate
+    with:
+      operation: relations
+      _resource: a3t/a3t-kg-db
+    then: end
+
+- stats:
+    call: rotate
+    with:
+      operation: stats
+      sample: ${ .input.sample // 2000 }
+      max_edges: ${ .input.max_edges // 8000 }
+      _resource: a3t/a3t-kg-db
+    then: end

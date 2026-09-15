@@ -1,0 +1,38 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: search-lancedb
+  version: 1.0.0
+do:
+- search:
+    call: lancedb
+    with:
+      operation: search
+      table: ${ .table }
+      query: ${ .query }
+      limit: ${ .limit // 5 }
+      columns: ${ .columns // null }
+      _resource: ${ .resource // "a3t-platform-db" }
+    export:
+      as: '{results: .rows, count: (.rows | length)}'
+input:
+  schema:
+    type: object
+    required:
+    - query
+    - table
+    properties:
+      query:
+        type: string
+      table:
+        type: string
+      limit:
+        type: integer
+        default: 5
+      columns:
+        type: array
+        items:
+          type: string
+      resource:
+        type: string
+        default: a3t-platform-db

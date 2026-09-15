@@ -1,0 +1,32 @@
+---
+title: A3T Documentation
+description: Agent infrastructure for builders. Build, deploy, and operate AI agents as workflows.
+template: splash
+hero:
+  tagline: Build, deploy, and operate AI agents as CNCF Serverless Workflows.
+  actions:
+    - text: Get Started
+      link: /getting-started/introduction/
+      icon: right-arrow
+      variant: primary
+    - text: Task Reference
+      link: /tasks/flow-control/
+      icon: open-book
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <Card title="Workflows" icon="document">
+    Define agent behavior as YAML workflows with 26 built-in task types.
+  </Card>
+  <Card title="Agents" icon="rocket">
+    4 agent modes: ephemeral, session, persistent, reactive — powered by ZeroClaw.
+  </Card>
+  <Card title="Memory" icon="puzzle">
+    5 memory types via ClawDB: working, episodic, procedural, semantic, tools.
+  </Card>
+  <Card title="MCP Native" icon="setting">
+    Full MCP (Model Context Protocol) API for tooling and integration.
+  </Card>
+</CardGrid>

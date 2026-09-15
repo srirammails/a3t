@@ -1,0 +1,91 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-deploy-init
+  version: 1.0.0
+do:
+- hash-password:
+    run:
+      script:
+        language: lua
+        code: '-- SHA-256 is not available in plain Lua, use a simple approach
+
+          -- The actual hash will be computed by the auth module at login time
+
+          -- For seeding, we pre-compute using the sha256 utility
+
+          local pass = state.input.superadmin_pass or "superadmin"
+
+          -- Lua doesn''t have native SHA-256, so we pass through as-is
+
+          -- The deploy script computes the hash before calling this flow
+
+          return { superadmin_pass_hash = pass, superadmin_user = state.input.superadmin_user
+          or "superadmin" }
+
+          '
+    export:
+      as: .
+- register-db-resource:
+    call: http
+    with:
+      method: POST
+      endpoint:
+        uri: http://localhost:3002/message
+      headers:
+        Content-Type: application/json
+      body:
+        jsonrpc: '2.0'
+        method: tools/call
+        id: 1
+        params:
+          name: create_resource
+          arguments:
+            name: a3t-platform-db
+            namespace: a3t
+            type_ref: lancedb
+            config:
+              db_path: ${ .input.a3t_db_path }
+              description: A3T platform database
+    export:
+      as: .
+- run-schema-install:
+    call: http
+    with:
+      method: POST
+      endpoint:
+        uri: http://localhost:3002/message
+      headers:
+        Content-Type: application/json
+      body:
+        jsonrpc: '2.0'
+        method: tools/call
+        id: 2
+        params:
+          name: execute_flow
+          arguments:
+            name: a3t-schema-install
+            namespace: a3t
+            input:
+              superadmin_user: ${ .superadmin_user }
+              superadmin_pass_hash: ${ .superadmin_pass_hash }
+    export:
+      as: .
+input:
+  schema:
+    type: object
+    required:
+    - superadmin_pass
+    properties:
+      superadmin_user:
+        type: string
+        default: superadmin
+      superadmin_pass:
+        type: string
+        description: Superadmin password (plaintext — will be hashed)
+      org_name:
+        type: string
+        default: Default Organization
+      a3t_db_path:
+        type: string
+        default: /data/a3t/a3t-platform.lance

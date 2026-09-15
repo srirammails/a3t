@@ -1,0 +1,17 @@
+document:
+  dsl: '1.0.3'
+  namespace: test
+  name: cncf-mcp
+  version: '1.0.0'
+do:
+  - listTypes:
+      call: mcp
+      with:
+        tool: list_task_types
+        arguments: {}
+        server: http://localhost:3099/message
+      output:
+        as: "${ {mcp_result: .} }"
+  - result:
+      set:
+        mcp_works: true

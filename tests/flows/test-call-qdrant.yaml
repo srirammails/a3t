@@ -1,0 +1,31 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-call-qdrant
+  version: 1.0.0
+do:
+- qdrant-search:
+    call: qdrant
+    with:
+      operation: search
+      collection: ${ .collection_name }
+      vector: ${ .search_vector }
+      limit: 5
+      with_payload: true
+      score_threshold: 0.5
+      _resource: test-qdrant
+    export:
+      as: '{qdrant_result: .}'
+input:
+  schema:
+    type: object
+    properties:
+      collection_name:
+        type: string
+      search_vector:
+        type: array
+        items:
+          type: number
+    required:
+    - collection_name
+    - search_vector

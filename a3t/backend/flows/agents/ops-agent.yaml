@@ -1,0 +1,228 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: ops-agent
+  version: 1.0.0
+do:
+- run-agent:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: ${ .session_id // "ops-main" }
+          message: ${ .message }
+          context: ${ .context }
+          config:
+            system_prompt: 'You are an infrastructure operations agent for the A3T
+              platform.
+
+
+              ## Responsibilities
+
+
+              1. Respond to alerts from monitoring systems (webhooks).
+
+              2. Run scheduled health checks (cron triggers).
+
+              3. Diagnose issues by querying service status and logs.
+
+              4. Take remediation actions when safe (restart services, clear caches).
+
+              5. Escalate to the on-call engineer for destructive or risky actions.
+
+
+              ## Available Tools
+
+
+              - check_service_health — Check health of a named service (returns status,
+              latency, error rate)
+
+              - get_recent_logs — Fetch recent logs for a service (last N minutes)
+
+              - restart_service — Restart a service by name (requires confirmation)
+
+              - create_incident — Create an incident report with severity and description
+
+              - notify_oncall — Send a notification to the on-call engineer
+
+
+              ## Decision Framework
+
+
+              - If a service is DOWN: check logs → attempt restart → if still down,
+              create incident + notify on-call
+
+              - If latency is HIGH: check logs for errors → if error rate > 5%, create
+              incident
+
+              - If alert is INFO: acknowledge and log, no action needed
+
+              - For cron health checks: check all services, report any anomalies
+
+
+              ## Safety Rules
+
+
+              - Never restart more than 1 service per turn without human approval
+
+              - Always log your reasoning before taking action
+
+              - If unsure, escalate rather than act
+
+              '
+            llm_resource: a3t/claude-cli-max
+            max_iterations: 12
+            max_tokens: 4096
+            temperature: 0.2
+            memory_resource: agent-memory
+            memory_namespace: ops
+            memory_config:
+              working:
+                read: true
+                write: true
+                scope: turn
+              episodic:
+                read: true
+                write: true
+                scope: session
+              semantic:
+                read: true
+                write: true
+              procedural:
+                read: true
+                write: false
+            tools:
+            - name: check_service_health
+              description: 'Check health status of a service. Returns: status (UP/DOWN/DEGRADED),
+                latency_ms, error_rate, last_checked.'
+              input_schema:
+                type: object
+                required:
+                - service
+                properties:
+                  service:
+                    type: string
+                    description: Service name (e.g. 'flowr', 'clawdb', 'ignite')
+            - name: get_recent_logs
+              description: Fetch recent log entries for a service. Returns array of
+                log lines.
+              input_schema:
+                type: object
+                required:
+                - service
+                properties:
+                  service:
+                    type: string
+                  minutes:
+                    type: integer
+                    default: 15
+                    description: How many minutes back
+                  severity:
+                    type: string
+                    enum:
+                    - all
+                    - error
+                    - warn
+                    default: error
+            - name: restart_service
+              description: Restart a service. Use with caution — requires explicit
+                confirmation in the conversation.
+              input_schema:
+                type: object
+                required:
+                - service
+                - reason
+                properties:
+                  service:
+                    type: string
+                  reason:
+                    type: string
+                    description: Why this restart is needed
+            - name: create_incident
+              description: Create an incident report for tracking and post-mortem.
+              input_schema:
+                type: object
+                required:
+                - title
+                - description
+                - severity
+                properties:
+                  title:
+                    type: string
+                  description:
+                    type: string
+                  severity:
+                    type: string
+                    enum:
+                    - sev1
+                    - sev2
+                    - sev3
+                    - sev4
+                  services:
+                    type: array
+                    items:
+                      type: string
+            - name: notify_oncall
+              description: Send a notification to the on-call engineer.
+              input_schema:
+                type: object
+                required:
+                - message
+                properties:
+                  message:
+                    type: string
+                  urgency:
+                    type: string
+                    enum:
+                    - info
+                    - warning
+                    - critical
+                    default: warning
+            tool_flows:
+              check_service_health:
+                namespace: a3t
+                name: ops-health-check
+              get_recent_logs:
+                namespace: a3t
+                name: ops-get-logs
+              restart_service:
+                namespace: a3t
+                name: ops-restart-service
+              create_incident:
+                namespace: a3t
+                name: ops-create-incident
+              notify_oncall:
+                namespace: a3t
+                name: ops-notify-oncall
+            mcp_servers:
+            - agent-flows
+            ttl: 7200
+          extensions:
+          - name: action_tracker
+            extend: dispatch_tools
+            after:
+            - name: track_action
+              type: set
+              config:
+                _actions_taken: '${ ($context._actions_taken // []) + [{tool: $_tool_call.name,
+                  input: $_tool_call.input, at: now}] }'
+          - name: llm_budget
+            extend: call:llm
+            when: ${ ($context._llm_call_count // 0) > 15 }
+            before:
+            - name: budget_exceeded
+              type: raise
+              config:
+                error:
+                  type: BudgetExceeded
+                  detail: LLM call limit (15) reached for this turn
+          - name: llm_counter
+            extend: call:llm
+            after:
+            - name: increment_llm_count
+              type: set
+              config:
+                _llm_call_count: ${ ($context._llm_call_count // 0) + 1 }
+    export:
+      as: .

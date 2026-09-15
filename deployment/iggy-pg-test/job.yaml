@@ -1,0 +1,268 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iggy-pg-test-src
+  namespace: flowr
+data:
+  main.rs: |
+    //! Simple Iggy-PostgreSQL connectivity test
+    use std::time::Instant;
+
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        println!("=== Iggy-PostgreSQL POC Test ===\n");
+
+        // Test PostgreSQL connection
+        println!("--- Test 1: PostgreSQL Connection ---");
+        let (pg_client, connection) = tokio_postgres::connect(
+            "host=postgres.flowr.svc.cluster.local port=5432 user=flowr password=flowr_poc_2024 dbname=flowr",
+            tokio_postgres::NoTls,
+        ).await?;
+
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("PG connection error: {}", e);
+            }
+        });
+
+        let row = pg_client.query_one("SELECT version()", &[]).await?;
+        let version: &str = row.get(0);
+        println!("  Connected to PostgreSQL: {}", version.split(',').next().unwrap_or(version));
+        println!("Test 1: PASSED\n");
+
+        // Setup schema
+        println!("--- Setting up PostgreSQL schema ---");
+        pg_client.execute(
+            "CREATE TABLE IF NOT EXISTS checkpoints (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                flow_id UUID NOT NULL,
+                execution_id UUID NOT NULL,
+                step_id VARCHAR(255) NOT NULL,
+                state JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                iggy_offset BIGINT,
+                UNIQUE(execution_id, step_id)
+            )", &[]).await?;
+
+        pg_client.execute(
+            "CREATE TABLE IF NOT EXISTS iggy_offsets (
+                consumer_id VARCHAR(255) PRIMARY KEY,
+                current_offset BIGINT NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )", &[]).await?;
+        println!("  Schema created\n");
+
+        // Test Iggy connection
+        println!("--- Test 2: Iggy Connection ---");
+        let iggy_client = iggy::clients::client::IggyClient::builder()
+            .with_tcp()
+            .with_server_address("iggy.flowr.svc.cluster.local:8090".to_string())
+            .build()?;
+
+        iggy_client.connect().await?;
+        iggy_client.login_user("iggy", "iggy").await?;
+        println!("  Connected to Iggy");
+        println!("Test 2: PASSED\n");
+
+        // Create stream and topic
+        println!("--- Test 3: Create Stream/Topic ---");
+        use iggy::client::{StreamClient, TopicClient, MessageClient};
+        use iggy::streams::create_stream::CreateStream;
+        use iggy::topics::create_topic::CreateTopic;
+        use iggy::identifier::Identifier;
+        use iggy::compression::compression_algorithm::CompressionAlgorithm;
+
+        let stream_id = 1u32;
+        let topic_id = 1u32;
+
+        match iggy_client.create_stream(&CreateStream {
+            stream_id: Some(stream_id),
+            name: "flowr-events".to_string(),
+        }).await {
+            Ok(_) => println!("  Created stream: flowr-events"),
+            Err(e) if e.to_string().contains("already exists") => println!("  Stream exists: flowr-events"),
+            Err(e) => return Err(e.into()),
+        }
+
+        match iggy_client.create_topic(&CreateTopic {
+            stream_id: Identifier::numeric(stream_id)?,
+            topic_id: Some(topic_id),
+            name: "checkpoints".to_string(),
+            partitions_count: 1,
+            compression_algorithm: CompressionAlgorithm::None,
+            message_expiry: None,
+            max_topic_size: None,
+            replication_factor: Some(1),
+        }).await {
+            Ok(_) => println!("  Created topic: checkpoints"),
+            Err(e) if e.to_string().contains("already exists") => println!("  Topic exists: checkpoints"),
+            Err(e) => return Err(e.into()),
+        }
+        println!("Test 3: PASSED\n");
+
+        // Publish messages
+        println!("--- Test 4: Publish Messages ---");
+        use iggy::messages::send_messages::{Message, Partitioning};
+        use bytes::Bytes;
+
+        let flow_id = uuid::Uuid::new_v4();
+        let exec_id = uuid::Uuid::new_v4();
+
+        let events = vec![
+            serde_json::json!({"flow_id": flow_id, "exec_id": exec_id, "step": "validate", "state": {"valid": true}}),
+            serde_json::json!({"flow_id": flow_id, "exec_id": exec_id, "step": "process", "state": {"result": 42}}),
+            serde_json::json!({"flow_id": flow_id, "exec_id": exec_id, "step": "complete", "state": {"success": true}}),
+        ];
+
+        let messages: Vec<Message> = events.iter()
+            .map(|e| Message::new(None, Bytes::from(serde_json::to_vec(e).unwrap()), None))
+            .collect();
+
+        let start = Instant::now();
+        iggy_client.send_messages(
+            &Identifier::numeric(stream_id)?,
+            &Identifier::numeric(topic_id)?,
+            &Partitioning::partition_id(1),
+            &mut messages.into(),
+        ).await?;
+        println!("  Published {} messages in {:?}", events.len(), start.elapsed());
+        println!("Test 4: PASSED\n");
+
+        // Consume and sync to PostgreSQL
+        println!("--- Test 5: Consume and Sync to PostgreSQL ---");
+        use iggy::consumer::Consumer;
+        use iggy::messages::poll_messages::PollingStrategy;
+
+        let polled = iggy_client.poll_messages(
+            &Identifier::numeric(stream_id)?,
+            &Identifier::numeric(topic_id)?,
+            Some(1),
+            &Consumer::new(Identifier::named("flowr-sync")?),
+            &PollingStrategy::offset(0),
+            100,
+            false,
+        ).await?;
+
+        println!("  Polled {} messages", polled.messages.len());
+
+        for msg in &polled.messages {
+            if let Ok(event) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+                let flow_id_str = event["flow_id"].as_str().unwrap_or("unknown");
+                let exec_id_str = event["exec_id"].as_str().unwrap_or("unknown");
+                let step = event["step"].as_str().unwrap_or("unknown");
+                let state = &event["state"];
+
+                pg_client.execute(
+                    "INSERT INTO checkpoints (flow_id, execution_id, step_id, state, iggy_offset)
+                     VALUES ($1::uuid, $2::uuid, $3, $4, $5)
+                     ON CONFLICT (execution_id, step_id) DO UPDATE SET
+                        state = EXCLUDED.state,
+                        iggy_offset = EXCLUDED.iggy_offset",
+                    &[
+                        &uuid::Uuid::parse_str(flow_id_str).ok(),
+                        &uuid::Uuid::parse_str(exec_id_str).ok(),
+                        &step,
+                        state,
+                        &(msg.offset as i64),
+                    ],
+                ).await.ok();
+            }
+        }
+
+        let count: i64 = pg_client.query_one("SELECT COUNT(*) FROM checkpoints", &[]).await?.get(0);
+        println!("  Synced to PostgreSQL. Total checkpoints: {}", count);
+        println!("Test 5: PASSED\n");
+
+        // Benchmark
+        println!("--- Test 6: Latency Benchmark ---");
+        let iterations = 50;
+        let mut latencies = Vec::new();
+
+        for i in 0..iterations {
+            let event = serde_json::json!({"bench": i, "ts": chrono::Utc::now().to_rfc3339()});
+            let start = Instant::now();
+
+            iggy_client.send_messages(
+                &Identifier::numeric(stream_id)?,
+                &Identifier::numeric(topic_id)?,
+                &Partitioning::partition_id(1),
+                &mut vec![Message::new(None, Bytes::from(serde_json::to_vec(&event).unwrap()), None)].into(),
+            ).await?;
+
+            latencies.push(start.elapsed().as_micros() as u64);
+        }
+
+        latencies.sort();
+        let avg = latencies.iter().sum::<u64>() / iterations as u64;
+        let p50 = latencies[iterations / 2];
+        let p99 = latencies[(iterations as f64 * 0.99) as usize];
+
+        println!("  Iggy publish latency ({}x):", iterations);
+        println!("    avg: {}μs, p50: {}μs, p99: {}μs", avg, p50, p99);
+
+        if avg < 5000 {
+            println!("Test 6: PASSED - Latency < 5ms\n");
+        } else {
+            println!("Test 6: WARNING - Latency > 5ms\n");
+        }
+
+        println!("=== All tests completed! ===");
+        Ok(())
+    }
+
+  Cargo.toml: |
+    [package]
+    name = "iggy-pg-test"
+    version = "0.1.0"
+    edition = "2021"
+
+    [dependencies]
+    tokio = { version = "1.40", features = ["full"] }
+    tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-uuid-1"] }
+    iggy = "0.6"
+    serde = { version = "1.0", features = ["derive"] }
+    serde_json = "1.0"
+    uuid = { version = "1.10", features = ["v4", "serde"] }
+    chrono = { version = "0.4", features = ["serde"] }
+    bytes = "1.7"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: iggy-pg-test
+  namespace: flowr
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: test
+          image: rustlang/rust:nightly-bookworm-slim
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates
+              mkdir -p /app/src
+              cp /config/main.rs /app/src/main.rs
+              cp /config/Cargo.toml /app/Cargo.toml
+              cd /app
+              cargo build --release 2>&1
+              cargo run --release 2>&1
+          volumeMounts:
+            - name: src
+              mountPath: /config
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "2000m"
+            limits:
+              memory: "4Gi"
+              cpu: "4000m"
+      volumes:
+        - name: src
+          configMap:
+            name: iggy-pg-test-src

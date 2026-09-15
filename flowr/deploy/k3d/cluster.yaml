@@ -1,0 +1,38 @@
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: a3t
+servers: 1
+agents: 1
+ports:
+  - port: 80:30080
+    nodeFilters:
+      - loadbalancer
+  - port: 30080:30080
+    nodeFilters:
+      - loadbalancer
+  - port: 30081:30081
+    nodeFilters:
+      - loadbalancer
+volumes:
+  - volume: /data/clawdflow:/data/clawdflow
+    nodeFilters:
+      - server:0
+      - agent:0
+  - volume: /data/a3t:/data/a3t
+    nodeFilters:
+      - server:0
+      - agent:0
+  - volume: /root/.claude:/root/.claude
+    nodeFilters:
+      - server:0
+      - agent:0
+options:
+  k3d:
+    wait: true
+    timeout: 120s
+  k3s:
+    extraArgs:
+      - arg: --disable=traefik
+        nodeFilters:
+          - server:0

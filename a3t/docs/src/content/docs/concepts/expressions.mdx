@@ -1,0 +1,55 @@
+---
+title: Expressions
+description: jq-style expressions for dynamic values in workflows.
+---
+
+Expressions use `${ ... }` syntax with jq-style paths to access and transform data.
+
+## Basics
+
+```yaml
+config:
+  name: "${ .input.name }"         # access input field
+  count: "${ .items | length }"    # pipe to jq function
+  upper: "${ .name | ascii_upcase }"
+```
+
+## Context paths
+
+| Path | Description |
+|------|-------------|
+| `.` | Current workflow context (root) |
+| `.field` | Access a field |
+| `.nested.field` | Nested access |
+| `.array[0]` | Array index |
+| `.items | length` | Pipe to function |
+
+## In filters
+
+```yaml
+config:
+  filter: "org_id = '${ .org_id }' AND status = 'active'"
+```
+
+## In step fields
+
+```yaml
+- name: dynamic
+  type: call:http
+  config:
+    method: POST
+    endpoint:
+      uri: "https://api.example.com/${ .entity }/${ .id }"
+    body:
+      updated_at: "${ now() }"
+```
+
+## export.as
+
+Controls how step output merges into the workflow context:
+
+```yaml
+export.as: "."              # merge all output fields into root
+export.as: ".result"        # store output under .result
+export.as: "{count: .total}" # transform and rename
+```

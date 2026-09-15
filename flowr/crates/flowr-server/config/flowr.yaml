@@ -1,0 +1,44 @@
+# FlowR Configuration
+# Loaded on startup, seeded into settings table.
+# Settings in DB take precedence over this file.
+
+auth:
+  # JWT signing secret — CHANGE IN PRODUCTION
+  jwt_secret: "flowr-dev-secret-change-in-production"
+  # Access token expiry (seconds) — default 24h
+  token_expiry: 86400
+  # Refresh token expiry (seconds) — default 7d
+  refresh_expiry: 604800
+
+rbac:
+  # Provider: internal | external | flow
+  #   internal — load from Casbin model/policy files (default)
+  #   external — call external API for permission checks
+  #   flow     — execute a named flow for permission checks
+  provider: internal
+
+  # Internal provider config — reads from A3T LanceDB permissions table
+  internal:
+    model: config/rbac_model.conf
+    db_path: /data/a3t/a3t-platform.lance
+
+  # External provider config (telco ODA, LDAP, etc.)
+  # external:
+  #   api_url: https://oda.telco.com/rbac/v1/check
+  #   api_token: "${ODA_API_TOKEN}"
+  #   timeout_ms: 500
+  #   cache_ttl_secs: 60
+
+  # Flow provider config
+  # flow:
+  #   flow_name: rbac-check
+  #   flow_namespace: a3t
+
+a3t:
+  # A3T platform database path
+  db_path: /data/a3t/a3t-platform.lance
+
+cors:
+  origins:
+    - https://console.a3t.io
+    - http://localhost:5173

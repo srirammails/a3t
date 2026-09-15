@@ -1,0 +1,529 @@
+project: clawdflow
+version: "2.0"
+requirements:
+
+  # ════════════════════════════════════════════════════
+  # PARSER — Document & Workflow Structure
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-PARSE-001
+    kind: conformance
+    priority: must
+    statement: >
+      Parser accepts a valid CNCF SWF DSL 1.0.3 document block with dsl version, namespace, name, and version fields.
+    acceptance_criteria:
+      - "document.dsl is parsed as string"
+      - "document.namespace is parsed as string"
+      - "document.name is parsed as string"
+      - "document.version is parsed as string"
+    tests: []
+    cncf_ref: "dsl-reference.md#document"
+
+  - id: REQ-PARSE-002
+    kind: conformance
+    priority: must
+    statement: >
+      Parser accepts a workflow with a top-level do block containing an ordered list of named tasks.
+    acceptance_criteria:
+      - "do block is parsed as ordered list"
+      - "Each entry is a named task with task name as key"
+      - "Task order is preserved"
+    tests: []
+    cncf_ref: "dsl-reference.md#do"
+
+  - id: REQ-PARSE-003
+    kind: conformance
+    priority: must
+    statement: >
+      Parser accepts a use block with extensions, functions, secrets, retries, errors, timeouts, catalogs, and authentications.
+    acceptance_criteria:
+      - "use.extensions is parsed as ordered list of named extensions"
+      - "use.functions is parsed as map of name to task definition"
+      - "use.secrets is parsed as list of secret names"
+      - "use.authentications is parsed as map of name to auth config"
+      - "use.catalogs is parsed as map of name to catalog endpoint"
+    tests: []
+    cncf_ref: "dsl-reference.md#use"
+
+  - id: REQ-PARSE-004
+    kind: behavior
+    priority: must
+    statement: >
+      Parser rejects a workflow missing the required document block with a clear error message.
+    acceptance_criteria:
+      - "Error message mentions 'document' as required"
+      - "Error includes line/position information when available"
+    tests: []
+
+  - id: REQ-PARSE-005
+    kind: behavior
+    priority: must
+    statement: >
+      Parser rejects a workflow missing the required do block with a clear error message.
+    acceptance_criteria:
+      - "Error message mentions 'do' as required"
+    tests: []
+
+  # ════════════════════════════════════════════════════
+  # PARSER — Task Types
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-TASK-001
+    kind: conformance
+    priority: must
+    statement: >
+      Parser recognizes all 12 CNCF task types: call, do, emit, for, fork, listen, raise, run, set, switch, try, wait.
+    acceptance_criteria:
+      - "Each task type parses into the correct Task enum variant"
+      - "Unknown task types produce a parse error"
+    tests: []
+    cncf_ref: "dsl-reference.md#tasks"
+
+  - id: REQ-TASK-002
+    kind: conformance
+    priority: must
+    statement: >
+      A call task accepts target type (http, grpc, openapi, asyncapi, a2a) and a with block for arguments.
+    acceptance_criteria:
+      - "call: http with method, endpoint parses correctly"
+      - "call: grpc with proto, service, method parses correctly"
+      - "call: openapi with document, operationId parses correctly"
+      - "call: asyncapi with document, channel parses correctly"
+      - "call: a2a parses correctly"
+    tests: []
+    cncf_ref: "dsl-reference.md#call"
+
+  - id: REQ-TASK-003
+    kind: conformance
+    priority: must
+    statement: >
+      A call task accepts a function reference in the format name:version@catalog for cataloged functions.
+    acceptance_criteria:
+      - "Function name, version, and catalog are parsed"
+      - "Bare function name (no version/catalog) resolves from use.functions"
+    tests: []
+    cncf_ref: "dsl-reference.md#call"
+
+  - id: REQ-TASK-004
+    kind: conformance
+    priority: must
+    statement: >
+      A set task accepts a map of key-value pairs that become the task output.
+    acceptance_criteria:
+      - "set: {key: value} parses as SetTask"
+      - "Values can be runtime expressions"
+    tests: []
+    cncf_ref: "dsl-reference.md#set"
+
+  - id: REQ-TASK-005
+    kind: conformance
+    priority: must
+    statement: >
+      A for task accepts each, in, while, and do fields for collection iteration.
+    acceptance_criteria:
+      - "for.each names the iteration variable"
+      - "for.in is a runtime expression evaluating to an array"
+      - "for.while is an optional condition checked each iteration"
+      - "for.do contains subtasks executed per iteration"
+    tests: []
+    cncf_ref: "dsl-reference.md#for"
+
+  - id: REQ-TASK-006
+    kind: conformance
+    priority: must
+    statement: >
+      A switch task accepts an ordered list of cases with when conditions and then directives.
+    acceptance_criteria:
+      - "Each case has a when expression or default flag"
+      - "Each case has a then directive (continue, exit, end, or task name)"
+      - "Cases are evaluated in order; first match wins"
+    tests: []
+    cncf_ref: "dsl-reference.md#switch"
+
+  - id: REQ-TASK-007
+    kind: conformance
+    priority: must
+    statement: >
+      A try task accepts a do block for the try body and a catch block for error handling with optional retry.
+    acceptance_criteria:
+      - "try.do contains subtasks"
+      - "try.catch contains error filters and handler tasks"
+      - "try.catch.retry specifies delay, backoff, and limit"
+    tests: []
+    cncf_ref: "dsl-reference.md#try"
+
+  - id: REQ-TASK-008
+    kind: conformance
+    priority: must
+    statement: >
+      A run task accepts container, shell, script, or workflow process definitions.
+    acceptance_criteria:
+      - "run.shell with command parses as ShellProcess"
+      - "run.script with language, code parses as ScriptProcess"
+      - "run.workflow with namespace, name, version parses as WorkflowProcess"
+      - "run.container with image, command, ports parses as ContainerProcess"
+    tests: []
+    cncf_ref: "dsl-reference.md#run"
+
+  - id: REQ-TASK-009
+    kind: conformance
+    priority: must
+    statement: >
+      A wait task accepts a duration in ISO 8601 format.
+    acceptance_criteria:
+      - "wait: PT30S parses as 30 seconds"
+      - "wait: PT2M parses as 2 minutes"
+      - "wait: PT1H30M parses as 90 minutes"
+    tests: []
+    cncf_ref: "dsl-reference.md#wait"
+
+  - id: REQ-TASK-010
+    kind: conformance
+    priority: must
+    statement: >
+      An emit task accepts an event definition with CloudEvents attributes.
+    acceptance_criteria:
+      - "emit.event.with contains source, type, and data"
+    tests: []
+    cncf_ref: "dsl-reference.md#emit"
+
+  - id: REQ-TASK-011
+    kind: conformance
+    priority: must
+    statement: >
+      A listen task accepts event consumption strategy with one or all mode.
+    acceptance_criteria:
+      - "listen.to specifies event filter with type and source"
+    tests: []
+    cncf_ref: "dsl-reference.md#listen"
+
+  - id: REQ-TASK-012
+    kind: conformance
+    priority: must
+    statement: >
+      A fork task accepts branches with optional compete flag for parallel execution.
+    acceptance_criteria:
+      - "fork.branches contains named task lists"
+      - "fork.compete flag selects first-completes-wins behavior"
+    tests: []
+    cncf_ref: "dsl-reference.md#fork"
+
+  - id: REQ-TASK-013
+    kind: conformance
+    priority: must
+    statement: >
+      A raise task accepts an error definition conforming to RFC 7807 Problem Details.
+    acceptance_criteria:
+      - "raise.error contains type, status, title, detail, instance"
+    tests: []
+    cncf_ref: "dsl-reference.md#raise"
+
+  # ════════════════════════════════════════════════════
+  # PARSER — Data Flow
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-DATA-001
+    kind: conformance
+    priority: must
+    statement: >
+      Every task accepts optional input block with from expression and schema for validation.
+    acceptance_criteria:
+      - "input.from is a runtime expression transforming raw input"
+      - "input.schema is a JSON Schema for validation"
+    tests: []
+    cncf_ref: "dsl-reference.md#input"
+
+  - id: REQ-DATA-002
+    kind: conformance
+    priority: must
+    statement: >
+      Every task accepts optional output block with as expression and schema for validation.
+    acceptance_criteria:
+      - "output.as is a runtime expression transforming raw output"
+      - "output.schema is a JSON Schema for validation"
+    tests: []
+    cncf_ref: "dsl-reference.md#output"
+
+  - id: REQ-DATA-003
+    kind: conformance
+    priority: must
+    statement: >
+      Every task accepts optional export block with as expression and schema for updating workflow context.
+    acceptance_criteria:
+      - "export.as is a runtime expression producing new context"
+      - "export.schema validates the exported context"
+    tests: []
+    cncf_ref: "dsl-reference.md#export"
+
+  - id: REQ-DATA-004
+    kind: conformance
+    priority: must
+    statement: >
+      Every task accepts an optional if condition that skips the task when it evaluates to false.
+    acceptance_criteria:
+      - "Task is skipped entirely when if evaluates to false"
+      - "Skipped task passes input through as output unchanged"
+    tests: []
+
+  - id: REQ-DATA-005
+    kind: conformance
+    priority: must
+    statement: >
+      Every task accepts an optional timeout in ISO 8601 duration format.
+    acceptance_criteria:
+      - "Task execution is aborted after timeout duration"
+      - "Timeout raises an error with type https://serverlessworkflow.io/spec/1.0.0/errors/timeout"
+    tests: []
+    cncf_ref: "dsl-reference.md#timeout"
+
+  # ════════════════════════════════════════════════════
+  # PARSER — Extensions
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-EXT-001
+    kind: conformance
+    priority: must
+    statement: >
+      Parser accepts use.extensions with extend, when, before, and after fields per CNCF spec.
+    acceptance_criteria:
+      - "extend specifies task type filter (e.g. 'call', 'all')"
+      - "when is an optional runtime expression condition"
+      - "before contains tasks to run before the matched task"
+      - "after contains tasks to run after the matched task"
+    tests: []
+    cncf_ref: "dsl-reference.md#extension"
+
+  # ════════════════════════════════════════════════════
+  # PARSER — Authentication
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-AUTH-001
+    kind: conformance
+    priority: must
+    statement: >
+      Parser accepts all 6 authentication schemes: basic, bearer, certificate, digest, oauth2, openIdConnect.
+    acceptance_criteria:
+      - "basic with username and password"
+      - "bearer with token expression"
+      - "certificate with path"
+      - "digest with username and password"
+      - "oauth2 with authority, grant, client, scopes, audiences"
+      - "openIdConnect with authority and grant"
+    tests: []
+    cncf_ref: "dsl-reference.md#authentication"
+
+  # ════════════════════════════════════════════════════
+  # PARSER — Error Model
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-ERR-001
+    kind: conformance
+    priority: must
+    statement: >
+      Errors follow RFC 7807 Problem Details with type, title, status, detail, and instance fields.
+    acceptance_criteria:
+      - "type is a URI identifying the error"
+      - "status is an HTTP status code"
+      - "instance is a JSON Pointer to the faulting component"
+    tests: []
+    cncf_ref: "dsl-reference.md#error"
+
+  # ════════════════════════════════════════════════════
+  # RUNTIME — Execution
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-EXEC-001
+    kind: behavior
+    priority: must
+    statement: >
+      Runtime executes tasks in the order declared in the do block, passing each task's transformed output as the next task's raw input.
+    acceptance_criteria:
+      - "Tasks execute sequentially by default"
+      - "Previous task output is next task input"
+      - "First task receives workflow input"
+      - "Last task output becomes workflow output"
+    tests: []
+
+  - id: REQ-EXEC-002
+    kind: behavior
+    priority: must
+    statement: >
+      Runtime evaluates the if condition before executing a task and skips the task when the condition is false.
+    acceptance_criteria:
+      - "if expression is evaluated with $context available"
+      - "Task skipped when false; output = input passthrough"
+    tests: []
+
+  - id: REQ-EXEC-003
+    kind: behavior
+    priority: must
+    statement: >
+      Runtime applies input.from, output.as, and export.as transformations at the correct points in the data flow pipeline.
+    acceptance_criteria:
+      - "input.from transforms raw input before task execution"
+      - "output.as transforms raw output after task execution"
+      - "export.as updates $context after output transformation"
+    tests: []
+
+  - id: REQ-EXEC-004
+    kind: behavior
+    priority: must
+    statement: >
+      Runtime validates data against JSON Schema at input.schema, output.schema, and export.schema checkpoints.
+    acceptance_criteria:
+      - "Validation failure raises error with type https://serverlessworkflow.io/spec/1.0.0/errors/validation"
+      - "Validation error includes which field failed"
+    tests: []
+
+  - id: REQ-EXEC-005
+    kind: behavior
+    priority: must
+    statement: >
+      Runtime provides all CNCF runtime expression arguments: $context, $input, $output, $task, $workflow, $runtime, $secrets.
+    acceptance_criteria:
+      - "$context available in all expressions except workflow input.from"
+      - "$input available in task definition and output.as"
+      - "$task.name and $task.reference available"
+      - "$workflow.id and $workflow.definition available"
+    tests: []
+
+  - id: REQ-EXEC-006
+    kind: behavior
+    priority: must
+    statement: >
+      Runtime executes use.extensions before/after tasks that match the extend filter and when condition.
+    acceptance_criteria:
+      - "Extensions fire in declaration order"
+      - "before tasks run before the matched task"
+      - "after tasks run after the matched task"
+      - "exit directive in before skips the matched task"
+    tests: []
+
+  - id: REQ-EXEC-007
+    kind: behavior
+    priority: must
+    statement: >
+      Runtime resolves use.functions references by name, merging caller config over function defaults.
+    acceptance_criteria:
+      - "Function name in call field resolves from use.functions"
+      - "Caller with overrides function defaults"
+      - "Resolved function executes as a normal task"
+    tests: []
+
+  - id: REQ-EXEC-008
+    kind: behavior
+    priority: must
+    statement: >
+      Runtime handles flow directives: continue (next task), end (graceful stop), exit (return from nested scope).
+    acceptance_criteria:
+      - "continue advances to next task in do block"
+      - "end stops workflow execution gracefully"
+      - "exit returns from nested do/for scope"
+    tests: []
+
+  # ════════════════════════════════════════════════════
+  # RUNTIME — Task Handlers
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-HAND-001
+    kind: behavior
+    priority: must
+    statement: >
+      call:http handler makes HTTP requests with method, endpoint, headers, body and returns status + response body.
+    acceptance_criteria:
+      - "GET, POST, PUT, DELETE, PATCH methods supported"
+      - "Headers are sent as specified"
+      - "Response body parsed as JSON when content-type is application/json"
+      - "Non-2xx status raises a communication error"
+    tests: []
+
+  - id: REQ-HAND-002
+    kind: behavior
+    priority: must
+    statement: >
+      set handler returns its key-value map as the task output with expressions evaluated.
+    acceptance_criteria:
+      - "Each value is evaluated as a runtime expression"
+      - "Output is the resulting map"
+    tests: []
+
+  - id: REQ-HAND-003
+    kind: behavior
+    priority: must
+    statement: >
+      for handler iterates over a collection, executing do subtasks for each item, with optional while condition.
+    acceptance_criteria:
+      - "Iteration variable available as $<each> in subtask scope"
+      - "while condition checked before each iteration"
+      - "Loop exits when while is false"
+    tests: []
+
+  - id: REQ-HAND-004
+    kind: behavior
+    priority: must
+    statement: >
+      run:workflow handler executes a nested workflow through the full runtime pipeline including extensions and data flow.
+    acceptance_criteria:
+      - "Nested workflow resolved from storage by namespace/name"
+      - "Extensions in nested workflow fire correctly"
+      - "Nested workflow output returned as task output"
+    tests: []
+
+  - id: REQ-HAND-005
+    kind: behavior
+    priority: must
+    statement: >
+      run:shell handler executes a shell command and returns stdout as output.
+    acceptance_criteria:
+      - "Command runs in sh/bash"
+      - "stdout captured as string output"
+      - "Non-zero exit code raises an error"
+    tests: []
+
+  - id: REQ-HAND-006
+    kind: behavior
+    priority: must
+    statement: >
+      try handler catches errors from its do block and routes to matching catch handlers with optional retry.
+    acceptance_criteria:
+      - "Errors matched by type filter"
+      - "Catch handler tasks execute on match"
+      - "Retry re-executes do block with delay and backoff"
+    tests: []
+
+  - id: REQ-HAND-007
+    kind: behavior
+    priority: must
+    statement: >
+      switch handler evaluates cases in order and follows the then directive of the first matching case.
+    acceptance_criteria:
+      - "when expressions evaluated in order"
+      - "First true case wins"
+      - "default case matches when no when cases match"
+    tests: []
+
+  # ════════════════════════════════════════════════════
+  # RUNTIME — Version Pluggability
+  # ════════════════════════════════════════════════════
+
+  - id: REQ-PLUG-001
+    kind: interface
+    priority: must
+    statement: >
+      RuntimeRegistry selects the correct RuntimeProvider based on the workflow document.dsl version.
+    acceptance_criteria:
+      - "Registry maps version string to provider"
+      - "Unknown version returns clear error"
+      - "Multiple versions can coexist"
+    tests: []
+
+  - id: REQ-PLUG-002
+    kind: interface
+    priority: must
+    statement: >
+      RuntimeProvider trait defines execute() that takes a parsed WorkflowDefinition and returns the workflow output.
+    acceptance_criteria:
+      - "Trait is object-safe (can be used as dyn RuntimeProvider)"
+      - "execute() is async"
+      - "Returns Result<Value, RuntimeError>"
+    tests: []

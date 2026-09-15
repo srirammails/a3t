@@ -1,0 +1,54 @@
+---
+title: Resources
+description: Named connections to external systems.
+---
+
+Resources store connection details for databases, LLMs, MCP servers, and APIs. Steps reference them by name.
+
+## Types
+
+| Type | Category | Description |
+|------|----------|-------------|
+| `openai` | AI | OpenAI API (GPT models) |
+| `anthropic` | AI | Anthropic API (Claude models) |
+| `ollama` | AI | Ollama local LLM server |
+| `postgres` | Database | PostgreSQL |
+| `mysql` | Database | MySQL |
+| `lancedb` | Database | LanceDB embedded vector store |
+| `redis` | Key-Value | Redis |
+| `qdrant` | Vector | Qdrant vector database |
+| `mcp` | MCP | MCP server connection |
+| `http` | API | HTTP/REST endpoint |
+| `clawdb` | Memory | ClawDB agent memory |
+| `agent` | Agent | ZeroClaw agent definition |
+
+## Creating a resource
+
+```bash
+curl -X POST http://localhost:3002/message \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0", "method": "tools/call", "id": 1,
+    "params": {
+      "name": "create_resource",
+      "arguments": {
+        "name": "my-llm",
+        "namespace": "default",
+        "type_ref": "anthropic",
+        "config": {
+          "api_key": "sk-ant-...",
+          "model": "claude-sonnet-4-20250514"
+        }
+      }
+    }
+  }'
+```
+
+## Referencing in steps
+
+```yaml
+- name: summarize
+  type: call:llm
+  resource: my-llm              # same namespace
+  resource: a3t/a3t-platform-db  # cross-namespace
+```

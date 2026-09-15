@@ -1,0 +1,34 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-agent-ephemeral
+  version: 2.0.0
+do:
+- agent-run:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: ephemeral-test-001
+          message: How many resources are in the default namespace? Use the list_resources
+            tool. Return just the number.
+          config:
+            system_prompt: You are a helpful agent. Use tools when needed.
+            llm_resource: openai-gpt
+            max_iterations: 5
+            max_tokens: 512
+            temperature: 0.3
+            mcp_servers:
+            - agent-flows
+            ttl: 60
+    export:
+      as: .
+- compile:
+    set:
+      test_passed: true
+      agent_output: ${ .content }
+      tool_calls_made: ${ .tool_calls_made }
+      iterations: ${ .iterations }
+    export:
+      as: .

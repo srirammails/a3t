@@ -1,0 +1,20 @@
+document:
+  dsl: '1.0.3'
+  namespace: default
+  name: test-try
+  version: '1.0.0'
+do:
+  - safeDivide:
+      try:
+        do:
+          - compute:
+              set:
+                value: 42
+        catch:
+          do:
+            - recover:
+                set:
+                  recovered: true
+  - result:
+      set:
+        try_completed: true

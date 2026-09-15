@@ -1,0 +1,532 @@
+//! ClawDB Executor - Agent memory operations using AQL
+//!
+//! ClawDB is a persistent agent memory database using LanceDB backend.
+//! Supports 5 memory types: WORKING, EPISODIC, PROCEDURAL, SEMANTIC, TOOLS.
+//!
+//! # Protocols
+//!
+//! - **grpc**: gRPC to remote ClawDB server (fastest remote, ~50-100μs)
+//! - **ipc**: Direct in-process execution via embedded ClawDB (~10-50μs)
+//! - **http**: HTTP to remote ClawDB server (~100-500μs)
+//!
+//! # Resource Configuration
+//!
+//! ```yaml
+//! name: agent-memory
+//! type: clawdb
+//! config:
+//!   protocol: grpc           # "grpc", "ipc", or "http"
+//!   url: http://clawdb:50051  # For gRPC mode - server address
+//!   db_path: ./clawdb.lance   # For IPC mode - path to LanceDB
+//!   http_url: http://localhost:3000  # For HTTP mode - server URL
+//! ```
+//!
+//! # Example
+//!
+//! ```yaml
+//! steps:
+//!   - name: store-context
+//!     type: call:clawdb
+//!     resource: agent-memory
+//!     config:
+//!       query: |
+//!         STORE INTO WORKING (user = "${ .input.user }", context = "active")
+//!         SCOPE private NAMESPACE "agent-session"
+//!
+//!   - name: recall-history
+//!     type: call:clawdb
+//!     resource: agent-memory
+//!     config:
+//!       query: |
+//!         RECALL FROM EPISODIC WHERE user = "${ .input.user }"
+//!         ORDER BY created_at DESC LIMIT 10
+//! ```
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tracing::{debug, info, instrument, warn};
+
+use flowr_core::{FlowDirective, FlowError, FlowResult, TaskContext, TaskExecutor, TaskResult};
+use crate::call_resource::{get_resource_config, get_resource_string, get_resource_string_opt};
+
+#[cfg(feature = "clawdb-ipc")]
+use std::collections::HashMap;
+#[cfg(feature = "clawdb-ipc")]
+use std::sync::Arc;
+#[cfg(feature = "clawdb-ipc")]
+use tokio::sync::OnceCell;
+#[cfg(feature = "clawdb-ipc")]
+use clawdb::ClawDB;
+
+// gRPC client types (generated from proto)
+#[cfg(feature = "grpc")]
+pub mod pb {
+    tonic::include_proto!("clawdb");
+}
+#[cfg(feature = "grpc")]
+use pb::claw_db_client::ClawDbClient;
+#[cfg(feature = "grpc")]
+use tokio::sync::OnceCell as GrpcOnceCell;
+#[cfg(feature = "grpc")]
+use tokio::sync::RwLock as GrpcRwLock;
+#[cfg(feature = "grpc")]
+use std::collections::HashMap as GrpcHashMap;
+
+/// Global gRPC client cache (lazy initialized per endpoint)
+#[cfg(feature = "grpc")]
+static GRPC_CLIENTS: GrpcOnceCell<GrpcRwLock<GrpcHashMap<String, ClawDbClient<tonic::transport::Channel>>>> = GrpcOnceCell::const_new();
+
+/// Global ClawDB instance cache for IPC mode (lazy initialized)
+#[cfg(feature = "clawdb-ipc")]
+static CLAWDB_INSTANCES: OnceCell<tokio::sync::RwLock<HashMap<String, Arc<ClawDB>>>> = OnceCell::const_new();
+
+/// ClawDB executor configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClawDbConfig {
+    /// AQL query to execute
+    pub query: String,
+
+    /// Variables to pass to the query (for parameterized queries)
+    #[serde(default)]
+    pub variables: Option<Value>,
+}
+
+/// ClawDB Task Executor
+///
+/// Executes AQL queries against ClawDB for agent memory operations.
+/// Supports both IPC (embedded) and HTTP modes.
+pub struct ClawDbExecutor {
+    config: Value,
+}
+
+impl ClawDbExecutor {
+    pub fn new(config: Value) -> Self {
+        Self { config }
+    }
+
+    /// Get protocol from resource config (defaults to "http" for backward compatibility)
+    fn get_protocol(resource: &Value) -> &str {
+        resource
+            .get("protocol")
+            .and_then(|p| p.as_str())
+            .unwrap_or("http")
+    }
+
+    /// Get the ClawDB server URL from resource config (for HTTP mode)
+    fn get_http_url(resource: &Value) -> FlowResult<String> {
+        // Check for explicit URL first
+        if let Some(url) = resource.get("url").and_then(|u| u.as_str()) {
+            return Ok(url.to_string());
+        }
+
+        // Legacy "mode" support for backward compatibility
+        let mode = resource
+            .get("mode")
+            .and_then(|m| m.as_str())
+            .unwrap_or("embedded");
+
+        match mode {
+            "embedded" => {
+                // Same container - use localhost with default port
+                Ok("http://localhost:3000".to_string())
+            }
+            "http" => {
+                get_resource_string(resource, "url")
+            }
+            _ => {
+                Err(FlowError::Internal(format!(
+                    "Unknown ClawDB mode: {}. Use 'embedded' or 'http'",
+                    mode
+                )))
+            }
+        }
+    }
+
+    /// Execute query via HTTP
+    async fn execute_http(
+        &self,
+        ctx: &mut TaskContext,
+        resource: &Value,
+        config: &ClawDbConfig,
+    ) -> FlowResult<Value> {
+        let base_url = Self::get_http_url(resource)?;
+
+        info!(
+            url = %base_url,
+            query_preview = %config.query.chars().take(80).collect::<String>(),
+            "Executing ClawDB AQL query via HTTP"
+        );
+
+        // Build HTTP request to ClawDB server
+        let client = &ctx.flow_ctx.http;
+        let query_url = format!("{}/query", base_url);
+
+        // Build request body
+        let mut body = json!({
+            "query": config.query
+        });
+
+        if let Some(ref vars) = config.variables {
+            body["variables"] = vars.clone();
+        }
+
+        let resp = client
+            .post(&query_url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| FlowError::Internal(format!("ClawDB HTTP request failed: {}", e)))?;
+
+        let status = resp.status();
+        let response_body: Value = resp
+            .json()
+            .await
+            .map_err(|e| FlowError::Internal(format!("ClawDB response parse error: {}", e)))?;
+
+        if !status.is_success() {
+            let error_msg = response_body
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("Unknown error");
+
+            return Err(FlowError::Internal(format!(
+                "ClawDB query failed ({}): {}",
+                status, error_msg
+            )));
+        }
+
+        // Check if the query itself succeeded
+        let success = response_body
+            .get("success")
+            .and_then(|s| s.as_bool())
+            .unwrap_or(false);
+
+        if !success {
+            let error_msg = response_body
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("Query execution failed");
+
+            warn!(error = %error_msg, "ClawDB query returned error");
+            return Err(FlowError::Internal(format!("ClawDB: {}", error_msg)));
+        }
+
+        // Extract data from response
+        let data = response_body
+            .get("data")
+            .cloned()
+            .unwrap_or(json!(null));
+
+        debug!(
+            success = true,
+            execution_time_ms = response_body.get("execution_time_ms").and_then(|t| t.as_u64()),
+            "ClawDB HTTP query complete"
+        );
+
+        Ok(data)
+    }
+
+    /// Execute query via gRPC
+    #[cfg(feature = "grpc")]
+    async fn execute_grpc(
+        &self,
+        _ctx: &mut TaskContext,
+        resource: &Value,
+        config: &ClawDbConfig,
+    ) -> FlowResult<Value> {
+        let url = get_resource_string(resource, "url")
+            .map_err(|_| FlowError::Internal(
+                "gRPC mode requires 'url' in resource config (e.g., http://clawdb:50051)".to_string()
+            ))?;
+
+        info!(
+            url = %url,
+            query_preview = %config.query.chars().take(80).collect::<String>(),
+            "Executing ClawDB AQL query via gRPC"
+        );
+
+        // Get or create gRPC client
+        let clients = GRPC_CLIENTS
+            .get_or_init(|| async { GrpcRwLock::new(GrpcHashMap::new()) })
+            .await;
+
+        let mut client = {
+            let read_guard = clients.read().await;
+            if let Some(client) = read_guard.get(&url) {
+                client.clone()
+            } else {
+                drop(read_guard);
+                // Create new client
+                let mut write_guard = clients.write().await;
+                // Double-check after acquiring write lock
+                if let Some(client) = write_guard.get(&url) {
+                    client.clone()
+                } else {
+                    let channel = tonic::transport::Channel::from_shared(url.clone())
+                        .map_err(|e| FlowError::Internal(format!("Invalid gRPC URL '{}': {}", url, e)))?
+                        .connect()
+                        .await
+                        .map_err(|e| FlowError::Internal(format!("Failed to connect to ClawDB at '{}': {}", url, e)))?;
+                    let client = ClawDbClient::new(channel);
+                    write_guard.insert(url.clone(), client.clone());
+                    client
+                }
+            }
+        };
+
+        // Build request
+        let variables_json = config.variables
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
+            .unwrap_or_default();
+
+        let request = pb::QueryRequest {
+            query: config.query.clone(),
+            variables: variables_json,
+            namespace: get_resource_string_opt(resource, "namespace").unwrap_or_default(),
+            scope: get_resource_string_opt(resource, "scope").unwrap_or_default(),
+        };
+
+        // Execute query
+        let response = client
+            .query(request)
+            .await
+            .map_err(|e| FlowError::Internal(format!("ClawDB gRPC query failed: {}", e)))?
+            .into_inner();
+
+        debug!(
+            success = response.success,
+            execution_time_us = response.execution_time_us,
+            affected = response.affected,
+            "ClawDB gRPC query complete"
+        );
+
+        if !response.success {
+            return Err(FlowError::Internal(format!("ClawDB: {}", response.error)));
+        }
+
+        // Parse data from response (it's JSON-encoded)
+        let data: Value = if response.data.is_empty() {
+            json!(null)
+        } else {
+            serde_json::from_str(&response.data)
+                .unwrap_or_else(|_| json!(response.data))
+        };
+
+        Ok(data)
+    }
+
+    /// Execute query via gRPC - stub for when feature is disabled
+    #[cfg(not(feature = "grpc"))]
+    async fn execute_grpc(
+        &self,
+        _ctx: &mut TaskContext,
+        _resource: &Value,
+        _config: &ClawDbConfig,
+    ) -> FlowResult<Value> {
+        Err(FlowError::Internal(
+            "gRPC mode requires the 'grpc' feature to be enabled. \
+             Rebuild with: cargo build --features grpc".to_string()
+        ))
+    }
+
+    /// Execute query via IPC (embedded ClawDB)
+    #[cfg(feature = "clawdb-ipc")]
+    async fn execute_ipc(
+        &self,
+        _ctx: &mut TaskContext,
+        resource: &Value,
+        config: &ClawDbConfig,
+    ) -> FlowResult<Value> {
+        let db_path = get_resource_string(resource, "db_path")
+            .map_err(|_| FlowError::Internal(
+                "IPC mode requires 'db_path' in resource config".to_string()
+            ))?;
+
+        info!(
+            db_path = %db_path,
+            query_preview = %config.query.chars().take(80).collect::<String>(),
+            "Executing ClawDB AQL query via IPC"
+        );
+
+        // Get or create ClawDB instance
+        let instances = CLAWDB_INSTANCES
+            .get_or_init(|| async { tokio::sync::RwLock::new(HashMap::new()) })
+            .await;
+
+        let db = {
+            // Try to get existing instance
+            let read_guard = instances.read().await;
+            if let Some(db) = read_guard.get(&db_path) {
+                db.clone()
+            } else {
+                drop(read_guard);
+                // Create new instance
+                let mut write_guard = instances.write().await;
+                // Double-check after acquiring write lock
+                if let Some(db) = write_guard.get(&db_path) {
+                    db.clone()
+                } else {
+                    let db = ClawDB::open_path(&db_path)
+                        .await
+                        .map_err(|e| FlowError::Internal(format!(
+                            "Failed to open ClawDB at '{}': {}",
+                            db_path, e
+                        )))?;
+                    let db = Arc::new(db);
+                    write_guard.insert(db_path.clone(), db.clone());
+                    db
+                }
+            }
+        };
+
+        // Execute query
+        let start = std::time::Instant::now();
+        let result = if let Some(ref vars) = config.variables {
+            // Convert variables to HashMap
+            let vars_map: HashMap<String, serde_json::Value> = vars
+                .as_object()
+                .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default();
+            db.query_with_vars(&config.query, vars_map).await
+        } else {
+            db.query(&config.query).await
+        };
+
+        let elapsed_us = start.elapsed().as_micros();
+
+        let query_result = result.map_err(|e| FlowError::Internal(format!(
+            "ClawDB query failed: {}",
+            e
+        )))?;
+
+        debug!(
+            success = true,
+            execution_time_us = elapsed_us,
+            "ClawDB IPC query complete"
+        );
+
+        // Convert QueryResult to Value
+        Ok(serde_json::to_value(query_result)
+            .unwrap_or(json!({"records": [], "affected": 0})))
+    }
+
+    /// Execute query via IPC - stub for when feature is disabled
+    #[cfg(not(feature = "clawdb-ipc"))]
+    async fn execute_ipc(
+        &self,
+        _ctx: &mut TaskContext,
+        _resource: &Value,
+        _config: &ClawDbConfig,
+    ) -> FlowResult<Value> {
+        Err(FlowError::Internal(
+            "IPC mode requires the 'clawdb-ipc' feature to be enabled. \
+             Rebuild with: cargo build --features clawdb-ipc".to_string()
+        ))
+    }
+}
+
+#[async_trait]
+impl TaskExecutor for ClawDbExecutor {
+    #[instrument(skip(self, ctx), fields(task = "call:clawdb"))]
+    async fn execute(&self, ctx: &mut TaskContext) -> FlowResult<TaskResult> {
+        // Clone resource config to avoid borrow conflicts
+        let resource = get_resource_config(ctx)?.clone();
+
+        // Evaluate expressions in config (supports ${ .input.user } etc.)
+        let evaluated = ctx.eval_recursive(&self.config)?;
+        let config: ClawDbConfig = serde_json::from_value(evaluated)
+            .map_err(|e| FlowError::Internal(format!("Invalid ClawDB config: {}", e)))?;
+
+        // Get optional namespace and scope from resource (reserved for future use)
+        let _namespace = get_resource_string_opt(&resource, "namespace");
+        let _scope = get_resource_string_opt(&resource, "scope");
+
+        // Execute based on protocol
+        let protocol = Self::get_protocol(&resource);
+        let data = match protocol {
+            "grpc" => self.execute_grpc(ctx, &resource, &config).await?,
+            "ipc" => self.execute_ipc(ctx, &resource, &config).await?,
+            "http" => self.execute_http(ctx, &resource, &config).await?,
+            other => {
+                return Err(FlowError::Internal(format!(
+                    "Unknown ClawDB protocol: '{}'. Use 'grpc', 'ipc', or 'http'",
+                    other
+                )));
+            }
+        };
+
+        Ok(TaskResult::new(data).with_directive(FlowDirective::Continue))
+    }
+
+    fn task_type(&self) -> &'static str {
+        "call:clawdb"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_parsing() {
+        let config = json!({
+            "query": "RECALL FROM WORKING WHERE user = \"alice\""
+        });
+
+        let parsed: ClawDbConfig = serde_json::from_value(config).unwrap();
+        assert!(parsed.query.contains("RECALL"));
+        assert!(parsed.variables.is_none());
+    }
+
+    #[test]
+    fn test_config_with_variables() {
+        let config = json!({
+            "query": "RECALL FROM WORKING WHERE user = $user",
+            "variables": {
+                "user": "alice"
+            }
+        });
+
+        let parsed: ClawDbConfig = serde_json::from_value(config).unwrap();
+        assert!(parsed.variables.is_some());
+    }
+
+    #[test]
+    fn test_protocol_detection() {
+        // gRPC protocol
+        let resource = json!({"protocol": "grpc", "url": "http://clawdb:50051"});
+        assert_eq!(ClawDbExecutor::get_protocol(&resource), "grpc");
+
+        // IPC protocol
+        let resource = json!({"protocol": "ipc", "db_path": "./test.lance"});
+        assert_eq!(ClawDbExecutor::get_protocol(&resource), "ipc");
+
+        // HTTP protocol
+        let resource = json!({"protocol": "http", "url": "http://localhost:3000"});
+        assert_eq!(ClawDbExecutor::get_protocol(&resource), "http");
+
+        // Default to HTTP for backward compatibility
+        let resource = json!({"url": "http://localhost:3000"});
+        assert_eq!(ClawDbExecutor::get_protocol(&resource), "http");
+    }
+
+    #[test]
+    fn test_http_url_extraction() {
+        // Direct URL
+        let resource = json!({"protocol": "http", "url": "http://clawdb.example.com:3000"});
+        assert_eq!(
+            ClawDbExecutor::get_http_url(&resource).unwrap(),
+            "http://clawdb.example.com:3000"
+        );
+
+        // Legacy embedded mode
+        let resource = json!({"mode": "embedded"});
+        assert_eq!(
+            ClawDbExecutor::get_http_url(&resource).unwrap(),
+            "http://localhost:3000"
+        );
+    }
+}

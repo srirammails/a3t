@@ -1,0 +1,38 @@
+document:
+  dsl: 1.0.3
+  namespace: test
+  name: test-agent-engine
+  version: 1.0.0
+  metadata:
+    description: >
+      Test for the Rust-native call:a3t:agent handler.
+      Exercises the agent with a simple config and an extension
+      that tracks LLM calls. Does NOT require a live LLM —
+      will fail at LLM call if no resource is configured,
+      but validates init, session, and extension dispatch.
+
+use:
+  extensions:
+    - call_counter:
+        extend: call
+        after:
+          - increment:
+              set:
+                _call_count: "${ ($context._call_count // 0) + 1 }"
+              export:
+                as: "."
+
+do:
+  - test-agent:
+      call: a3t:agent
+      with:
+        session_id: test-session-001
+        message: Hello, this is a test
+        config:
+          system_prompt: You are a test agent. Respond with exactly "TEST_OK".
+          max_iterations: 1
+          max_tokens: 100
+          temperature: 0.0
+          llm_resource: default-llm
+          memory_namespace: test
+          ttl: 60

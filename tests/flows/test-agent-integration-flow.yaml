@@ -1,0 +1,47 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-agent-integration-flow
+  version: 1.0.0
+do:
+- agent-with-flow-tool:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: flow-tool-test-001
+          message: What is the weather today? Use the get_weather tool.
+          config:
+            system_prompt: You are a helpful agent. Use tools when asked. If a tool
+              fails, just say you tried.
+            max_iterations: 2
+            max_tokens: 256
+            temperature: 0.1
+            tools:
+            - name: get_weather
+              description: Get current weather for a location
+              input_schema:
+                type: object
+                required:
+                - location
+                properties:
+                  location:
+                    type: string
+            mcp_servers:
+            - agent-flows
+            ttl: 60
+    export:
+      as: .
+- verify:
+    set:
+      test_passed: ${ .content != null }
+      agent_response: ${ .content }
+      iterations: ${ .iterations }
+      tool_calls: ${ .tool_calls_made }
+    export:
+      as: .
+- cleanup:
+    call: state:delete
+    with:
+      key: agent:session:flow-tool-test-001

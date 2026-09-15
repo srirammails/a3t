@@ -1,0 +1,27 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: query-sql
+  version: 1.0.0
+do:
+- execute:
+    call: sql
+    with:
+      query: ${ .query }
+      params: ${ .params // [] }
+      _resource: ${ .resource }
+    export:
+      as: '{rows: .rows, count: (.rows | length)}'
+input:
+  schema:
+    type: object
+    required:
+    - query
+    - resource
+    properties:
+      query:
+        type: string
+      params:
+        type: array
+      resource:
+        type: string

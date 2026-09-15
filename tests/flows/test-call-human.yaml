@@ -1,0 +1,36 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-call-human
+  version: 1.0.0
+do:
+- prepare-request:
+    set:
+      approval_request: 'Please approve: ${ .item_to_approve } for ${ .amount }'
+    export:
+      as: .
+- human-approval:
+    call: human
+    with:
+      prompt: ${ .approval_request }
+      options:
+      - label: Approve
+        value: approved
+      - label: Reject
+        value: rejected
+      - label: Request More Info
+        value: more_info
+      timeout: PT5M
+    export:
+      as: '{human_decision: .}'
+input:
+  schema:
+    type: object
+    properties:
+      item_to_approve:
+        type: string
+      amount:
+        type: number
+    required:
+    - item_to_approve
+    - amount

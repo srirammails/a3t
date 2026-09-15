@@ -1,0 +1,165 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-canvas
+  version: 1.0.0
+do:
+- route:
+    switch:
+    - case:
+        when: ${ .input.action == "list" }
+        then: list
+    - case:
+        when: ${ .input.action == "get" }
+        then: get
+    - case:
+        when: ${ .input.action == "create" }
+        then: create
+    - case:
+        when: ${ .input.action == "update" }
+        then: update
+    - case:
+        when: ${ .input.action == "delete" }
+        then: delete
+    - case:
+        when: ${ .input.action == "events" }
+        then: list-events
+- list:
+    call: lancedb
+    with:
+      operation: query
+      table: canvas_specs
+      filter: org_id = "${ .input.org_id }"
+      limit: 100
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Canvas
+    then: end
+- get:
+    call: lancedb
+    with:
+      operation: query
+      table: canvas_specs
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Canvas
+            id: ${ .input.id }
+    then: end
+- create:
+    set:
+      _cv_id: ${ .input.data.id }
+      _cv_org: ${ .input.org_id }
+      _cv_name: ${ .input.data.name }
+      _cv_ns: ${ .input.data.namespace }
+      _cv_spec: ${ .input.data.spec_yaml }
+      _cv_user: ${ .input.user_id }
+      _cv_ts: ${ .input.timestamp }
+    export:
+      as: "."
+    then: create-insert
+- create-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: canvas_specs
+      records:
+      - id: ${ $context._cv_id }
+        org_id: ${ $context._cv_org }
+        name: ${ $context._cv_name }
+        namespace: ${ $context._cv_ns }
+        spec_yaml: ${ $context._cv_spec }
+        generation: '1'
+        status: draft
+        created_by: ${ $context._cv_user }
+        created_at: ${ $context._cv_ts }
+        updated_at: ${ $context._cv_ts }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Canvas
+    then: log-event
+- log-event:
+    call: lancedb
+    with:
+      operation: insert
+      table: canvas_events
+      records:
+      - id: ${ $context._cv_id }-evt-created
+        canvas_id: ${ $context._cv_id }
+        event_type: created
+        payload: '{}'
+        created_at: ${ $context._cv_ts }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Canvas
+    then: end
+- update:
+    call: lancedb
+    with:
+      operation: update
+      table: canvas_specs
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      values:
+        name: ${ .input.data.name // "" }
+        namespace: ${ .input.data.namespace // "" }
+        spec_yaml: ${ .input.data.spec_yaml // "" }
+        generation: ${ .input.data.generation // "1" }
+        status: ${ .input.data.status // "draft" }
+        updated_at: ${ .input.timestamp }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Canvas
+            id: ${ .input.id }
+    then: end
+- delete:
+    call: lancedb
+    with:
+      operation: delete
+      table: canvas_specs
+      filter: id = "${ .input.id }" AND org_id = "${ .input.org_id }"
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: delete
+          resource:
+            type: Canvas
+            id: ${ .input.id }
+    then: end
+- list-events:
+    call: lancedb
+    with:
+      operation: query
+      table: canvas_events
+      filter: canvas_id = "${ .input.id }"
+      limit: 50
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: read
+          resource:
+            type: Canvas
+            id: ${ .input.id }
+    then: end

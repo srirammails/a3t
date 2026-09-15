@@ -1,0 +1,29 @@
+document:
+  dsl: '1.0.3'
+  namespace: test
+  name: cncf-state
+  version: '1.0.0'
+do:
+  - writeState:
+      call: state:set
+      with:
+        key: cncf-test-key
+        value: "hello from CNCF"
+        ttl: 60
+
+  - readState:
+      call: state:get
+      with:
+        key: cncf-test-key
+      export:
+        as: "${ {retrieved: .} }"
+
+  - deleteState:
+      call: state:delete
+      with:
+        key: cncf-test-key
+
+  - result:
+      set:
+        state_works: true
+        read_value: "${ $context.retrieved }"

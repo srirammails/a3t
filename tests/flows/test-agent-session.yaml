@@ -1,0 +1,54 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-agent-session
+  version: 2.0.0
+do:
+- turn-1:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: session-test-001
+          message: 'Remember this: the secret code is BLUE-42. Acknowledge you received
+            it.'
+          config:
+            system_prompt: You are a helpful agent. Remember our conversation.
+            llm_resource: openai-gpt
+            max_iterations: 3
+            max_tokens: 512
+            temperature: 0.3
+            ttl: 300
+    export:
+      as: .
+- save-turn-1:
+    set:
+      turn1_output: ${ .content }
+    export:
+      as: .
+- turn-2:
+    run:
+      workflow:
+        namespace: system
+        name: agent-template
+        input:
+          session_id: session-test-001
+          message: What was the secret code I told you earlier? Reply with just the
+            code.
+          config:
+            system_prompt: You are a helpful agent. Remember our conversation.
+            llm_resource: openai-gpt
+            max_iterations: 3
+            max_tokens: 512
+            temperature: 0.3
+            ttl: 300
+    export:
+      as: .
+- compile:
+    set:
+      test_passed: true
+      turn2_output: ${ .content }
+      session_id: session-test-001
+    export:
+      as: .

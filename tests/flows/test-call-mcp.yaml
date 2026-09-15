@@ -1,0 +1,20 @@
+document:
+  dsl: 1.0.3
+  namespace: default
+  name: test-call-mcp
+  version: 1.0.0
+do:
+- mcp-tool-call:
+    call: mcp
+    with:
+      tool: get_stats
+      arguments: {}
+      timeout_ms: 30000
+      _resource: test-mcp-server
+    export:
+      as: mcp_result
+- compile-results:
+    set:
+      mcp_test_completed: true
+    export:
+      as: .

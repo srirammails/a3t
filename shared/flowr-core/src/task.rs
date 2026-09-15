@@ -1,0 +1,297 @@
+//! Task executor trait and result types
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::context::TaskContext;
+use crate::directive::FlowDirective;
+use flowr_types::FlowError;
+
+/// Result of task execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskResult {
+    /// Output value from the task
+    pub output: Value,
+
+    /// Flow directive (continue, exit, end, goto)
+    #[serde(default)]
+    pub directive: FlowDirective,
+
+    /// Optional exports to merge into workflow context
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exports: Option<Value>,
+}
+
+impl TaskResult {
+    /// Create a new task result with output
+    pub fn new(output: Value) -> Self {
+        Self {
+            output,
+            directive: FlowDirective::Continue,
+            exports: None,
+        }
+    }
+
+    /// Create a result that ends the workflow
+    pub fn end(output: Value) -> Self {
+        Self {
+            output,
+            directive: FlowDirective::End,
+            exports: None,
+        }
+    }
+
+    /// Create a result that exits current scope
+    pub fn exit(output: Value) -> Self {
+        Self {
+            output,
+            directive: FlowDirective::Exit,
+            exports: None,
+        }
+    }
+
+    /// Create a result that jumps to another task
+    pub fn goto(output: Value, target: impl Into<String>) -> Self {
+        Self {
+            output,
+            directive: FlowDirective::Goto(target.into()),
+            exports: None,
+        }
+    }
+
+    /// Add exports to merge into workflow context
+    pub fn with_exports(mut self, exports: Value) -> Self {
+        self.exports = Some(exports);
+        self
+    }
+
+    /// Set the flow directive
+    pub fn with_directive(mut self, directive: FlowDirective) -> Self {
+        self.directive = directive;
+        self
+    }
+}
+
+impl Default for TaskResult {
+    fn default() -> Self {
+        Self::new(Value::Null)
+    }
+}
+
+/// Trait for executing individual tasks
+///
+/// Each task type (Set, Call, Emit, etc.) implements this trait.
+#[async_trait]
+pub trait TaskExecutor: Send + Sync {
+    /// Execute the task
+    ///
+    /// # Arguments
+    /// * `ctx` - Task context containing input, scope, and services
+    ///
+    /// # Returns
+    /// Result containing output and flow directive
+    async fn execute(&self, ctx: &mut TaskContext) -> Result<TaskResult, FlowError>;
+
+    /// Get the task type name (for logging/metrics)
+    fn task_type(&self) -> &'static str;
+
+    /// Check if this task is a checkpoint (for durability)
+    ///
+    /// Override to return true for tasks that should trigger checkpoint writes.
+    fn is_checkpoint(&self) -> bool {
+        false
+    }
+}
+
+/// Simple pass-through executor for testing
+#[allow(dead_code)]
+pub struct NoOpExecutor;
+
+#[async_trait]
+impl TaskExecutor for NoOpExecutor {
+    async fn execute(&self, ctx: &mut TaskContext) -> Result<TaskResult, FlowError> {
+        // Pass input through as output
+        Ok(TaskResult::new(ctx.input.clone()))
+    }
+
+    fn task_type(&self) -> &'static str {
+        "noop"
+    }
+}
+
+/// Task definition with transformations
+///
+/// Combines an executor with input/output transformations per CNCF Serverless Workflow spec.
+pub struct TaskDefinition {
+    /// Task name
+    pub name: String,
+
+    /// The task executor
+    pub executor: Arc<dyn TaskExecutor>,
+
+    /// Condition expression — skip this task if evaluates to false (CNCF spec `if`)
+    pub if_condition: Option<String>,
+
+    /// Input transformation: jq expression to transform input before execution
+    /// Corresponds to `input.from` in the spec
+    pub input_from: Option<String>,
+
+    /// Output transformation: jq expression to transform output after execution
+    /// Corresponds to `output.as` in the spec
+    pub output_as: Option<String>,
+
+    /// Export transformation: jq expression to define what gets exported to context
+    /// Corresponds to `export.as` in the spec
+    pub export_as: Option<String>,
+
+    /// Flow directive override
+    /// Corresponds to `then` in the spec (continue, exit, end, or task name for goto)
+    pub then: Option<String>,
+
+    /// Task-level timeout
+    pub timeout: Option<Duration>,
+
+    /// Whether this task is a checkpoint (for durability)
+    pub checkpoint: bool,
+
+    /// Resolved resource configuration (FlowR extension)
+    /// Set when the task references a resource via the `resource` field
+    pub resource: Option<serde_json::Value>,
+
+    /// Input validation schema (JSON Schema) — validates transformed input before execution
+    pub input_schema: Option<serde_json::Value>,
+
+    /// Output validation schema (JSON Schema) — validates transformed output after execution
+    pub output_schema: Option<serde_json::Value>,
+
+    /// Export validation schema (JSON Schema) — validates exported context
+    pub export_schema: Option<serde_json::Value>,
+}
+
+impl TaskDefinition {
+    /// Create a new task definition
+    pub fn new(name: impl Into<String>, executor: Arc<dyn TaskExecutor>) -> Self {
+        Self {
+            name: name.into(),
+            executor,
+            if_condition: None,
+            input_from: None,
+            output_as: None,
+            export_as: None,
+            then: None,
+            timeout: None,
+            checkpoint: false,
+            resource: None,
+            input_schema: None,
+            output_schema: None,
+            export_schema: None,
+        }
+    }
+
+    /// Set the condition expression (task is skipped if false)
+    pub fn with_if_condition(mut self, expr: impl Into<String>) -> Self {
+        self.if_condition = Some(expr.into());
+        self
+    }
+
+    /// Set the input transformation expression
+    pub fn with_input_from(mut self, expr: impl Into<String>) -> Self {
+        self.input_from = Some(expr.into());
+        self
+    }
+
+    /// Set the output transformation expression
+    pub fn with_output_as(mut self, expr: impl Into<String>) -> Self {
+        self.output_as = Some(expr.into());
+        self
+    }
+
+    /// Set the export transformation expression
+    pub fn with_export_as(mut self, expr: impl Into<String>) -> Self {
+        self.export_as = Some(expr.into());
+        self
+    }
+
+    /// Set the flow directive override
+    pub fn with_then(mut self, directive: impl Into<String>) -> Self {
+        self.then = Some(directive.into());
+        self
+    }
+
+    /// Set the task-level timeout
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Mark this task as a checkpoint
+    pub fn as_checkpoint(mut self) -> Self {
+        self.checkpoint = true;
+        self
+    }
+
+    /// Set the resolved resource configuration
+    pub fn with_resource(mut self, resource: serde_json::Value) -> Self {
+        self.resource = Some(resource);
+        self
+    }
+
+    /// Set the input validation schema
+    pub fn with_input_schema(mut self, schema: serde_json::Value) -> Self {
+        self.input_schema = Some(schema);
+        self
+    }
+
+    /// Set the output validation schema
+    pub fn with_output_schema(mut self, schema: serde_json::Value) -> Self {
+        self.output_schema = Some(schema);
+        self
+    }
+
+    /// Set the export validation schema
+    pub fn with_export_schema(mut self, schema: serde_json::Value) -> Self {
+        self.export_schema = Some(schema);
+        self
+    }
+
+    /// Check if this task should trigger a checkpoint write
+    pub fn is_checkpoint(&self) -> bool {
+        self.checkpoint || self.executor.is_checkpoint()
+    }
+}
+
+/// A resolved extension ready for execution
+///
+/// Extensions act as before/after interceptors on task types per CNCF spec.
+/// They are resolved from the workflow's `use.extensions` block at build time.
+pub struct ResolvedExtension {
+    /// Extension name (for logging)
+    pub name: String,
+
+    /// Which task type(s) to intercept ("all" or specific type like "call", "set")
+    pub extend: String,
+
+    /// Optional jq condition — extension only fires when this evaluates to true
+    pub when: Option<String>,
+
+    /// Compiled before-tasks to run before the target task
+    pub before: Vec<TaskDefinition>,
+
+    /// Compiled after-tasks to run after the target task
+    pub after: Vec<TaskDefinition>,
+}
+
+impl ResolvedExtension {
+    /// Check if this extension applies to a given task type
+    pub fn matches(&self, task_type: &str) -> bool {
+        if self.extend == "all" {
+            return true;
+        }
+        // Match exact type or prefix (e.g., "call" matches "call:http")
+        task_type == self.extend || task_type.starts_with(&format!("{}:", self.extend))
+    }
+}

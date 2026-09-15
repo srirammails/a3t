@@ -1,0 +1,76 @@
+---
+title: Script Tasks
+description: run:shell, run:script, run:workflow, inline:lua, inline:js
+---
+
+## run:workflow
+
+Execute a child workflow by name. Input is passed through, output returned.
+
+```yaml
+- name: run-sub
+  type: run:workflow
+  config:
+    namespace: a3t
+    name: a3t-templates-list
+    input:
+      org_id: "${ .org_id }"
+  export.as: "."
+```
+
+## run:shell
+
+Execute a shell command.
+
+```yaml
+- name: check-disk
+  type: run:shell
+  config:
+    command: "df -h / | tail -1"
+    timeout: 10
+```
+
+## run:script
+
+Execute a script file in Lua, JS, or Python.
+
+```yaml
+- name: process
+  type: run:script
+  config:
+    language: lua
+    source: /scripts/process.lua
+    arguments: ["${ .input_file }"]
+```
+
+## inline:lua
+
+Embedded Lua script (~20us overhead). Access workflow state via `state` global.
+
+```yaml
+- name: compute
+  type: inline:lua
+  config:
+    code: |
+      local a = state.input.a or 0
+      local b = state.input.b or 0
+      return { sum = a + b, product = a * b }
+  export.as: "."
+```
+
+## inline:js
+
+Embedded JavaScript (~100us overhead). Access input via `input` global.
+
+```yaml
+- name: transform
+  type: inline:js
+  config:
+    code: |
+      const items = input.items || [];
+      return {
+        count: items.length,
+        total: items.reduce((s, i) => s + i.value, 0)
+      };
+  export.as: "."
+```

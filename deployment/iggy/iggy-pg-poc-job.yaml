@@ -1,0 +1,217 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iggy-pg-poc-source
+  namespace: flowr
+data:
+  Cargo.toml: |
+    [package]
+    name = "iggy-pg-poc"
+    version = "0.1.0"
+    edition = "2021"
+
+    [dependencies]
+    tokio = { version = "1.40", features = ["full"] }
+    iggy = "0.6"
+    tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-chrono-0_4", "with-uuid-1"] }
+    serde = { version = "1.0", features = ["derive"] }
+    serde_json = "1.0"
+    anyhow = "1.0"
+    uuid = { version = "1.10", features = ["v4", "serde"] }
+    chrono = { version = "0.4", features = ["serde"] }
+    bytes = "1.7"
+    rust_decimal = { version = "1.36", features = ["db-tokio-postgres"] }
+
+  main.rs: |
+    use anyhow::{Context, Result};
+    use bytes::Bytes;
+    use chrono::{DateTime, Utc};
+    use iggy::client::{Client, StreamClient, TopicClient, MessageClient};
+    use iggy::clients::client::IggyClient;
+    use iggy::consumer::Consumer;
+    use iggy::identifier::Identifier;
+    use iggy::messages::poll_messages::PollingStrategy;
+    use iggy::messages::send_messages::{Message, Partitioning};
+    use iggy::streams::create_stream::CreateStream;
+    use iggy::topics::create_topic::CreateTopic;
+    use iggy::compression::compression_algorithm::CompressionAlgorithm;
+    use serde::{Deserialize, Serialize};
+    use std::time::Instant;
+    use tokio_postgres::NoTls;
+    use uuid::Uuid;
+
+    const IGGY_TCP_ADDRESS: &str = "iggy.flowr.svc.cluster.local:8090";
+    const PG_CONNECTION: &str = "host=postgres.flowr.svc.cluster.local port=5432 user=flowr password=flowr_poc_2024 dbname=flowr";
+    const STREAM_ID: u32 = 1;
+    const STREAM_NAME: &str = "flowr-events";
+    const TOPIC_ID: u32 = 1;
+    const TOPIC_NAME: &str = "workflow-checkpoints";
+    const PARTITION_ID: u32 = 1;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct CheckpointEvent {
+        pub id: Uuid,
+        pub flow_id: Uuid,
+        pub execution_id: Uuid,
+        pub step_id: String,
+        pub state: serde_json::Value,
+        pub timestamp: DateTime<Utc>,
+    }
+
+    impl CheckpointEvent {
+        pub fn new(flow_id: Uuid, execution_id: Uuid, step_id: &str, state: serde_json::Value) -> Self {
+            Self {
+                id: Uuid::new_v4(),
+                flow_id,
+                execution_id,
+                step_id: step_id.to_string(),
+                state,
+                timestamp: Utc::now(),
+            }
+        }
+        pub fn to_bytes(&self) -> Bytes { Bytes::from(serde_json::to_vec(self).unwrap()) }
+        pub fn from_bytes(bytes: &[u8]) -> Result<Self> { Ok(serde_json::from_slice(bytes)?) }
+    }
+
+    #[tokio::main]
+    async fn main() -> Result<()> {
+        println!("=== Iggy-PostgreSQL POC Test ===\n");
+
+        // Connect to PostgreSQL
+        println!("1. Connecting to PostgreSQL...");
+        let (pg_client, connection) = tokio_postgres::connect(PG_CONNECTION, NoTls).await?;
+        tokio::spawn(async move { let _ = connection.await; });
+        let row = pg_client.query_one("SELECT version()", &[]).await?;
+        let version: &str = row.get(0);
+        println!("   Connected: {}\n", version.split(',').next().unwrap_or(version));
+
+        // Connect to Iggy
+        println!("2. Connecting to Iggy...");
+        let iggy_client = IggyClient::builder()
+            .with_tcp()
+            .with_server_address(IGGY_TCP_ADDRESS.to_string())
+            .build()?;
+        iggy_client.connect().await?;
+        iggy_client.login_user("iggy", "iggy").await?;
+        println!("   Connected to {}\n", IGGY_TCP_ADDRESS);
+
+        // Setup stream/topic
+        println!("3. Setting up Iggy stream...");
+        let _ = iggy_client.create_stream(&CreateStream {
+            stream_id: Some(STREAM_ID),
+            name: STREAM_NAME.to_string(),
+        }).await;
+        let _ = iggy_client.create_topic(&CreateTopic {
+            stream_id: Identifier::numeric(STREAM_ID)?,
+            topic_id: Some(TOPIC_ID),
+            name: TOPIC_NAME.to_string(),
+            partitions_count: 1,
+            compression_algorithm: CompressionAlgorithm::None,
+            message_expiry: None,
+            max_topic_size: None,
+            replication_factor: Some(1),
+        }).await;
+        println!("   Stream: {}, Topic: {}\n", STREAM_NAME, TOPIC_NAME);
+
+        // Publish messages
+        println!("4. Publishing checkpoint events to Iggy...");
+        let flow_id = Uuid::new_v4();
+        let execution_id = Uuid::new_v4();
+        let events: Vec<CheckpointEvent> = vec![
+            CheckpointEvent::new(flow_id, execution_id, "step-1", serde_json::json!({"input": "data"})),
+            CheckpointEvent::new(flow_id, execution_id, "step-2", serde_json::json!({"processed": true})),
+            CheckpointEvent::new(flow_id, execution_id, "step-3", serde_json::json!({"output": 42})),
+        ];
+        let messages: Vec<Message> = events.iter()
+            .map(|e| Message::new(Some(e.id.as_u128()), e.to_bytes(), None))
+            .collect();
+        let start = Instant::now();
+        iggy_client.send_messages(
+            &Identifier::numeric(STREAM_ID)?,
+            &Identifier::numeric(TOPIC_ID)?,
+            &Partitioning::partition_id(PARTITION_ID),
+            &mut messages.into(),
+        ).await?;
+        println!("   Published {} events in {:?}\n", events.len(), start.elapsed());
+
+        // Consume and sync to PostgreSQL
+        println!("5. Consuming from Iggy and syncing to PostgreSQL...");
+        let polled = iggy_client.poll_messages(
+            &Identifier::numeric(STREAM_ID)?,
+            &Identifier::numeric(TOPIC_ID)?,
+            Some(PARTITION_ID),
+            &Consumer::new(Identifier::named("flowr-poc")?),
+            &PollingStrategy::offset(0),
+            100,
+            false,
+        ).await?;
+        println!("   Polled {} messages", polled.messages.len());
+
+        // Sync to iggy_msg_sync table
+        let mut synced = 0;
+        for msg in &polled.messages {
+            if let Ok(event) = CheckpointEvent::from_bytes(&msg.payload) {
+                pg_client.execute(
+                    "INSERT INTO iggy_msg_sync (id, iggy_offset, iggy_timestamp, iggy_stream, iggy_topic, payload, created_at)
+                     VALUES ($1, $2, NOW(), $3, $4, $5, NOW())
+                     ON CONFLICT (id) DO NOTHING",
+                    &[
+                        &rust_decimal::Decimal::from(msg.offset as i64),
+                        &(msg.offset as i64),
+                        &STREAM_NAME,
+                        &TOPIC_NAME,
+                        &event.to_bytes().as_ref(),
+                    ],
+                ).await?;
+                synced += 1;
+            }
+        }
+        println!("   Synced {} events to iggy_msg_sync\n", synced);
+
+        // Verify sync
+        println!("6. Verifying sync...");
+        let count: i64 = pg_client.query_one("SELECT COUNT(*) FROM iggy_msg_sync", &[]).await?.get(0);
+        println!("   iggy_msg_sync now has {} rows\n", count);
+
+        println!("=== POC Test Complete ===");
+        Ok(())
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: iggy-pg-poc
+  namespace: flowr
+spec:
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: poc
+          image: rustlang/rust:nightly-bookworm-slim
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              apt-get update && apt-get install -y pkg-config libssl-dev
+              mkdir -p /app/src
+              cp /config/Cargo.toml /app/
+              cp /config/main.rs /app/src/
+              cd /app
+              cargo run --release
+          volumeMounts:
+            - name: source
+              mountPath: /config
+      volumes:
+        - name: source
+          configMap:
+            name: iggy-pg-poc-source
