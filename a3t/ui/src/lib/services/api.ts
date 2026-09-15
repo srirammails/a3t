@@ -542,6 +542,55 @@ export async function deleteChatSession(serverSessionId: string): Promise<boolea
   return res.ok;
 }
 
+// ── Permissions answered in a conversation ──
+//
+// What the user allowed or declined when the agent asked. Session-scoped and
+// server-owned, so they are the same on every device the conversation opens on.
+
+export interface SessionPermission {
+  key: string;
+  action: string;
+  resource_type: string;
+  /// The tool, qualified by MCP server where there is one (`server/tool`).
+  resource_id: string;
+  verdict: 'granted' | 'denied';
+  scope: 'once' | 'session' | 'agent';
+  reason: string;
+  decided_by: string;
+  decided_at_ms: number;
+  remaining_uses?: number | null;
+}
+
+export async function listSessionPermissions(sessionId: string): Promise<SessionPermission[]> {
+  const res = await request<{ permissions: SessionPermission[] }>(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/permissions`);
+  return res.ok && res.data?.permissions ? res.data.permissions : [];
+}
+
+/// Reopen a refusal. This does NOT grant it: the agent asks again next time it
+/// needs the tool, so the permission is still given with the context of a real
+/// request rather than by a stray click in a list.
+export async function liftPermission(sessionId: string, key: string): Promise<boolean> {
+  const res = await request<{ lifted: boolean }>(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/permissions/lift`,
+    { method: 'POST', body: JSON.stringify({ key }) });
+  return !!(res.ok && res.data?.lifted);
+}
+
+/// Answer a pending approval. The agent is suspended on this request id and
+/// resumes as soon as the answer lands.
+export async function answerApproval(
+  requestId: string,
+  allow: boolean,
+  scope: 'once' | 'session',
+): Promise<boolean> {
+  const res = await request(`/inputs/${encodeURIComponent(requestId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ allow, scope }),
+  });
+  return res.ok;
+}
+
 // ── Pins (per user, server-side so they follow you across devices) ──
 
 export type PinMap = Record<string, string[]>;

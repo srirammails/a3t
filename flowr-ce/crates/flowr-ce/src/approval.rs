@@ -100,6 +100,11 @@ pub async fn request_approval(
             "arguments": arguments,
             "decision_id": decision_id,
             "reason": reason,
+            // Who may answer. An approval is a security decision, so the
+            // endpoint verifies the responder against this rather than trusting
+            // whoever holds the request id.
+            "approver": approver,
+            "session_id": session_id,
         })),
         workflow: None,
         agent_id: Some(principal.id().to_string()),

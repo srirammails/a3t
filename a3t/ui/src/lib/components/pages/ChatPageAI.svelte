@@ -20,6 +20,8 @@
   import { renderMarkdown } from '$lib/utils/markdown';
   import ArtifactWidget from '$lib/components/chat/ArtifactWidget.svelte';
   import ArtifactPane from '$lib/components/chat/ArtifactPane.svelte';
+  import ApprovalCard from '$lib/components/chat/ApprovalCard.svelte';
+  import PermissionsPanel from '$lib/components/chat/PermissionsPanel.svelte';
   import ListWidget from '$lib/components/chat/ListWidget.svelte';
   import AppHome from '$lib/shell/AppHome.svelte';
   import { ARTIFACTS, LIST_KIND_TO_ITEM, toEditorText, type ArtifactKind } from '$lib/components/chat/artifacts';
@@ -491,6 +493,24 @@
 
   let attachments = $state<{ name: string; text: string; size: number }[]>([]);
   let attachError = $state('');
+  /// The permissions popover. `permRev` forces a reload each time it opens, so
+  /// it never shows a stale answer from earlier in the conversation.
+  let permOpen = $state(false);
+  let permRev = $state(0);
+
+  $effect(() => {
+    if (!permOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement)?.closest?.('.perm-pick')) permOpen = false;
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') permOpen = false; };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  });
   let fileInput = $state<HTMLInputElement>();
 
   /// Heuristic: a NUL byte or a run of replacement chars means it was not text.
@@ -602,9 +622,37 @@
   /// Typed data parts the server streams (`data-flow`, …) — rendered as widgets
   /// rather than prose. Unknown kinds are ignored so a new server-side widget
   /// type cannot break an older client.
+  /// Permission questions asked during this message, each paired with its answer
+  /// if one has arrived.
+  ///
+  /// Kept out of `widgetsOf` on purpose: that function collapses parts by
+  /// `namespace/name`, which approvals do not have — every question would fold
+  /// into a single card and only the last would survive. These are keyed by
+  /// `request_id`, which is what actually distinguishes them.
+  function approvalsOf(m: any) {
+    const parts = m.parts ?? [];
+    const answers = new Map<string, any>();
+    for (const p of parts) {
+      if (p.type === 'data-authz-resolved' && p.data?.request_id) {
+        answers.set(p.data.request_id, p.data);
+      }
+    }
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const p of parts) {
+      if (p.type !== 'data-authz-request' || !p.data?.request_id) continue;
+      if (seen.has(p.data.request_id)) continue;
+      seen.add(p.data.request_id);
+      out.push({ request: p.data, resolved: answers.get(p.data.request_id) ?? null });
+    }
+    return out;
+  }
+
   function widgetsOf(m: any) {
     const all = (m.parts ?? [])
       .filter((p: any) => typeof p.type === 'string' && p.type.startsWith('data-'))
+      // Approvals have their own card and their own identity — see approvalsOf.
+      .filter((p: any) => !p.type.startsWith('data-authz-'))
       .map((p: any) => ({ kind: p.type.slice(5), data: p.data }));
     // One turn can produce several parts for the same artifact — a first
     // proposal then a correction, or a list fetched twice. Render only the
@@ -667,6 +715,9 @@
             {#if textOf(msg)}
               <div class="msg-content md">{@html renderMarkdown(textOf(msg))}</div>
             {/if}
+            {#each approvalsOf(msg) as a (a.request.request_id)}
+              <ApprovalCard request={a.request} resolved={a.resolved} />
+            {/each}
             {#each widgetsOf(msg) as w}
               {#if w.kind in ARTIFACTS}
                 <ArtifactWidget kind={w.kind as ArtifactKind} data={w.data} onopen={(a) => (openArtifact = a)} />
@@ -744,6 +795,31 @@
           <button class="bar-icon" onclick={() => fileInput?.click()} title="Attach a text file" aria-label="Attach a text file">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>
           </button>
+
+          <!-- Permissions: what this conversation has allowed or declined, and the
+               only place a refusal can be reopened. Hidden until a session exists,
+               since there is nothing to show before the first turn. -->
+          {#if sessionId}
+            <div class="perm-pick">
+              <button
+                class="bar-icon"
+                class:on={permOpen}
+                onclick={() => { permOpen = !permOpen; if (permOpen) permRev += 1; }}
+                title="Permissions in this conversation"
+                aria-haspopup="dialog"
+                aria-expanded={permOpen}
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M8 1l5.5 2.2v4c0 3.5-2.3 6.4-5.5 7.6C4.8 13.6 2.5 10.7 2.5 7.2v-4L8 1z" />
+                </svg>
+              </button>
+              {#if permOpen}
+                <div class="perm-pop">
+                  <PermissionsPanel sessionId={sessionId} rev={permRev} />
+                </div>
+              {/if}
+            </div>
+          {/if}
 
           <!-- Agent: a pill sized to its own label, opening an in-place picker. -->
           <div class="agent-pick">
@@ -1062,6 +1138,19 @@
     background: var(--bg-page);
     flex-shrink: 0;     /* keep the input anchored at the bottom */
   }
+  .perm-pick { position: relative; display: inline-flex; }
+  .perm-pop {
+    position: absolute; bottom: calc(100% + 8px); left: 0;
+    width: 330px; max-width: min(330px, calc(100vw - 32px));
+    max-height: 60vh; overflow-y: auto;
+    padding: 10px 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md, 8px);
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.16);
+    z-index: 200;
+  }
+
   .chat-input-wrap {
     max-width: var(--composer-max);
     margin: 0 auto;

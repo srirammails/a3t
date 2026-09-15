@@ -281,22 +281,51 @@ async fn get_input_handler(
 /// Submit a response to a pending input request (resumes the workflow)
 async fn submit_input_handler(
     axum::extract::Path(request_id): axum::extract::Path<String>,
+    principal: Option<Extension<Principal>>,
     Json(body): Json<Value>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    // An `authz` request is an authorization decision, so answering one is too.
+    // Previously any caller holding a request id could answer any pending
+    // request, unauthenticated — which for approvals would mean granting an
+    // agent a permission on someone else's behalf. The request names the
+    // principal entitled to answer it; anyone else is told it does not exist,
+    // so ids cannot be probed.
+    let pending = flowr_ce_agents::input_manager().get_pending(&request_id).await;
+    if let Some(req) = &pending {
+        if req.request_type == "authz" {
+            let expected = req
+                .context
+                .as_ref()
+                .and_then(|c| c.get("approver"))
+                .and_then(|v| v.as_str());
+            let caller = principal.as_ref().map(|Extension(p)| p.id());
+            match (expected, caller) {
+                (Some(want), Some(got)) if want == got => {}
+                _ => {
+                    warn!(request_id = %request_id,
+                          "rejected approval answer from a principal that is not the approver");
+                    return (StatusCode::NOT_FOUND,
+                        Json(json!({"error": "input request not found"}))).into_response();
+                }
+            }
+        }
+    }
+    let responded_by = principal.as_ref().map(|Extension(p)| p.id().to_string());
+
     let response = flowr_ce_agents::InputResponse {
         request_id: request_id.clone(),
         data: body,
         responded_at: chrono::Utc::now().to_rfc3339(),
-        responded_by: None,
+        responded_by,
     };
 
     match flowr_ce_agents::input_manager().submit_response(response).await {
         Ok(()) => {
             info!(request_id = %request_id, "Human input submitted, workflow resumed");
-            Json(json!({"submitted": true, "request_id": request_id}))
+            Json(json!({"submitted": true, "request_id": request_id})).into_response()
         }
         Err(e) => {
-            Json(json!({"error": e.to_string(), "request_id": request_id}))
+            Json(json!({"error": e.to_string(), "request_id": request_id})).into_response()
         }
     }
 }
@@ -990,6 +1019,22 @@ fn ui_message_stream(
                         "type":"tool-output-available",
                         "toolCallId": v.get("toolCallId").cloned().unwrap_or(Value::Null),
                         "output": v.get("output").cloned().unwrap_or(Value::Null),
+                    })));
+                }
+            }
+            // A permission question, and its answer. Surfaced as data parts so the
+            // client renders the approval card and can retire it in place once
+            // it is answered — the same DataUIPart path the widgets already use.
+            //
+            // `transient: false` matters here: the card must survive a reload.
+            // A question the agent is still suspended on, lost because the tab
+            // refreshed, would leave the run hanging with nothing on screen.
+            "authz-request" | "authz-resolved" => {
+                if let Ok(v) = serde_json::from_str::<Value>(&c.data) {
+                    st.pending.push_back(frame(json!({
+                        "type": format!("data-{}", c.kind),
+                        "id": v.get("request_id").cloned().unwrap_or(Value::Null),
+                        "data": v,
                     })));
                 }
             }
