@@ -700,16 +700,29 @@ async fn policies_test_handler(
             params: serde_json::Value::Null,
         };
         let decision = hook.check(&req).await;
-        let (allowed, reason, policy_ids) = match &decision {
-            flowr_policy::PolicyDecision::Allow => (true, None, Vec::new()),
+        // This endpoint exists to show what the policy WOULD do, so `Ask` is
+        // reported as itself rather than folded into a deny. Collapsing it here
+        // would make the Policies page claim a request is refused when in fact
+        // the user would be prompted and could allow it — the opposite of what a
+        // dry run is for. `allowed` stays false (an unanswered question is not
+        // permission) and `scopes` says what the prompt would offer.
+        let (allowed, reason, policy_ids, scopes) = match &decision {
+            flowr_policy::PolicyDecision::Allow => (true, None, Vec::new(), Vec::new()),
             flowr_policy::PolicyDecision::Deny { reason, policy_ids } =>
-                (false, Some(reason.clone()), policy_ids.clone()),
+                (false, Some(reason.clone()), policy_ids.clone(), Vec::new()),
+            flowr_policy::PolicyDecision::Ask { reason, policy_ids, scopes } => (
+                false,
+                Some(reason.clone()),
+                policy_ids.clone(),
+                scopes.iter().map(|s| s.as_str().to_string()).collect(),
+            ),
         };
         axum::Json(serde_json::json!({
             "decision": decision.label(),
             "allowed": allowed,
             "reason": reason,
             "policy_ids": policy_ids,
+            "scopes": scopes,
             "tested_policies": policies.len(),
         })).into_response()
     }
