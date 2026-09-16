@@ -13,6 +13,14 @@ pub const MCP_CALL: &str = "mcp:call";
 // Flow lifecycle
 pub const FLOW_START: &str = "flow:start";
 pub const FLOW_CANCEL: &str = "flow:cancel";
+/// Placing a flow into a runtime pool — the deployment decision.
+///
+/// Distinct from `flow:start`, which runs a flow that is already deployed.
+/// Deploying chooses WHERE something runs (which runtime pool, which namespace,
+/// shared or isolated), so it is gated on the target rather than the flow: the
+/// resource is the `Runtime`, carrying its labels. That is what lets a policy say
+/// "prod tier needs Admin" without enumerating flows.
+pub const FLOW_DEPLOY: &str = "flow:deploy";
 
 // Agent lifecycle & delegation
 pub const AGENT_SPAWN: &str = "agent:spawn";
@@ -45,6 +53,7 @@ pub const ALL: &[&str] = &[
     MCP_CALL,
     FLOW_START,
     FLOW_CANCEL,
+    FLOW_DEPLOY,
     AGENT_SPAWN,
     AGENT_STOP,
     MEMORY_READ,
@@ -75,6 +84,9 @@ pub fn flow_start() -> Action {
 }
 pub fn flow_cancel() -> Action {
     Action::known(FLOW_CANCEL)
+}
+pub fn flow_deploy() -> Action {
+    Action::known(FLOW_DEPLOY)
 }
 pub fn agent_spawn() -> Action {
     Action::known(AGENT_SPAWN)

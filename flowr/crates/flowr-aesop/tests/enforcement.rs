@@ -881,3 +881,111 @@ async fn dropping_the_ceiling_does_not_loosen_org_policy() {
         other => panic!("a non-Admin must not be asked to authorize authoring — got {other:?}"),
     }
 }
+
+// ── Deployment placement (D1) ────────────────────────────────────────────────
+//
+// Deploying is placing a flow into a runtime pool, authorized on the TARGET: the
+// decision is which pool and namespace work may go into, not which flow is being
+// run. Before this, deploy had no gate at all — any caller could place anything
+// into any pool, production included.
+
+fn deployer(roles: &[&str]) -> Principal {
+    Principal::Human {
+        user_id: "usr-sriram".into(),
+        roles: roles.iter().map(|r| r.to_string()).collect(),
+    }
+}
+
+fn runtime_res(tier: Option<&str>, mode: &str) -> flowr_policy::Resource {
+    let labels: Vec<(String, String)> = tier
+        .map(|t| vec![("tier".to_string(), t.to_string())])
+        .unwrap_or_default();
+    flowr_policy::Resource::runtime("runtime-1", "team-a", mode, labels)
+}
+
+fn deploy_req(principal: Principal, tier: Option<&str>, mode: &str) -> ExecutionRequest {
+    ExecutionRequest {
+        principal,
+        action: flowr_policy::actions::flow_deploy(),
+        resource: runtime_res(tier, mode),
+        context: Default::default(),
+        attributes: Default::default(),
+        params: serde_json::json!({}),
+    }
+}
+
+#[tokio::test]
+async fn anyone_may_deploy_to_a_non_prod_pool() {
+    // Test placement is how people work. Gating it would add constant friction
+    // for an audit trail we get anyway by recording the decision.
+    let hook = CedarHook::baseline().unwrap();
+    assert!(matches!(
+        hook.check(&deploy_req(deployer(&["Viewer"]), Some("test"), "shared")).await,
+        PolicyDecision::Allow
+    ), "a viewer should be able to deploy to test");
+}
+
+#[tokio::test]
+async fn an_unlabelled_pool_is_treated_as_non_prod() {
+    // Pools are authored data; one with no tier must not become a backdoor INTO
+    // prod, but must not be unusable either.
+    let hook = CedarHook::baseline().unwrap();
+    assert!(matches!(
+        hook.check(&deploy_req(deployer(&["Viewer"]), None, "shared")).await,
+        PolicyDecision::Allow
+    ));
+}
+
+#[tokio::test]
+async fn production_placement_requires_admin() {
+    let hook = CedarHook::baseline().unwrap();
+    match hook.check(&deploy_req(deployer(&["Viewer"]), Some("prod"), "shared")).await {
+        PolicyDecision::Deny { .. } => {}
+        other => panic!("a viewer must not deploy to prod — got {other:?}"),
+    }
+    assert!(matches!(
+        hook.check(&deploy_req(deployer(&["Admin"]), Some("prod"), "shared")).await,
+        PolicyDecision::Allow
+    ), "an admin may deploy to prod");
+}
+
+#[tokio::test]
+async fn isolated_placement_requires_admin_even_outside_prod() {
+    // An isolated flow takes a whole runtime rather than sharing one, so it is a
+    // capacity decision as much as an isolation one.
+    let hook = CedarHook::baseline().unwrap();
+    match hook.check(&deploy_req(deployer(&["Viewer"]), Some("test"), "isolated")).await {
+        PolicyDecision::Deny { .. } => {}
+        other => panic!("a viewer must not take a dedicated runtime — got {other:?}"),
+    }
+    assert!(matches!(
+        hook.check(&deploy_req(deployer(&["Admin"]), Some("test"), "isolated")).await,
+        PolicyDecision::Allow
+    ));
+}
+
+#[tokio::test]
+async fn an_admins_agent_is_ASKED_to_deploy_to_prod() {
+    // The point of the whole feature: a model may PROPOSE a production deploy
+    // and a person confirms it. The agent is not allowed outright, because the
+    // Admin exemption is scoped to `principal is User` — but the human behind it
+    // would be allowed, so the hook derives a question rather than a refusal.
+    let hook = CedarHook::baseline().unwrap();
+    match hook.check(&deploy_req(agent_with_roles(&["Admin"]), Some("prod"), "shared")).await {
+        PolicyDecision::Ask { scopes, .. } => {
+            assert!(!scopes.is_empty(), "an Ask must offer a scope to grant");
+        }
+        other => panic!("an Admin's agent should be asked, not refused — got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_viewers_agent_is_refused_prod_never_asked() {
+    // The escalation guard, same as everywhere else: an agent cannot prompt its
+    // way past a limit the human behind it does not hold.
+    let hook = CedarHook::baseline().unwrap();
+    match hook.check(&deploy_req(agent_with_roles(&["Viewer"]), Some("prod"), "shared")).await {
+        PolicyDecision::Deny { .. } => {}
+        other => panic!("a viewer's agent must be refused prod — got {other:?}"),
+    }
+}

@@ -55,10 +55,26 @@ entity Session { owner?: String, is_owner?: Bool };
 entity Llm { model?: String, name?: String };
 entity Flow { name?: String };
 
+// A runtime pool a flow can be DEPLOYED into. Deployment is authorized on the
+// target rather than the flow: the decision is which pool and namespace a
+// principal may place work into. `label_*` carry the pool's authored labels
+// (tier, class, zone, …) under their own prefix so a label can never shadow
+// `namespace` or `mode` and silently change what a rule matches. `mode` is
+// shared|isolated — a dedicated placement is a different cost and blast radius
+// from joining a shared pool, so policy can treat them differently.
+entity Runtime {
+  namespace?: String,
+  mode?: String,
+  label_tier?: String,
+  label_class?: String,
+  label_zone?: String,
+};
+
 action "tool:invoke" appliesTo { principal: [User, Agent, Service], resource: [Tool] };
 action "mcp:call"    appliesTo { principal: [User, Agent, Service], resource: [Tool] };
 action "llm:call"    appliesTo { principal: [User, Agent, Service], resource: [Llm] };
 action "flow:start"  appliesTo { principal: [User, Agent, Service], resource: [Flow] };
+action "flow:deploy" appliesTo { principal: [User, Agent, Service], resource: [Runtime] };
 
 // Registry resource governance — the separation-of-duties seam (§6.4).
 // Chat transcript access (§ session persistence). Reading somebody's conversation

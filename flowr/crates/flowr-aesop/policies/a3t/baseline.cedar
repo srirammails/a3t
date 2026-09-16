@@ -161,3 +161,72 @@ when {
   ["create_flow", "create_agent", "create_agent_template", "delete_agent"].contains(resource.name)
 }
 unless { principal has roles && principal.roles.contains("Admin") };
+
+// ── Deployment placement (canvas) ──
+//
+// Deploying is placing a flow into a runtime pool. It is deliberately NOT
+// covered by the blanket step-action permits above: those let a principal RUN
+// work, which is not the same authority as deciding WHERE work runs and how much
+// of it. So `flow:deploy` is permitted here explicitly and narrowly.
+
+// Any authenticated principal may deploy into a non-production pool. Test
+// placement is how people work; gating it would make the audit trail the only
+// benefit and the friction constant.
+permit(
+  principal,
+  action == Action::"flow:deploy",
+  resource
+) when { resource has label_tier && resource.label_tier != "prod" };
+
+// A pool with no tier at all is treated as non-production. Pools are authored
+// data and an unlabelled one must not become a backdoor into prod, so this is
+// paired with the forbid below rather than standing on its own.
+permit(
+  principal,
+  action == Action::"flow:deploy",
+  resource
+) unless { resource has label_tier };
+
+// Admins may place work anywhere. Deny-by-default means the forbids below cannot
+// grant anything on their own — without this permit, prod and isolated placement
+// would be unreachable for everyone, which is a denial dressed up as a guardrail.
+// Scoped to `principal is User` deliberately: see the Ask note below.
+permit(
+  principal,
+  action == Action::"flow:deploy",
+  resource
+) when {
+  principal is User && principal has roles &&
+  (principal.roles.contains("Admin") || principal.roles.contains("SuperAdmin"))
+};
+
+// Production placement requires Admin, and only a HUMAN may hold it.
+//
+// An agent acting for an Admin therefore does not get prod deployment outright —
+// it gets an `Ask`, because the human behind it would be allowed. That is the
+// delegation prompt, and it is the behaviour we want: a model may propose a
+// production deploy, a person confirms it.
+forbid(
+  principal,
+  action == Action::"flow:deploy",
+  resource
+)
+when { resource has label_tier && resource.label_tier == "prod" }
+unless {
+  principal is User && principal has roles &&
+  (principal.roles.contains("Admin") || principal.roles.contains("SuperAdmin"))
+};
+
+// Dedicated (isolated) placement also requires Admin. An isolated flow takes a
+// whole runtime rather than sharing one, so it is a capacity decision as much as
+// an isolation one, and it should not be reachable by asking a model nicely.
+forbid(
+  principal,
+  action == Action::"flow:deploy",
+  resource
+)
+when { resource has mode && resource.mode == "isolated" }
+unless {
+  principal is User && principal has roles &&
+  (principal.roles.contains("Admin") || principal.roles.contains("SuperAdmin"))
+};

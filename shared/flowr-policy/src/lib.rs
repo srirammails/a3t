@@ -285,6 +285,32 @@ impl Resource {
             .with_attr("name", name_str)
     }
 
+    /// Build a `Runtime` resource for a deployment check.
+    ///
+    /// Deployment is authorized on the TARGET, not the flow: the question is
+    /// which pool and namespace a principal may place work into. The pool's
+    /// labels (`tier`, `class`, `zone`, …) ride as attributes so a policy can say
+    /// "prod tier needs Admin" or "only this team's namespace" without naming
+    /// individual flows. `mode` distinguishes a shared placement from a dedicated
+    /// one, which is a different cost and a different blast radius.
+    pub fn runtime(
+        name: impl Into<String>,
+        namespace: impl Into<String>,
+        mode: impl Into<String>,
+        labels: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        let mut r = Self::new("Runtime", name)
+            .with_attr("namespace", namespace.into())
+            .with_attr("mode", mode.into());
+        for (k, v) in labels {
+            // Labels are authored data, so they are namespaced under their own
+            // keys rather than merged into the top level where they could shadow
+            // `namespace` or `mode` and quietly change what a rule matches.
+            r = r.with_attr(format!("label_{k}"), v);
+        }
+        r
+    }
+
     /// Build a registry `Resource` for a governance check (E2 #2b). Carries the
     /// resource's `type` (e.g. `cedar`) so the SoD guardrail can single out
     /// policy resources — only InfoSec roles may write `type == "cedar"`. In CE

@@ -41,6 +41,100 @@ pub fn canvas_router(storage: Arc<dyn StorageBackend>) -> Router {
         .with_state(state)
 }
 
+/// Authorize placing a flow into a runtime pool.
+///
+/// Deployment had NO gate at all: `deploy_flow` took no principal and never
+/// reached the policy hook, so anyone who could call the endpoint could place any
+/// flow into any pool, production included. This is that choke point.
+///
+/// The resource is the TARGET, not the flow — the decision is which pool and
+/// namespace work may be placed into, so the pool's labels ride as attributes and
+/// a policy can say "prod tier needs Admin" without naming flows.
+///
+/// `Ask` is honoured the same way it is everywhere else: an agent acting for
+/// someone who WOULD be allowed produces a question rather than a refusal, which
+/// is what lets a model propose a production deploy and a person confirm it. A
+/// request with no interactive approver degrades to a denial via
+/// `non_interactive()`.
+async fn authorize_deploy(
+    principal: &flowr_policy::Principal,
+    runtime: Option<&RuntimeSpec>,
+    namespace: &str,
+    mode: &str,
+) -> Result<(), axum::response::Response> {
+    // An unmatched selector has no pool to authorize against. Deploying nowhere
+    // is not a privilege, and the caller already reports `matched: false`, so let
+    // it through to that clearer error rather than denying on a missing resource.
+    let Some(rt) = runtime else { return Ok(()) };
+
+    let resource = flowr_policy::Resource::runtime(
+        rt.name.clone(),
+        namespace.to_string(),
+        mode.to_string(),
+        rt.labels.iter().map(|(k, v)| (k.clone(), v.clone())),
+    );
+    let req = flowr_policy::ExecutionRequest {
+        principal: principal.clone(),
+        action: flowr_policy::actions::flow_deploy(),
+        resource,
+        context: Default::default(),
+        attributes: Default::default(),
+        params: serde_json::Value::Null,
+    };
+    let decision = flowr_policy::policy_hook().check(&req).await;
+    flowr_policy::audit::record(&req, &decision);
+
+    match decision.non_interactive() {
+        flowr_policy::PolicyDecision::Allow => Ok(()),
+        flowr_policy::PolicyDecision::Deny { reason, policy_ids } => Err((
+            axum::http::StatusCode::FORBIDDEN,
+            Json(json!({
+                "deployed": false,
+                "error": "forbidden",
+                "reason": reason,
+                "policies": policy_ids,
+                "runtime": rt.name,
+                "namespace": namespace,
+                "mode": mode,
+            })),
+        )
+            .into_response()),
+        flowr_policy::PolicyDecision::Ask { .. } => unreachable!(
+            "non_interactive() collapses Ask into Deny"
+        ),
+    }
+}
+
+/// Resolve where a flow would land and authorize that placement.
+///
+/// Shared by both deploy routes so they cannot drift apart — one of them being
+/// gated and the other not is exactly how the original hole would come back.
+async fn gate_placement(
+    storage: &dyn StorageBackend,
+    principal: &flowr_policy::Principal,
+    ns: &str,
+    name: &str,
+) -> Result<(), axum::response::Response> {
+    let spec = match resolve_canvas(storage, ns, name).await {
+        Ok(s) => s,
+        // A canvas that will not resolve cannot be deployed either; let the
+        // deploy path report that in its own words rather than as a denial.
+        Err(_) => return Ok(()),
+    };
+    let runtimes = collect_runtimes(storage).await;
+    let placed = select_runtime(&spec.placement, &runtimes);
+    let effective_ns = if !spec.placement.namespace.is_empty() {
+        spec.placement.namespace.clone()
+    } else {
+        placed.map(|r| r.namespace.clone()).unwrap_or_else(|| ns.to_string())
+    };
+    let mode = match spec.placement.mode {
+        flowr_types::canvas::PlacementMode::Isolated => "isolated",
+        flowr_types::canvas::PlacementMode::Shared => "shared",
+    };
+    authorize_deploy(principal, placed, &effective_ns, mode).await
+}
+
 /// Collect all registered runtime pools (`type_ref == "runtime"`) as typed specs.
 async fn collect_runtimes(storage: &dyn StorageBackend) -> Vec<RuntimeSpec> {
     let mut out = Vec::new();
@@ -219,8 +313,27 @@ async fn preview_placement(
 
 async fn deploy_flow(
     State(state): State<Arc<CanvasState>>,
+    principal: Option<axum::Extension<flowr_policy::Principal>>,
     Path((ns, name)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    // Deploying places workloads, so it is never anonymous. Refusing outright
+    // rather than falling back to a service identity is the same rule the chat
+    // route follows: defaulting a privileged action to a shared identity is the
+    // identity-collapse trap.
+    let Some(axum::Extension(principal)) = principal else {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            Json(json!({ "deployed": false, "error": "authentication required" })),
+        )
+            .into_response();
+    };
+
+    // Authorize against the pool this would actually land in, before anything is
+    // pushed anywhere.
+    if let Err(denied) = gate_placement(&*state.storage, &principal, &ns, &name).await {
+        return denied;
+    }
+
     match compute_placement(&*state.storage, &ns, &name).await {
         Ok(mut p) => {
             let matched = p.get("matched").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -321,8 +434,19 @@ async fn push_to_controller(
 /// even when several agents share a target flow. Presets (no flowRef) are refused.
 async fn deploy_canvas_resource(
     State(state): State<Arc<CanvasState>>,
+    principal: Option<axum::Extension<flowr_policy::Principal>>,
     Path((ns, name)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    let Some(axum::Extension(principal)) = principal else {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            Json(json!({ "deployed": false, "error": "authentication required" })),
+        )
+            .into_response();
+    };
+    if let Err(denied) = gate_placement(&*state.storage, &principal, &ns, &name).await {
+        return denied;
+    }
     let controller_url = std::env::var("A3T_CONTROLLER_URL").ok().filter(|u| !u.is_empty());
     let Some(url) = controller_url else {
         return (axum::http::StatusCode::NOT_IMPLEMENTED, Json(json!({ "deployed": false, "error": "controller not configured (EE only)" }))).into_response();
