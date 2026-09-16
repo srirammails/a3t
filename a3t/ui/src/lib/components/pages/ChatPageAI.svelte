@@ -309,7 +309,11 @@
     agents = (rows as any[]).map(r => ({
       id: r.id,
       name: r.name ?? r.id,
-      llm: r.llm ?? r.resource_bindings?.llm ?? '',
+      // `resource_bindings` arrives as a JSON-ENCODED STRING, not an object, so
+      // `r.resource_bindings?.llm` was always undefined and every agent resolved
+      // to ''. With no `llm_resource` sent, the backend fell back to the default
+      // model — which is why picking an agent never changed which LLM answered.
+      llm: r.llm ?? bindingsOf(r).llm ?? '',
       target: r.target ?? '',
       ep_path: r.ep_path ?? '',
       system_default: !!r.system_default,
@@ -683,6 +687,19 @@
   /// that has already returned.
   function noteChange(summary: string) {
     chat.sendMessage({ text: summary });
+  }
+
+  /// Resource bindings for an agent, whether the server sent an object or a
+  /// JSON string. Both shapes occur: records written by the console are strings,
+  /// and a malformed one must not take the page down.
+  function bindingsOf(r: any): Record<string, any> {
+    const rb = r?.resource_bindings;
+    if (!rb) return {};
+    if (typeof rb === 'object') return rb;
+    if (typeof rb === 'string') {
+      try { return JSON.parse(rb) ?? {}; } catch { return {}; }
+    }
+    return {};
   }
 
   function toolsOf(m: any) {

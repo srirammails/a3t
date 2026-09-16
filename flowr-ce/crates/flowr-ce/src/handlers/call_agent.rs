@@ -210,12 +210,18 @@ async fn resolve_agent_owner(
     if agent_id == session_id {
         return None; // no agent prefix — a plain chat session
     }
-    let row = storage
-        .state()
-        .get(&format!("agent:config:{agent_id}"))
-        .await
-        .ok()
-        .flatten()?;
+    // Agents live in the platform LanceDB table, NOT the state store. The
+    // `agent:config:<id>` key only exists for agents created through
+    // `mcp_create_agent`; everything the console writes goes to `agent_configs`.
+    // Reading state first therefore found nothing for every real agent, which
+    // made this resolver — and with it the whole owner check — silently inert.
+    let q = crate::handlers::call_lancedb::sql_quote(agent_id);
+    let rows = crate::handlers::call_lancedb::query_platform_table(
+        storage.as_ref(), "agent_configs", Some(format!("id = {q}")), 1,
+    )
+    .await
+    .ok()?;
+    let row = rows.into_iter().next()?;
     let cfg = row.get("config").and_then(|c| c.as_object());
     row.get("owner")
         .and_then(|v| v.as_str())
