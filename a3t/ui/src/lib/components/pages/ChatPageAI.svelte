@@ -22,6 +22,7 @@
   import ArtifactPane from '$lib/components/chat/ArtifactPane.svelte';
   import ApprovalCard from '$lib/components/chat/ApprovalCard.svelte';
   import PermissionsPanel from '$lib/components/chat/PermissionsPanel.svelte';
+  import { listPendingApprovals, type PendingApproval } from '$lib/services/api';
   import ListWidget from '$lib/components/chat/ListWidget.svelte';
   import AppHome from '$lib/shell/AppHome.svelte';
   import { ARTIFACTS, LIST_KIND_TO_ITEM, toEditorText, type ArtifactKind } from '$lib/components/chat/artifacts';
@@ -509,6 +510,33 @@
 
   let attachments = $state<{ name: string; text: string; size: number }[]>([]);
   let attachError = $state('');
+  /// Approvals this conversation is blocked on, polled from the server.
+  ///
+  /// The stream also carries the question as a data part, which renders the card
+  /// instantly — but a stream frame is one-shot. Miss it (a reload, a dropped
+  /// connection, a listener that attached a beat late) and the agent stays
+  /// suspended with nothing on screen to answer, which is a hang the user cannot
+  /// get out of. Server-held pending state is the dependable source, so the card
+  /// comes from here and the stream frame is only an accelerator.
+  let pendingApprovals = $state<PendingApproval[]>([]);
+
+  $effect(() => {
+    const sid = sessionId;
+    if (!sid) { pendingApprovals = []; return; }
+    let alive = true;
+    const tick = async () => {
+      if (!alive) return;
+      try {
+        pendingApprovals = await listPendingApprovals(serverSession());
+      } catch { /* transient — the next tick retries */ }
+    };
+    tick();
+    // 3s: a suspended run is already waiting on a human, so this is never the
+    // slow part, and it stops as soon as the question is answered.
+    const id = setInterval(tick, 3000);
+    return () => { alive = false; clearInterval(id); };
+  });
+
   /// The permissions popover. `permRev` forces a reload each time it opens, so
   /// it never shows a stale answer from earlier in the conversation.
   let permOpen = $state(false);
@@ -790,6 +818,15 @@
     </div>
 
     <div class="chat-input-area">
+      <!-- A question the run is blocked on sits directly above the composer, not
+           buried in the transcript: the agent cannot continue until it is
+           answered, so it must be visible without scrolling. -->
+      {#each pendingApprovals as p (p.request_id)}
+        <div class="pending-approval">
+          <ApprovalCard request={p} />
+        </div>
+      {/each}
+
       <div class="chat-input-wrap">
         {#if attachments.length > 0 || attachError}
           <div class="attach-row">
@@ -1167,6 +1204,8 @@
     background: var(--bg-page);
     flex-shrink: 0;     /* keep the input anchored at the bottom */
   }
+  .pending-approval { width: 100%; max-width: 760px; margin: 0 auto 8px; }
+
   .perm-pick { position: relative; display: inline-flex; }
   .perm-pop {
     position: absolute; bottom: calc(100% + 8px); left: 0;

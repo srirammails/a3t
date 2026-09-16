@@ -577,6 +577,37 @@ export async function liftPermission(sessionId: string, key: string): Promise<bo
   return !!(res.ok && res.data?.lifted);
 }
 
+/// Approvals this conversation is currently blocked on.
+///
+/// The agent streams the question as a data part, but a stream frame is a
+/// one-shot: miss it — a reload, a dropped connection, a client that started
+/// listening a moment late — and the run stays suspended with nothing on screen
+/// to answer. The pending list is server-held state, so it is the reliable
+/// source; the stream frame just makes the card appear instantly when it works.
+export interface PendingApproval {
+  request_id: string;
+  tool: string;
+  server?: string | null;
+  arguments?: any;
+  reason?: string;
+  scopes?: string[];
+}
+
+export async function listPendingApprovals(sessionId: string): Promise<PendingApproval[]> {
+  const res = await request<{ inputs: any[] }>('/inputs');
+  if (!res.ok || !Array.isArray(res.data?.inputs)) return [];
+  return res.data.inputs
+    .filter((i) => i?.request_type === 'authz' && i?.context?.session_id === sessionId)
+    .map((i) => ({
+      request_id: i.id,
+      tool: i.context?.tool ?? 'a tool',
+      server: i.context?.server ?? null,
+      arguments: i.context?.arguments,
+      reason: i.context?.reason ?? i.message ?? '',
+      scopes: Array.isArray(i.options) ? i.options : ['once', 'session'],
+    }));
+}
+
 /// Answer a pending approval. The agent is suspended on this request id and
 /// resumes as soon as the answer lands.
 export async function answerApproval(
