@@ -165,7 +165,7 @@ pub async fn request_approval(
     grants::record(
         session_id,
         grants::answered(
-            key,
+            key.clone(),
             flowr_policy::actions::MCP_CALL,
             "Tool",
             &decision_id,
@@ -175,6 +175,15 @@ pub async fn request_approval(
             approver,
         ),
     );
+
+    // Spend a one-time grant on the call that asked for it.
+    //
+    // This function returns `Allow` straight to the caller rather than going back
+    // through `consult`, so without this the single use was still unspent and the
+    // NEXT call consumed it — "just this once" quietly authorized two calls.
+    if allowed && scope == GrantScope::Once {
+        let _ = grants::consult(session_id, &key);
+    }
 
     crate::token_stream::publish(
         session_id,

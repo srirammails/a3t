@@ -288,6 +288,20 @@ mod tests {
     }
 
     #[test]
+    fn a_once_grant_spent_at_approval_time_authorizes_nothing_further() {
+        // The approval path returns Allow directly for the call that raised the
+        // question, then spends the use. A second call must therefore find the
+        // question open again rather than riding the same grant.
+        let s = sess("once-spent");
+        let key = decision_key("mcp:call", "Tool", "delete_flow");
+        record(&s, grant(GrantScope::Once));
+        // The approving call spends it.
+        assert_eq!(consult(&s, &key).unwrap().verdict, Verdict::Granted);
+        // Any later call asks again.
+        assert!(consult(&s, &key).is_none(), "a one-time grant must not span two calls");
+    }
+
+    #[test]
     fn a_session_grant_keeps_authorizing() {
         let s = sess("session");
         let key = decision_key("mcp:call", "Tool", "delete_flow");
