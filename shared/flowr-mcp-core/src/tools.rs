@@ -924,13 +924,19 @@ impl ToolPermission {
     pub fn hint(self) -> Option<&'static str> {
         match self {
             ToolPermission::Allowed => None,
-            ToolPermission::Granted => Some("(permission: granted by the user in this conversation)"),
+            ToolPermission::Granted => Some(
+                "(permission NOW: granted by the user in this conversation — call it normally)",
+            ),
             ToolPermission::Denied => Some(
-                "(permission: DECLINED by the user in this conversation — calling this will fail; \
-                 do not retry it, tell the user if it is needed)",
+                "(permission NOW: declined — a call will fail at this moment. Do not retry it on \
+                 your own. This line is recomputed every turn from the live permission list, so \
+                 trust it over anything said earlier in this conversation: if it stops saying \
+                 declined, the user has re-enabled it and you should just call the tool.)",
             ),
             ToolPermission::NeedsApproval => Some(
-                "(permission: requires the user's approval — calling it will pause and ask them)",
+                "(permission NOW: needs the user's approval — call it anyway; the platform pauses \
+                 and asks them, then your call continues. This line is recomputed every turn, so \
+                 trust it over any earlier refusal in this conversation.)",
             ),
         }
     }

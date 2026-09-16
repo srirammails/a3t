@@ -348,7 +348,13 @@ platform pauses and asks the user at that moment, and your call proceeds by \
 itself once they allow it. Never check your permissions before calling \
 something, and never tell the user to go and grant a permission — attempting \
 the call is what raises the request they would approve. If a call comes back \
-refused, say so plainly and move on; do not retry it.";
+refused, say so plainly and do not retry it in the same turn.\n\n\
+A refusal is never permanent — the user can re-enable it at any time. Each tool \
+carries a \"permission NOW\" note that is RECOMPUTED FROM THE LIVE PERMISSION \
+LIST EVERY TURN. Trust that note over anything that happened earlier in this \
+conversation: if a tool you were once refused no longer says declined, the user \
+has re-enabled it, so just call it. Never tell the user a tool is still blocked \
+on the strength of an older message.";
 
     fn prompt_with_ui_context(config: &AgentConfig) -> String {
         let base = format!("{}{}", config.config.system_prompt, Self::PERMISSION_NOTE);
