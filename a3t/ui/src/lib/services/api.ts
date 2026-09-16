@@ -593,11 +593,18 @@ export interface PendingApproval {
   scopes?: string[];
 }
 
-export async function listPendingApprovals(sessionId: string): Promise<PendingApproval[]> {
+export async function listPendingApprovals(): Promise<PendingApproval[]> {
   const res = await request<{ inputs: any[] }>('/inputs');
   if (!res.ok || !Array.isArray(res.data?.inputs)) return [];
   return res.data.inputs
-    .filter((i) => i?.request_type === 'authz' && i?.context?.session_id === sessionId)
+    // Deliberately NOT filtered by session. Matching the conversation key meant
+    // agreeing on it across the route, the server-side transcript row and the
+    // agent-prefixed id the runtime uses — and any mismatch silently hid the
+    // card, leaving a suspended agent with no way to be answered. A pending
+    // approval always belongs to a run this user started, and answering one they
+    // are not the approver for is refused server-side, so showing every pending
+    // question is both safe and far harder to get wrong.
+    .filter((i) => i?.request_type === 'authz')
     .map((i) => ({
       request_id: i.id,
       tool: i.context?.tool ?? 'a tool',

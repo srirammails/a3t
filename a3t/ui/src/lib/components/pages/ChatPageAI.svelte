@@ -521,13 +521,15 @@
   let pendingApprovals = $state<PendingApproval[]>([]);
 
   $effect(() => {
-    const sid = sessionId;
-    if (!sid) { pendingApprovals = []; return; }
+    // Runs unconditionally: a brand-new conversation has no `sessionId` until its
+    // first turn completes, and the agent can already be suspended waiting on an
+    // approval by then. Gating this on a session id hid the card during exactly
+    // the window it was needed.
     let alive = true;
     const tick = async () => {
       if (!alive) return;
       try {
-        pendingApprovals = await listPendingApprovals(serverSession());
+        pendingApprovals = await listPendingApprovals();
       } catch { /* transient — the next tick retries */ }
     };
     tick();
@@ -687,7 +689,16 @@
       if (p.type !== 'data-authz-request' || !p.data?.request_id) continue;
       if (seen.has(p.data.request_id)) continue;
       seen.add(p.data.request_id);
-      out.push({ request: p.data, resolved: answers.get(p.data.request_id) ?? null });
+      const resolved = answers.get(p.data.request_id) ?? null;
+      // ONLY answered questions appear in the transcript, as a one-line record
+      // of what was decided. An unanswered one is rendered once, above the
+      // composer, from the polled pending list — the two paths were both
+      // drawing the same question, so the user saw the card twice.
+      //
+      // The pinned copy wins because it is the dependable one: it survives a
+      // reload and a dropped stream frame, which the inline part does not.
+      if (!resolved) continue;
+      out.push({ request: p.data, resolved });
     }
     return out;
   }
@@ -795,6 +806,17 @@
         </div>
       {/each}
 
+      <!-- Questions the run is blocked on, directly under the tool call that
+           raised them. Several can be outstanding at once (an agent may line up
+           more than one call), so they stack here in order rather than being
+           pinned to a single slot above the composer. -->
+      {#each pendingApprovals as p (p.request_id)}
+        <div class="message assistant">
+          <div class="msg-avatar"><span class="agent-mark">A3</span></div>
+          <div class="msg-body"><ApprovalCard request={p} /></div>
+        </div>
+      {/each}
+
       {#if chat.status === 'submitted'}
         <div class="message assistant">
           <div class="msg-avatar"><span class="agent-mark">A3</span></div>
@@ -818,15 +840,6 @@
     </div>
 
     <div class="chat-input-area">
-      <!-- A question the run is blocked on sits directly above the composer, not
-           buried in the transcript: the agent cannot continue until it is
-           answered, so it must be visible without scrolling. -->
-      {#each pendingApprovals as p (p.request_id)}
-        <div class="pending-approval">
-          <ApprovalCard request={p} />
-        </div>
-      {/each}
-
       <div class="chat-input-wrap">
         {#if attachments.length > 0 || attachError}
           <div class="attach-row">
@@ -1204,8 +1217,6 @@
     background: var(--bg-page);
     flex-shrink: 0;     /* keep the input anchored at the bottom */
   }
-  .pending-approval { width: 100%; max-width: 760px; margin: 0 auto 8px; }
-
   .perm-pick { position: relative; display: inline-flex; }
   .perm-pop {
     position: absolute; bottom: calc(100% + 8px); left: 0;

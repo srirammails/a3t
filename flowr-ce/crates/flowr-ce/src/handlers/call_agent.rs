@@ -535,6 +535,9 @@ impl TaskHandler for AgentHandler {
             let llm_resource = config.config.llm_resource.as_deref().unwrap_or("default-llm");
 
             // Build tool list: merge inline tools + tool_flows (fetch flow metadata)
+            // The same ceiling the gate will apply, so the advertised permission
+            // state matches what actually happens when the tool is called.
+            let ceiling_for_hints = build_ceiling_attributes(&config.config, &ctx.template_meta);
             let mut all_tools: Vec<Value> = config.config.tools.clone();
             for (tool_name, flow_ref) in &config.config.tool_flows {
                 match storage.workflows().get(&flow_ref.namespace, &flow_ref.name).await {
@@ -592,6 +595,29 @@ impl TaskHandler for AgentHandler {
                 }
             }
 
+            // Say, on the tool itself, what will happen if it is called.
+            //
+            // A sentence in the system prompt was not enough: the model kept
+            // deciding for itself that it lacked permission and telling the user
+            // to grant it manually, which can never work — the request a user
+            // approves is raised BY the call. Annotating the tool description is
+            // far harder to reason past, because the model reads it at the moment
+            // it is choosing the tool.
+            for t in all_tools.iter_mut() {
+                let Some(name) = t.get("name").and_then(|v| v.as_str()).map(str::to_string) else {
+                    continue;
+                };
+                let perm = flowr_mcp_core::tool_permission(
+                    &agent_principal, &config.session_id, &name, ceiling_for_hints.clone(),
+                ).await;
+                if let Some(hint) = perm.hint() {
+                    if let Some(d) = t.get_mut("description").and_then(|v| v.as_str()).map(str::to_string) {
+                        t["description"] = Value::String(format!("{d} {hint}"));
+                    } else {
+                        t["description"] = Value::String(hint.to_string());
+                    }
+                }
+            }
             info!(total_tools = all_tools.len(), "tools available for LLM");
 
             for _iter in 0..config.config.max_iterations {
