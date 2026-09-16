@@ -39,6 +39,8 @@ pub use tools::{
     // per-tool permission state the agent's tool list is annotated with.
     authorize_tool_call_decision, apply_session_decisions, tool_permission, ToolPermission,
     authorize_mcp_tool_call, mcp_decision_id,
+    // Dispatch for callers that already authorized — the gate runs exactly once.
+    dispatch_tool_call,
 };
 
 // Re-export the identity type so MCP-server call sites can name the principal

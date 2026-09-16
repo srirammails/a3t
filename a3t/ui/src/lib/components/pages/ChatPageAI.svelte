@@ -894,7 +894,9 @@
               </button>
               {#if permOpen}
                 <div class="perm-pop">
-                  <PermissionsPanel sessionId={sessionId} rev={permRev} />
+                  <!-- serverSession(), not the route id: grants are recorded against the
+                       agent-prefixed session the runtime uses, so the raw id finds nothing. -->
+                  <PermissionsPanel sessionId={serverSession()} rev={permRev} />
                 </div>
               {/if}
             </div>

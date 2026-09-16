@@ -1546,8 +1546,12 @@ async fn call_mcp_tool(
                 return callresult_to_value(result);
             }
         }
-        let result = flowr_mcp_core::handle_tool_call_with_attributes(
-            storage.as_ref(), caller, tool_name, Some(arguments.clone()), attributes,
+        // Already authorized at the top of this function, including resolving any
+        // interactive approval. Gating again here would re-ask the policy without
+        // the session context, see `Ask`, and fail closed — refusing a call the
+        // user had just granted.
+        let result = flowr_mcp_core::dispatch_tool_call(
+            storage.as_ref(), caller, tool_name, Some(arguments.clone()),
         ).await;
         return callresult_to_value(result);
     }

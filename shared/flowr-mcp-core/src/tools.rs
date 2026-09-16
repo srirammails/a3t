@@ -1038,6 +1038,28 @@ pub async fn handle_tool_call_with_attributes(
         return denied;
     }
 
+    dispatch_tool_call(storage, principal, name, Some(args)).await
+}
+
+/// Run a tool that has ALREADY been authorized.
+///
+/// Split out because the gate must happen exactly once. The agent loop
+/// authorizes in `call_mcp_tool` — which is where the interactive `Ask` is
+/// resolved, because only that layer knows the session and can put the question
+/// to a human — and then dispatched through `handle_tool_call_with_attributes`,
+/// which gated a SECOND time. That second check has no session context, so it
+/// re-asked the policy, got `Ask` back, and failed closed: the user granted the
+/// permission, the grant was recorded, and the call was still refused.
+///
+/// Callers that have not authorized must use `handle_tool_call_with_attributes`.
+pub async fn dispatch_tool_call(
+    storage: &dyn StorageBackend,
+    principal: &flowr_policy::Principal,
+    name: &str,
+    arguments: Option<Value>,
+) -> CallToolResult {
+    let args = arguments.unwrap_or(json!({}));
+
     match name {
         // Task documentation
         "list_task_types" => list_task_types(&args).await,
