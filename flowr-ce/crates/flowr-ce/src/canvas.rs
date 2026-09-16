@@ -23,7 +23,9 @@ use axum::{
 use serde_json::json;
 
 use flowr_storage::StorageBackend;
-use flowr_types::canvas::{select_runtime, CanvasAttachment, CanvasSpec, RuntimeSpec};
+use flowr_types::canvas::{
+    apply_patch, bind_to_flow, select_runtime, CanvasAttachment, CanvasSpec, RuntimeSpec,
+};
 
 pub struct CanvasState {
     pub storage: Arc<dyn StorageBackend>,
@@ -38,6 +40,11 @@ pub fn canvas_router(storage: Arc<dyn StorageBackend>) -> Router {
         .route("/flows/:ns/:name/placement", get(preview_placement))
         .route("/flows/:ns/:name/deploy", post(deploy_flow))
         .route("/canvases/:ns/:name/deploy", post(deploy_canvas_resource))
+        // Presets: the deployment shapes a user picks from, reviews, and either
+        // reuses or clones. A preset deploys nothing until it is bound.
+        .route("/presets", get(list_presets))
+        .route("/presets/:ns/:name/clone", post(clone_preset))
+        .route("/canvases/:ns/:name/bind", post(bind_canvas))
         .with_state(state)
 }
 
@@ -102,6 +109,162 @@ async fn authorize_deploy(
         flowr_policy::PolicyDecision::Ask { .. } => unreachable!(
             "non_interactive() collapses Ask into Deny"
         ),
+    }
+}
+
+/// Read every stored canvas as a typed spec, paired with its registry identity.
+async fn stored_canvases(storage: &dyn StorageBackend) -> Vec<(String, String, CanvasSpec)> {
+    let mut out = Vec::new();
+    for ns in ["a3t", "default", "system"] {
+        let Ok(list) = storage.resources().list(ns).await else { continue };
+        for r in list.into_iter().filter(|r| r.type_ref == "canvas") {
+            if let Ok(spec) = serde_json::from_value::<CanvasSpec>(r.config.clone()) {
+                out.push((r.namespace.clone(), r.name.clone(), spec));
+            }
+        }
+    }
+    out
+}
+
+/// A preset rendered for review: enough to DECIDE on, not the whole spec.
+///
+/// "prod-ha" says nothing about whether it is isolated or how far it scales, so
+/// the summary carries exactly the facts someone weighs when choosing — mode,
+/// where it lands, how far it scales, what happens on failure, and whether state
+/// survives between triggers.
+fn preset_summary(ns: &str, name: &str, spec: &CanvasSpec) -> serde_json::Value {
+    json!({
+        "namespace": ns,
+        "name": name,
+        "description": spec.description,
+        "mode": spec.placement.mode,
+        "targetNamespace": spec.placement.namespace,
+        "selector": spec.placement.runtime_selector,
+        "tolerations": spec.placement.tolerations,
+        "scaling": spec.lifecycle.scaling,
+        "restart": spec.lifecycle.restart,
+        "session": spec.lifecycle.session,
+        "dependsOn": spec.health.depends_on,
+    })
+}
+
+/// `GET /canvas/presets` — the deployment shapes available to choose from.
+///
+/// A preset is a canvas with no `flowRef`. Bound canvases are excluded: they
+/// belong to a flow already and are not something to pick from a menu.
+async fn list_presets(State(state): State<Arc<CanvasState>>) -> impl IntoResponse {
+    let presets: Vec<serde_json::Value> = stored_canvases(&*state.storage)
+        .await
+        .into_iter()
+        .filter(|(_, _, spec)| spec.is_preset())
+        .map(|(ns, name, spec)| preset_summary(&ns, &name, &spec))
+        .collect();
+    Json(json!({ "count": presets.len(), "presets": presets }))
+}
+
+/// `POST /canvas/presets/:ns/:name/clone` — copy a preset, with changes.
+///
+/// Body: `{ "name": "...", "namespace": "...", "patch": { … } }`.
+///
+/// The source preset is read and never written: cloning is how one team adapts a
+/// shared shape without altering anyone else's. The patch is validated through
+/// `apply_patch`, so a clone that would not deploy is refused here rather than
+/// discovered later.
+async fn clone_preset(
+    State(state): State<Arc<CanvasState>>,
+    Path((ns, name)): Path<(String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let Some(new_name) = body.get("name").and_then(|v| v.as_str()) else {
+        return (axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "name is required for the clone" }))).into_response();
+    };
+    let new_ns = body.get("namespace").and_then(|v| v.as_str()).unwrap_or(&ns).to_string();
+
+    let src = match state.storage.resources().get(&ns, &name).await {
+        Ok(r) if r.type_ref == "canvas" => r,
+        Ok(r) => return (axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("'{ns}/{name}' is type '{}', not 'canvas'", r.type_ref) }))).into_response(),
+        Err(e) => return (axum::http::StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("preset '{ns}/{name}' not found: {e}") }))).into_response(),
+    };
+    let base: CanvasSpec = match serde_json::from_value(src.config.clone()) {
+        Ok(c) => c,
+        Err(e) => return (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": format!("stored canvas is not a valid spec: {e}") }))).into_response(),
+    };
+
+    let patch = body.get("patch").cloned().unwrap_or_else(|| json!({}));
+    let cloned = match apply_patch(&base, &patch) {
+        Ok(c) => c,
+        Err(problems) => return (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "patch produced an invalid canvas", "problems": problems }))).into_response(),
+    };
+
+    let resource = flowr_types::Resource::new(
+        new_name.to_string(),
+        "canvas",
+        serde_json::to_value(&cloned).unwrap_or(json!({})),
+    )
+    .with_namespace(new_ns.clone())
+    .with_description(cloned.description.clone());
+    match state.storage.resources().create(resource).await {
+        Ok(_) => Json(json!({
+            "cloned": true,
+            "from": format!("{ns}/{name}"),
+            "canvas": format!("{new_ns}/{new_name}"),
+            "spec": cloned,
+            "note": "Not deployed. Bind it to a flow, then deploy.",
+        }))
+        .into_response(),
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to store clone: {e}") }))).into_response(),
+    }
+}
+
+/// `POST /canvas/canvases/:ns/:name/bind` — attach a canvas to a flow.
+///
+/// Body: `{ "flow": "namespace/name" }`.
+///
+/// This is the step that makes a canvas deployable, so the reference has to be
+/// well-formed. Binding still places nothing — deploy does.
+async fn bind_canvas(
+    State(state): State<Arc<CanvasState>>,
+    Path((ns, name)): Path<(String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let Some(flow) = body.get("flow").and_then(|v| v.as_str()) else {
+        return (axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "flow is required, as 'namespace/name'" }))).into_response();
+    };
+    let res = match state.storage.resources().get(&ns, &name).await {
+        Ok(r) if r.type_ref == "canvas" => r,
+        Ok(r) => return (axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("'{ns}/{name}' is type '{}', not 'canvas'", r.type_ref) }))).into_response(),
+        Err(e) => return (axum::http::StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("canvas '{ns}/{name}' not found: {e}") }))).into_response(),
+    };
+    let spec: CanvasSpec = match serde_json::from_value(res.config.clone()) {
+        Ok(c) => c,
+        Err(e) => return (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": format!("stored canvas is not a valid spec: {e}") }))).into_response(),
+    };
+    let bound = match bind_to_flow(&spec, flow) {
+        Ok(b) => b,
+        Err(problems) => return (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "cannot bind", "problems": problems }))).into_response(),
+    };
+    let cfg = serde_json::to_value(&bound).unwrap_or(json!({}));
+    match state.storage.resources().update(&ns, &name, cfg).await {
+        Ok(_) => Json(json!({
+            "bound": true,
+            "canvas": format!("{ns}/{name}"),
+            "flow": flow,
+            "note": "Not deployed. Preview the placement, then deploy.",
+        }))
+        .into_response(),
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to bind: {e}") }))).into_response(),
     }
 }
 

@@ -1,0 +1,74 @@
+[
+  {
+    "name": "test-single",
+    "namespace": "a3t",
+    "type_ref": "canvas",
+    "description": "Test — one replica in the shared test pool. The usual starting point.",
+    "config": {
+      "flowRef": "",
+      "description": "Test — one replica in the shared test pool. The usual starting point.",
+      "placement": { "mode": "shared", "runtimeSelector": { "tier": "test" }, "namespace": "", "tolerations": [] },
+      "lifecycle": {
+        "state": "running",
+        "session": "ephemeral",
+        "scaling": { "min": 1, "max": 1 },
+        "restart": { "policy": "on-failure", "backoff": "exponential", "maxRetries": 3 }
+      },
+      "health": { "dependsOn": [], "onDependencyDown": "queue" }
+    }
+  },
+  {
+    "name": "prod-ha",
+    "namespace": "a3t",
+    "type_ref": "canvas",
+    "description": "Production — dedicated runtime, 2 to 10 replicas on queue depth. Needs Admin.",
+    "config": {
+      "flowRef": "",
+      "description": "Production — dedicated runtime, 2 to 10 replicas on queue depth. Needs Admin.",
+      "placement": { "mode": "isolated", "runtimeSelector": { "tier": "prod" }, "namespace": "", "tolerations": [] },
+      "lifecycle": {
+        "state": "running",
+        "session": "ephemeral",
+        "scaling": { "min": 2, "max": 10, "metric": "queue_depth", "target": 20 },
+        "restart": { "policy": "on-failure", "backoff": "exponential", "maxRetries": 5 }
+      },
+      "health": { "dependsOn": [], "onDependencyDown": "circuit-break" }
+    }
+  },
+  {
+    "name": "prod-shared",
+    "namespace": "a3t",
+    "type_ref": "canvas",
+    "description": "Production, shared pool — 2 to 5 replicas, no dedicated runtime. Needs Admin.",
+    "config": {
+      "flowRef": "",
+      "description": "Production, shared pool — 2 to 5 replicas, no dedicated runtime. Needs Admin.",
+      "placement": { "mode": "shared", "runtimeSelector": { "tier": "prod" }, "namespace": "", "tolerations": [] },
+      "lifecycle": {
+        "state": "running",
+        "session": "ephemeral",
+        "scaling": { "min": 2, "max": 5, "metric": "queue_depth", "target": 20 },
+        "restart": { "policy": "on-failure", "backoff": "exponential", "maxRetries": 5 }
+      },
+      "health": { "dependsOn": [], "onDependencyDown": "queue" }
+    }
+  },
+  {
+    "name": "session-persistent",
+    "namespace": "a3t",
+    "type_ref": "canvas",
+    "description": "For agents that must remember between triggers — state is checkpointed and resumes on the next call.",
+    "config": {
+      "flowRef": "",
+      "description": "For agents that must remember between triggers — state is checkpointed and resumes on the next call.",
+      "placement": { "mode": "shared", "runtimeSelector": { "tier": "test" }, "namespace": "", "tolerations": [] },
+      "lifecycle": {
+        "state": "running",
+        "session": "persistent",
+        "scaling": { "min": 1, "max": 3 },
+        "restart": { "policy": "on-failure", "backoff": "exponential", "maxRetries": 3 }
+      },
+      "health": { "dependsOn": [], "onDependencyDown": "queue" }
+    }
+  }
+]

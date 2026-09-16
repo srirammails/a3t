@@ -331,6 +331,69 @@ pub struct RuntimeSpec {
     pub default: bool,
 }
 
+/// Deep-merge a JSON patch into a value. Objects merge key-by-key; every other
+/// kind is replaced outright.
+///
+/// Arrays REPLACE rather than concatenate. Merging `tolerations` or
+/// `health.dependsOn` element-wise would make "drop a toleration" impossible to
+/// express, and a patch you cannot use to remove something is a patch that
+/// quietly accumulates.
+fn merge_into(base: &mut serde_json::Value, patch: &serde_json::Value) {
+    match (base, patch) {
+        (serde_json::Value::Object(b), serde_json::Value::Object(p)) => {
+            for (k, v) in p {
+                match b.get_mut(k) {
+                    Some(slot) => merge_into(slot, v),
+                    None => {
+                        b.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        (slot, v) => *slot = v.clone(),
+    }
+}
+
+/// Produce a new spec by applying `patch` over `base`.
+///
+/// This is how a preset is cloned with changes — "prod-ha but four replicas
+/// minimum" is one patch. `base` is borrowed and never mutated: a preset is
+/// shared, and one team editing their copy must not alter another team's
+/// deployment shape.
+///
+/// The result is validated before it is returned, so a patch that produces a
+/// nonsensical spec (`max < min`, a malformed ref) fails here rather than at
+/// deploy time, when the caller has moved on.
+pub fn apply_patch(base: &CanvasSpec, patch: &serde_json::Value) -> Result<CanvasSpec, Vec<String>> {
+    let mut doc = match serde_json::to_value(base) {
+        Ok(v) => v,
+        Err(e) => return Err(vec![format!("cannot serialize canvas: {e}")]),
+    };
+    merge_into(&mut doc, patch);
+    let merged: CanvasSpec = match serde_json::from_value(doc) {
+        Ok(c) => c,
+        Err(e) => return Err(vec![format!("patch produced an invalid canvas: {e}")]),
+    };
+    let errs = merged.validate();
+    if errs.is_empty() { Ok(merged) } else { Err(errs) }
+}
+
+/// Bind a canvas to a flow — the step that makes it deployable.
+///
+/// Kept separate from cloning because they answer different questions: cloning
+/// is "what shape do I want", binding is "what does it apply to". A preset with
+/// no `flowRef` is inert by design, so this is the moment the reference has to be
+/// well-formed.
+pub fn bind_to_flow(spec: &CanvasSpec, flow_ref: &str) -> Result<CanvasSpec, Vec<String>> {
+    if flow_ref.split_once('/').is_none() {
+        return Err(vec![format!("flowRef must be 'namespace/name', got '{flow_ref}'")]);
+    }
+    let mut bound = spec.clone();
+    bound.flow_ref = flow_ref.to_string();
+    let errs = bound.validate();
+    if errs.is_empty() { Ok(bound) } else { Err(errs) }
+}
+
 /// Select the runtime a flow should load into (CE mapping + EE first pass).
 ///
 /// A runtime matches when it carries every label in `selector` (namespace, if
@@ -418,6 +481,85 @@ mod tests {
         let mut p = Placement { namespace: "team-a".into(), ..Default::default() };
         p.runtime_selector.insert("class".into(), "gpu".into());
         assert_eq!(select_runtime(&p, &rts).unwrap().name, "mine");
+    }
+
+    fn preset(name: &str) -> CanvasSpec {
+        let mut c = CanvasSpec {
+            description: format!("{name} preset"),
+            ..Default::default()
+        };
+        c.placement.runtime_selector.insert("tier".into(), "prod".into());
+        c.lifecycle.scaling = Scaling { min: 2, max: 10, metric: None, target: None };
+        c
+    }
+
+    #[test]
+    fn a_patch_changes_only_what_it_names() {
+        // "prod-ha but four replicas minimum" — everything else survives.
+        let base = preset("prod-ha");
+        let out = apply_patch(&base, &serde_json::json!({
+            "lifecycle": { "scaling": { "min": 4 } }
+        }))
+        .expect("valid patch");
+        assert_eq!(out.lifecycle.scaling.min, 4);
+        assert_eq!(out.lifecycle.scaling.max, 10, "max must survive the patch");
+        assert_eq!(out.placement.runtime_selector.get("tier").map(String::as_str), Some("prod"));
+        assert_eq!(out.description, base.description);
+    }
+
+    #[test]
+    fn cloning_never_mutates_the_preset() {
+        // A preset is shared. One team's clone must not alter another team's
+        // deployment shape.
+        let base = preset("prod-ha");
+        let before = base.clone();
+        let _ = apply_patch(&base, &serde_json::json!({ "lifecycle": { "scaling": { "min": 9 } } }));
+        assert_eq!(base, before, "apply_patch must leave its input untouched");
+    }
+
+    #[test]
+    fn a_patch_that_breaks_the_spec_is_refused() {
+        // max < min is caught here rather than at deploy time, when the caller
+        // has moved on and the error has no context.
+        let base = preset("prod-ha");
+        let errs = apply_patch(&base, &serde_json::json!({
+            "lifecycle": { "scaling": { "min": 20 } }
+        }))
+        .expect_err("min above max must fail");
+        assert!(errs.iter().any(|e| e.contains("max must be >= min")), "{errs:?}");
+    }
+
+    #[test]
+    fn an_array_in_a_patch_replaces_rather_than_appends() {
+        // Otherwise removing a toleration would be impossible to express.
+        let mut base = preset("prod-gpu");
+        base.placement.tolerations = vec![
+            Toleration { key: "dedicated".into(), value: "team-a".into() },
+            Toleration { key: "gpu".into(), value: "true".into() },
+        ];
+        let out = apply_patch(&base, &serde_json::json!({
+            "placement": { "tolerations": [ { "key": "gpu", "value": "true" } ] }
+        }))
+        .expect("valid patch");
+        assert_eq!(out.placement.tolerations.len(), 1, "arrays replace, not merge");
+        assert_eq!(out.placement.tolerations[0].key, "gpu");
+    }
+
+    #[test]
+    fn a_preset_stays_a_preset_until_it_is_bound() {
+        let base = preset("test-single");
+        assert!(base.is_preset(), "empty flowRef means preset");
+        let bound = bind_to_flow(&base, "a3t/orders").expect("valid ref");
+        assert!(!bound.is_preset());
+        assert_eq!(bound.flow_ref, "a3t/orders");
+        assert!(base.is_preset(), "binding must not consume the preset");
+    }
+
+    #[test]
+    fn binding_refuses_a_malformed_flow_ref() {
+        let base = preset("test-single");
+        let errs = bind_to_flow(&base, "orders").expect_err("no namespace");
+        assert!(errs.iter().any(|e| e.contains("namespace/name")), "{errs:?}");
     }
 
     #[test]
