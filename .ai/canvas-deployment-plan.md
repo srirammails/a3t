@@ -287,6 +287,33 @@ prod and raises the card; declining sticks for the conversation.
   nothing here has been exercised against a live cluster. Phase D1–D3 are
   meaningful in CE's logical-placement mode, but "it deployed" in EE means the
   controller actually worked, and that is unproven.
+- **Agent execution isolation — the sandbox `call:a3t:agent` deserves.**
+  Deferred deliberately (2026-09-16); revisit as its own track.
+
+  *Intent:* every `call:a3t:agent` invocation runs in a fresh gVisor /
+  AgentContainer sandbox, never in A3T's own process.
+
+  *Where it stands today, verified by reading the code:* the agent's LLM loop
+  runs IN-PROCESS in the A3T server, and its local tool calls dispatch in-process
+  too (`is_local_mcp_url` → no HTTP). Policy constrains WHAT an agent may call;
+  nothing constrains WHERE it runs. Both registered runtimes (`rt-default`,
+  `rt-gpu`) have `url: None`, and nothing in the tree dispatches execution to a
+  runtime URL — `RuntimeSpec.url` is declared and unused. So placement today
+  records where a flow WOULD go and changes nothing about where it executes.
+
+  *Consequence for this track, stated plainly:* choosing `isolated` in a canvas
+  produces a Cedar decision and a controller call, not a separate process. The
+  deployment work here is correct about authorization and configuration, and is
+  NOT yet isolation. Nothing in D1–D4 should be described as sandboxing.
+
+  *What closing it needs:* (1) agents get a canvas by default, with a preset that
+  never selects the control-plane runtime; (2) a real control-plane/data-plane
+  split, with A3T's own process marked as not an agent runtime; (3) the chat path
+  dispatching `call:a3t:agent` to the placed runtime over its endpoint instead of
+  running the loop inline, including streaming tokens back. (3) is larger than
+  D1+D2 combined and is the piece that actually delivers isolation; (1) and (2)
+  without it would be isolation on paper.
+
 - **Rollback / promotion history.** Knowing what was deployed when, and going
   back, is a real requirement and is not covered by any of the above.
 - **Hibernation and sandboxing** (`A3T_RUNTIME_ISOLATION.md`) — canvas concerns,

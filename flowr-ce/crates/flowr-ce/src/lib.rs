@@ -1031,7 +1031,29 @@ fn ui_message_stream(
 
     fn frame(v: Value) -> Event { Event::default().data(v.to_string()) }
 
+    /// End the open text part, if any.
+    ///
+    /// A text part must never be REOPENED after another kind of part interrupts
+    /// it. The client settles the text when a tool call or data part arrives, so
+    /// a later delta naming the same id is a delta for a part it no longer has —
+    /// "Received text-delta for missing text part". Minting a fresh id per block
+    /// was not enough on its own, because `text_open` only cleared at `done`, so
+    /// text that resumed AFTER a tool call kept writing into the settled part.
+    ///
+    /// Closing here makes each contiguous run of text a complete
+    /// start → deltas → end triple, which is the invariant the protocol wants.
+    fn close_text(st: &mut St) {
+        if st.text_open {
+            st.pending.push_back(frame(json!({"type":"text-end","id":st.text_id})));
+            st.text_open = false;
+        }
+    }
+
     fn translate(st: &mut St, c: crate::token_stream::StreamChunk) {
+        // Anything that is not more text ends the current text part first.
+        if c.kind != "token" {
+            close_text(st);
+        }
         match c.kind.as_str() {
             "step_start" => {
                 if st.step_open { st.pending.push_back(frame(json!({"type":"finish-step"}))); }
@@ -1105,10 +1127,7 @@ fn ui_message_stream(
                 }
             }
             "done" => {
-                if st.text_open {
-                    st.pending.push_back(frame(json!({"type":"text-end","id":st.text_id})));
-                    st.text_open = false;
-                }
+                // close_text() above has already ended any open text part.
                 if st.step_open {
                     st.pending.push_back(frame(json!({"type":"finish-step"})));
                     st.step_open = false;
