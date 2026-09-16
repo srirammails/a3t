@@ -34,6 +34,8 @@
     load();
   });
 
+  /// Forget a recorded decision — a refusal ("Ask me again") or a grant
+  /// ("Revoke"). Both re-open the question rather than flipping it.
   async function lift(p: SessionPermission) {
     busyKey = p.key;
     const ok = await liftPermission(sessionId, p.key);
@@ -91,6 +93,14 @@
               {p.scope === 'once' ? 'once' : 'this conversation'} · {when(p.decided_at_ms)}
             </span>
           </span>
+          <!-- A grant must be as revocable as a refusal is liftable, or "for this
+               conversation" can only be undone by deleting the conversation.
+               Like lifting, this RE-OPENS the question rather than flipping it to
+               a refusal: the agent asks again next time it needs the tool. -->
+          <button class="pp-lift" disabled={busyKey === p.key} onclick={() => lift(p)}
+                  title="Remove this permission — the agent will ask again next time">
+            {busyKey === p.key ? '…' : 'Revoke'}
+          </button>
         </div>
       {/each}
     {/if}

@@ -157,11 +157,23 @@ pub fn list_denied(session_id: &str) -> Vec<Decision> {
     list(session_id).into_iter().filter(|d| d.verdict == Verdict::Denied).collect()
 }
 
-/// Lift a refusal so the question can be answered again.
+/// Forget a recorded decision so the question can be asked again.
 ///
-/// Separate from recording a grant: this re-opens the question rather than
-/// answering it, so the next matching call prompts. Returns whether a denial
-/// was actually there to lift.
+/// Applies to BOTH verdicts, and that symmetry is the point: a grant is as
+/// revocable as a refusal is liftable. Someone who allowed a tool for the rest of
+/// a conversation must be able to take it back without ending the conversation.
+///
+/// It re-opens the question rather than answering it the other way — the next
+/// matching call prompts — so nothing is silently granted or silently blocked by
+/// a click in a list. Returns whether there was anything to forget.
+pub fn forget(session_id: &str, key: &str) -> bool {
+    let Ok(mut map) = store().lock() else { return false };
+    let Some(session) = map.get_mut(session_id) else { return false };
+    session.touched_ms = now_ms();
+    session.decisions.remove(key).is_some()
+}
+
+/// Forget a decision only if it is a refusal. Kept for the denial-specific path.
 pub fn lift_denial(session_id: &str, key: &str) -> bool {
     let Ok(mut map) = store().lock() else { return false };
     let Some(session) = map.get_mut(session_id) else { return false };
@@ -265,6 +277,23 @@ mod tests {
         assert!(consult(&s, &key).is_none());
         assert!(list_denied(&s).is_empty());
         assert!(!lift_denial(&s, &key), "lifting a second time is a no-op");
+    }
+
+    #[test]
+    fn a_session_grant_can_be_revoked() {
+        // A grant must be as revocable as a refusal is liftable, or "for this
+        // conversation" becomes irreversible short of deleting the conversation.
+        let s = sess("revoke");
+        let key = decision_key("mcp:call", "Tool", "delete_flow");
+        record(&s, grant(GrantScope::Session));
+        assert_eq!(consult(&s, &key).unwrap().verdict, Verdict::Granted);
+
+        assert!(forget(&s, &key), "revoking reports what it did");
+        // Revoking re-opens the question rather than flipping it to a refusal:
+        // the next call asks, it is not silently blocked.
+        assert!(consult(&s, &key).is_none());
+        assert!(list(&s).is_empty());
+        assert!(!forget(&s, &key), "revoking twice is a no-op");
     }
 
     #[test]

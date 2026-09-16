@@ -839,14 +839,17 @@ async fn lift_permission_handler(
     let Some(key) = body.get("key").and_then(|v| v.as_str()) else {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": "key is required"}))).into_response();
     };
-    let lifted = flowr_policy::grants::lift_denial(&session_id, key);
+    // Forgets either verdict: a grant is as revocable as a refusal is liftable.
+    // Both re-open the question rather than flipping it, so a click in a list
+    // never silently grants or silently blocks anything.
+    let lifted = flowr_policy::grants::forget(&session_id, key);
     Json(json!({
         "lifted": lifted,
         "key": key,
         "note": if lifted {
             "The question is open again — the agent will ask next time it needs this."
         } else {
-            "No refusal was recorded for that key."
+            "Nothing was recorded for that key."
         },
     }))
     .into_response()
