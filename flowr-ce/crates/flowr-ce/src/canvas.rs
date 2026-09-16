@@ -268,6 +268,190 @@ async fn bind_canvas(
     }
 }
 
+// ── Tool-facing operations ──
+//
+// Plain functions over storage, called by both the HTTP routes and the MCP
+// tools. Kept here beside the handlers so the two cannot answer differently:
+// a preview shown in chat must be the preview the deploy then acts on.
+
+/// Every preset available to choose from, as review summaries.
+pub(crate) async fn op_list_presets(storage: &dyn StorageBackend) -> serde_json::Value {
+    let presets: Vec<serde_json::Value> = stored_canvases(storage)
+        .await
+        .into_iter()
+        .filter(|(_, _, spec)| spec.is_preset())
+        .map(|(ns, name, spec)| preset_summary(&ns, &name, &spec))
+        .collect();
+    json!({ "count": presets.len(), "presets": presets })
+}
+
+/// Every runtime pool, with the labels placement selects on.
+pub(crate) async fn op_list_runtimes(storage: &dyn StorageBackend) -> serde_json::Value {
+    let runtimes = collect_runtimes(storage).await;
+    json!({ "count": runtimes.len(), "runtimes": runtimes })
+}
+
+/// One canvas, preset or bound, as stored.
+pub(crate) async fn op_get_canvas(
+    storage: &dyn StorageBackend,
+    ns: &str,
+    name: &str,
+) -> Result<serde_json::Value, String> {
+    let res = storage
+        .resources()
+        .get(ns, name)
+        .await
+        .map_err(|e| format!("canvas '{ns}/{name}' not found: {e}"))?;
+    if res.type_ref != "canvas" {
+        return Err(format!("'{ns}/{name}' is type '{}', not 'canvas'", res.type_ref));
+    }
+    let spec: CanvasSpec = serde_json::from_value(res.config.clone())
+        .map_err(|e| format!("stored canvas is not a valid spec: {e}"))?;
+    Ok(json!({
+        "namespace": ns,
+        "name": name,
+        "isPreset": spec.is_preset(),
+        "summary": preset_summary(ns, name, &spec),
+        "spec": spec,
+    }))
+}
+
+/// Copy a preset, optionally with changes. Never mutates the source.
+pub(crate) async fn op_clone_preset(
+    storage: &dyn StorageBackend,
+    ns: &str,
+    name: &str,
+    new_ns: &str,
+    new_name: &str,
+    patch: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let src = storage
+        .resources()
+        .get(ns, name)
+        .await
+        .map_err(|e| format!("preset '{ns}/{name}' not found: {e}"))?;
+    if src.type_ref != "canvas" {
+        return Err(format!("'{ns}/{name}' is type '{}', not 'canvas'", src.type_ref));
+    }
+    let base: CanvasSpec = serde_json::from_value(src.config.clone())
+        .map_err(|e| format!("stored canvas is not a valid spec: {e}"))?;
+    let cloned = apply_patch(&base, patch)
+        .map_err(|problems| format!("patch produced an invalid canvas: {}", problems.join("; ")))?;
+
+    let resource = flowr_types::Resource::new(
+        new_name.to_string(),
+        "canvas",
+        serde_json::to_value(&cloned).unwrap_or(json!({})),
+    )
+    .with_namespace(new_ns.to_string())
+    .with_description(cloned.description.clone());
+    storage
+        .resources()
+        .create(resource)
+        .await
+        .map_err(|e| format!("failed to store clone: {e}"))?;
+    Ok(json!({
+        "cloned": true,
+        "from": format!("{ns}/{name}"),
+        "canvas": format!("{new_ns}/{new_name}"),
+        "summary": preset_summary(new_ns, new_name, &cloned),
+        "note": "Nothing is deployed yet. Bind it to a flow, then deploy.",
+    }))
+}
+
+/// Attach a canvas to a flow — the step that makes it deployable.
+pub(crate) async fn op_bind_canvas(
+    storage: &dyn StorageBackend,
+    ns: &str,
+    name: &str,
+    flow: &str,
+) -> Result<serde_json::Value, String> {
+    let res = storage
+        .resources()
+        .get(ns, name)
+        .await
+        .map_err(|e| format!("canvas '{ns}/{name}' not found: {e}"))?;
+    if res.type_ref != "canvas" {
+        return Err(format!("'{ns}/{name}' is type '{}', not 'canvas'", res.type_ref));
+    }
+    let spec: CanvasSpec = serde_json::from_value(res.config.clone())
+        .map_err(|e| format!("stored canvas is not a valid spec: {e}"))?;
+    let bound = bind_to_flow(&spec, flow)
+        .map_err(|problems| format!("cannot bind: {}", problems.join("; ")))?;
+    let cfg = serde_json::to_value(&bound).unwrap_or(json!({}));
+    storage
+        .resources()
+        .update(ns, name, cfg)
+        .await
+        .map_err(|e| format!("failed to bind: {e}"))?;
+    Ok(json!({
+        "bound": true,
+        "canvas": format!("{ns}/{name}"),
+        "flow": flow,
+        "note": "Nothing is deployed yet. Preview the placement, then deploy.",
+    }))
+}
+
+/// Deploy a flow into the runtime its canvas selects.
+///
+/// Carries NO authorization of its own: the caller gates first
+/// (`gate_placement` for HTTP, the `flow:deploy` check in the agent loop for the
+/// tool path), because only the caller knows whether an approval can be put to a
+/// human. Two gates in two places is what refused a call the user had just
+/// granted, earlier in this work; one gate, at the layer that can prompt.
+pub(crate) async fn op_deploy_flow(
+    storage: &dyn StorageBackend,
+    ns: &str,
+    name: &str,
+) -> Result<serde_json::Value, String> {
+    let mut p = compute_placement(storage, ns, name).await?;
+    if !p.get("matched").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(format!(
+            "no runtime matches this flow's placement selector — available: {}",
+            p.get("availableRuntimes").map(|v| v.to_string()).unwrap_or_default()
+        ));
+    }
+    if let Some(obj) = p.as_object_mut() {
+        obj.insert("deployed".to_string(), json!(true));
+        // Say plainly what happened. Placement in CE is logical: the flow is
+        // mapped to a pool, not moved into a separate sandbox. Calling that
+        // "deployed" without qualification is how people come to believe they
+        // have isolation they do not have.
+        obj.insert(
+            "note".to_string(),
+            json!("Placement resolved and recorded. In CE this is a logical mapping; \
+isolation requires the EE controller."),
+        );
+    }
+    tracing::info!(flow = %format!("{ns}/{name}"), "flow deployed via tool");
+    Ok(p)
+}
+
+/// The runtime a flow's canvas would place it into, for the deployment gate.
+///
+/// Returns the pool, the effective namespace and the mode — exactly what the
+/// `flow:deploy` decision is made against, so the gate authorizes the placement
+/// that would actually happen rather than an approximation of it.
+pub(crate) async fn placement_target(
+    storage: &dyn StorageBackend,
+    ns: &str,
+    name: &str,
+) -> Option<(RuntimeSpec, String, String)> {
+    let spec = resolve_canvas(storage, ns, name).await.ok()?;
+    let runtimes = collect_runtimes(storage).await;
+    let placed = select_runtime(&spec.placement, &runtimes)?.clone();
+    let effective_ns = if !spec.placement.namespace.is_empty() {
+        spec.placement.namespace.clone()
+    } else {
+        placed.namespace.clone()
+    };
+    let mode = match spec.placement.mode {
+        flowr_types::canvas::PlacementMode::Isolated => "isolated",
+        flowr_types::canvas::PlacementMode::Shared => "shared",
+    };
+    Some((placed, effective_ns, mode.to_string()))
+}
+
 /// Resolve where a flow would land and authorize that placement.
 ///
 /// Shared by both deploy routes so they cannot drift apart — one of them being
@@ -392,22 +576,20 @@ async fn resolve_canvas(storage: &dyn StorageBackend, ns: &str, name: &str) -> R
 
 /// Resolve canvas + pick runtime, returning a JSON placement (shared by preview
 /// and deploy). `Err` is a ready-to-return HTTP response.
-async fn compute_placement(
+/// Where a flow would land, as plain data.
+///
+/// Deliberately not axum-coupled: the MCP tool path needs the same answer as the
+/// HTTP route, and duplicating the resolution is how the two drift apart.
+pub(crate) async fn compute_placement(
     storage: &dyn StorageBackend,
     ns: &str,
     name: &str,
-) -> Result<serde_json::Value, axum::response::Response> {
-    let spec = resolve_canvas(storage, ns, name)
-        .await
-        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response())?;
+) -> Result<serde_json::Value, String> {
+    let spec = resolve_canvas(storage, ns, name).await?;
 
     let errs = spec.validate();
     if !errs.is_empty() {
-        return Err((
-            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({ "error": "invalid canvas", "problems": errs })),
-        )
-            .into_response());
+        return Err(format!("invalid canvas: {}", errs.join("; ")));
     }
 
     let runtimes = collect_runtimes(storage).await;
@@ -470,7 +652,7 @@ async fn preview_placement(
 ) -> impl IntoResponse {
     match compute_placement(&*state.storage, &ns, &name).await {
         Ok(p) => Json(p).into_response(),
-        Err(resp) => resp,
+        Err(e) => (axum::http::StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": e }))).into_response(),
     }
 }
 
@@ -549,7 +731,7 @@ async fn deploy_flow(
             tracing::info!(flow = %format!("{ns}/{name}"), "canvas placement resolved (CE)");
             Json(p).into_response()
         }
-        Err(resp) => resp,
+        Err(e) => (axum::http::StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": e }))).into_response(),
     }
 }
 

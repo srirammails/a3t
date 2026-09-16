@@ -1309,6 +1309,92 @@ pub(crate) async fn handle_agent_tool_call(
         }
     }
 
+    // ── Deployment (canvas) ──
+    // These read/write canvas configuration; `deploy_flow` is the only one that
+    // acts, and it is gated separately on `flow:deploy` in `call_mcp_tool`,
+    // where the session is known and an approval can be put to the user.
+    let ns_arg = |d: &str| args.get("namespace").and_then(|v| v.as_str()).unwrap_or(d).to_string();
+    match name {
+        "list_canvas_presets" => {
+            return Some(CallToolResult::json(
+                crate::canvas::op_list_presets(storage.as_ref()).await,
+            ));
+        }
+        "list_runtimes" => {
+            return Some(CallToolResult::json(
+                crate::canvas::op_list_runtimes(storage.as_ref()).await,
+            ));
+        }
+        "get_canvas" => {
+            let Some(n) = args.get("name").and_then(|v| v.as_str()) else {
+                return Some(CallToolResult::error("name is required".to_string()));
+            };
+            return Some(match crate::canvas::op_get_canvas(storage.as_ref(), &ns_arg("a3t"), n).await {
+                Ok(v) => CallToolResult::json(v),
+                Err(e) => CallToolResult::error(e),
+            });
+        }
+        "preview_placement" => {
+            let Some(n) = args.get("name").and_then(|v| v.as_str()) else {
+                return Some(CallToolResult::error("name is required".to_string()));
+            };
+            return Some(
+                match crate::canvas::compute_placement(storage.as_ref(), &ns_arg("a3t"), n).await {
+                    Ok(v) => CallToolResult::json(v),
+                    Err(e) => CallToolResult::error(e),
+                },
+            );
+        }
+        "clone_canvas" => {
+            let (Some(preset), Some(new_name)) = (
+                args.get("preset").and_then(|v| v.as_str()),
+                args.get("name").and_then(|v| v.as_str()),
+            ) else {
+                return Some(CallToolResult::error("preset and name are required".to_string()));
+            };
+            let pns = args.get("preset_namespace").and_then(|v| v.as_str()).unwrap_or("a3t").to_string();
+            let patch = args.get("patch").cloned().unwrap_or_else(|| json!({}));
+            return Some(
+                match crate::canvas::op_clone_preset(
+                    storage.as_ref(), &pns, preset, &ns_arg("a3t"), new_name, &patch,
+                )
+                .await
+                {
+                    Ok(v) => CallToolResult::json(v),
+                    Err(e) => CallToolResult::error(e),
+                },
+            );
+        }
+        "bind_canvas" => {
+            let (Some(n), Some(flow)) = (
+                args.get("name").and_then(|v| v.as_str()),
+                args.get("flow").and_then(|v| v.as_str()),
+            ) else {
+                return Some(CallToolResult::error("name and flow are required".to_string()));
+            };
+            return Some(
+                match crate::canvas::op_bind_canvas(storage.as_ref(), &ns_arg("a3t"), n, flow).await {
+                    Ok(v) => CallToolResult::json(v),
+                    Err(e) => CallToolResult::error(e),
+                },
+            );
+        }
+        "deploy_flow" => {
+            let Some(n) = args.get("name").and_then(|v| v.as_str()) else {
+                return Some(CallToolResult::error("name is required".to_string()));
+            };
+            // Authorization already happened in `call_mcp_tool` — including any
+            // approval the user was asked for. Reaching here means it was allowed.
+            return Some(
+                match crate::canvas::op_deploy_flow(storage.as_ref(), &ns_arg("a3t"), n).await {
+                    Ok(v) => CallToolResult::json(v),
+                    Err(e) => CallToolResult::error(e),
+                },
+            );
+        }
+        _ => {}
+    }
+
     match name {
         // Intercept create_flow to handle CNCF DSL 1.0.3 YAML
         "create_flow" => {

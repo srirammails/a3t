@@ -1481,6 +1481,70 @@ async fn call_mcp_tool(
         }));
     }
 
+    // ── Deployment needs its own decision, on the target ──
+    //
+    // `mcp:call` on Tool::deploy_flow says whether the agent may USE the tool.
+    // It does not say whether this placement is allowed — that is `flow:deploy`
+    // on the Runtime, which is where "prod needs Admin" lives. Both must pass.
+    //
+    // It happens HERE, not inside the tool, because this is the layer that knows
+    // the session: an owner deploying to prod gets the approval card rather than
+    // a flat refusal, which is the whole point of deploying from a conversation.
+    if tool_name == "deploy_flow" {
+        let flow_ns = arguments.get("namespace").and_then(|v| v.as_str()).unwrap_or("a3t");
+        let flow_name = arguments.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+        if let Some((rt, eff_ns, mode)) =
+            crate::canvas::placement_target(storage.as_ref(), flow_ns, flow_name).await
+        {
+            let resource = flowr_policy::Resource::runtime(
+                rt.name.clone(),
+                eff_ns.clone(),
+                mode.clone(),
+                rt.labels.iter().map(|(k, v)| (k.clone(), v.clone())),
+            );
+            let req = flowr_policy::ExecutionRequest {
+                principal: caller.clone(),
+                action: flowr_policy::actions::flow_deploy(),
+                resource,
+                context: Default::default(),
+                attributes: Default::default(),
+                params: arguments.clone(),
+            };
+            let decision = flowr_policy::policy_hook().check(&req).await;
+            flowr_policy::audit::record(&req, &decision);
+
+            // Answer already given in this conversation, if any — same ledger the
+            // tool gate uses, keyed on the placement rather than the tool, so
+            // approving a deploy to prod does not silently cover a different pool.
+            let deploy_id = format!("{}/{}", rt.name, mode);
+            let decision = flowr_mcp_core::apply_session_decisions(
+                session_id, decision, flowr_policy::actions::FLOW_DEPLOY, "Runtime", &deploy_id,
+            );
+            let decision = match decision {
+                flowr_policy::PolicyDecision::Ask { reason, .. } => {
+                    // A deploy approval is deliberately ONE-SHOT: approving this
+                    // placement must not silently authorize the next one.
+                    crate::approval::request_approval(
+                        session_id, caller, Some(&rt.name), "deploy_flow", arguments, &reason,
+                        &[flowr_policy::GrantScope::Once],
+                    )
+                    .await
+                }
+                settled => settled,
+            };
+            if let flowr_policy::PolicyDecision::Deny { reason, policy_ids } = decision {
+                return Ok(json!({
+                    "error": format!("deployment denied: {reason}"),
+                    "denied": true,
+                    "runtime": rt.name,
+                    "namespace": eff_ns,
+                    "mode": mode,
+                    "policies": policy_ids,
+                }));
+            }
+        }
+    }
+
     // ── The policy gate, for BOTH routes ──
     //
     // This used to sit inside the local-dispatch branch, so a tool served by a

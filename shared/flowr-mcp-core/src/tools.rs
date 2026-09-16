@@ -190,6 +190,109 @@ pub fn get_tools() -> Vec<Tool> {
                 "required": ["instance_id"]
             }),
         },
+        // ── Deployment (canvas) ──
+        //
+        // A3T's deployment mechanism is the canvas: a flow's placement metadata.
+        // A PRESET is a canvas with no flow attached — a reusable shape to pick
+        // from. Nothing is placed anywhere until `deploy_flow`.
+        Tool {
+            name: "list_canvas_presets".to_string(),
+            description: "List the deployment presets available to choose from — the shapes a \
+flow can be deployed with (shared or isolated runtime, which pool, how far it scales, what \
+happens on failure). Start here whenever the user wants to deploy, test or ship something: \
+show them the presets and let them pick, rather than inventing placement yourself."
+                .to_string(),
+            input_schema: json!({ "type": "object", "properties": {} }),
+        },
+        Tool {
+            name: "get_canvas".to_string(),
+            description: "Read one canvas or preset in full, to show the user exactly what it \
+would do before they commit to it.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "namespace": { "type": "string", "default": "a3t" },
+                    "name": { "type": "string", "description": "Canvas or preset name" }
+                },
+                "required": ["name"]
+            }),
+        },
+        Tool {
+            name: "list_runtimes".to_string(),
+            description: "List the runtime pools a flow can be placed into, with the labels \
+placement selects on (tier, class, zone)."
+                .to_string(),
+            input_schema: json!({ "type": "object", "properties": {} }),
+        },
+        Tool {
+            name: "preview_placement".to_string(),
+            description: "Show WHERE a flow would be deployed — which runtime pool, which \
+namespace, shared or isolated, and how far it would scale — WITHOUT deploying anything. \
+Always preview before deploying, and show the user the result: placement is the thing they \
+are agreeing to."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "namespace": { "type": "string", "default": "a3t" },
+                    "name": { "type": "string", "description": "Flow name" }
+                },
+                "required": ["name"]
+            }),
+        },
+        Tool {
+            name: "clone_canvas".to_string(),
+            description: "Copy a preset into a new canvas, optionally changing parts of it — \
+for example cloning a production preset with a higher minimum replica count. The preset \
+itself is never modified, so other flows using it are unaffected. Creates configuration \
+only; nothing is deployed."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "preset_namespace": { "type": "string", "default": "a3t" },
+                    "preset": { "type": "string", "description": "Preset to copy from" },
+                    "name": { "type": "string", "description": "Name for the new canvas" },
+                    "namespace": { "type": "string", "default": "a3t" },
+                    "patch": {
+                        "type": "object",
+                        "description": "Changes to apply, shaped like the canvas spec, e.g. {\"lifecycle\":{\"scaling\":{\"min\":4}}}. Arrays replace rather than merge."
+                    }
+                },
+                "required": ["preset", "name"]
+            }),
+        },
+        Tool {
+            name: "bind_canvas".to_string(),
+            description: "Attach a canvas to a flow, which is what makes it deployable. \
+Creates configuration only; nothing is deployed until deploy_flow."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "namespace": { "type": "string", "default": "a3t" },
+                    "name": { "type": "string", "description": "Canvas name" },
+                    "flow": { "type": "string", "description": "Flow as 'namespace/name'" }
+                },
+                "required": ["name", "flow"]
+            }),
+        },
+        Tool {
+            name: "deploy_flow".to_string(),
+            description: "Deploy a flow — place it into the runtime its canvas selects. This \
+is the step that actually acts, so preview_placement first and show the user what they are \
+approving. Deploying to a production pool, or taking a dedicated runtime, needs the user's \
+approval: call it anyway and the platform will pause and ask them."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "namespace": { "type": "string", "default": "a3t" },
+                    "name": { "type": "string", "description": "Flow name" }
+                },
+                "required": ["name"]
+            }),
+        },
         Tool {
             name: "list_permissions".to_string(),
             description: "List what the user has already allowed or declined in this \
@@ -732,6 +835,10 @@ pub async fn handle_tool_call(
 pub const AGENT_RUNTIME_TOOLS: &[&str] = &[
     "create_agent_template", "list_agent_templates", "get_agent_template",
     "create_agent", "list_agents", "get_agent", "delete_agent", "send_message",
+    // Deployment (canvas) — implemented in flowr-ce beside the canvas handlers,
+    // so they route through the agent-runtime interceptor like the agent tools.
+    "list_canvas_presets", "get_canvas", "list_runtimes", "preview_placement",
+    "clone_canvas", "bind_canvas", "deploy_flow",
 ];
 
 pub fn is_agent_runtime_tool(name: &str) -> bool {
