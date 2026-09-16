@@ -56,70 +56,68 @@ templates, resources, triggers, executions and permissions — nothing about
 runtimes, placement or deployment. "Ask the chat to deploy" is impossible today,
 not merely unwired.
 
-### 2.3 There is no environment dimension
+### 2.3 Presets exist but are unreachable
 
-Canvas is one-per-flow. There is no notion of *this is the test placement, that
-is the prod placement* — so "config for test and config for prod with different
-options" has nowhere to live.
-
----
-
-## 3. Environment configs: base ⊕ overlay
-
-A flow gets **one base canvas** plus **one overlay per environment**:
-
-```yaml
-# base — what the flow NEEDS, environment-independent
-spec:
-  placement: { mode: shared }
-  health:
-    dependsOn: [ … ]          # still auto-derived from the flow's tasks
-  lifecycle:
-    restart: { policy: on-failure }
+`CanvasSpec` already supports presets — an empty `flowRef` marks a reusable
+deployment profile, and `description` exists to label one in a picker. But there
+is no tool to list them, no way to clone or bind one from a conversation, and no
+rendering of one for review. The mechanism is built and has no route to the user.
 
 ---
-# overlay: test
-environment: test
-spec:
-  placement:
-    namespace: team-a-test
-    runtimeSelector: { tier: test }
-  lifecycle:
-    scaling: { min: 1, max: 1 }
 
----
-# overlay: prod
-environment: prod
-spec:
-  placement:
-    mode: isolated            # noisy-neighbour / compliance isolation
-    namespace: team-a-prod
-    runtimeSelector: { tier: prod, class: gpu }
-    tolerations: [ { key: dedicated, value: team-a } ]
-  lifecycle:
-    scaling: { min: 2, max: 10, metric: queue_depth, target: 20 }
+## 3. Presets are the deployment configs
+
+A user wanting to deploy does not want to author placement YAML. They want to
+pick a known-good deployment shape, look at it, and either use it or make their
+own from it. That is exactly the **preset** already in `flowr-types::canvas`: a
+`CanvasSpec` with an empty `flowRef` — a reusable profile that deploys nothing
+until it is bound to a flow. `description` is already documented as the text
+"shown in the canvas picker to choose a preset".
+
+So the deployment configs are presets, named for what they are for:
+
+```
+test-single        shared pool, tier=test, 1 replica, restart on-failure
+prod-ha            isolated, tier=prod, 2-10 replicas on queue_depth
+prod-gpu           isolated, tier=prod class=gpu, dedicated-node toleration
+batch-ephemeral    shared, ephemeral session, scale to zero when idle
 ```
 
-**The effective canvas is `base` deep-merged with the named overlay**, overlay
-winning per key. The merge is ordinary configuration composition.
+**No base ⊕ overlay merge, and no `environment` field.** An earlier draft of this
+plan proposed layering a per-environment overlay onto a base canvas. Presets make
+that unnecessary: "the test config" and "the prod config" are two presets, each
+readable on its own, each independently authorizable. Merging would add a
+composition step whose result nobody can see without evaluating it — the opposite
+of "user reviews it and decides".
 
-### 3.1 Why this is NOT the policy layering rule
+### 3.1 The lifecycle of a preset
 
-`policy-implementation.md` §2.2 insists layers attenuate and never override. That
-rule does **not** transfer here, and it is worth being explicit about why, because
-applying it by analogy would be wrong.
+```
+preset  ──clone──►  a canvas of your own  ──bind──►  bound to a flow  ──deploy──►  running
+(flowRef empty)     (flowRef still empty,            (flowRef set)                 (placed)
+                     yours to edit)
+```
 
-Policy layers answer *how much authority exists* — there, a lower layer widening
-an upper one destroys the guarantee. Deployment overlays answer *where and how big*
-— and prod legitimately needs MORE than test: more replicas, stricter isolation,
-dedicated nodes. An overlay that could only narrow could never express prod.
+- **Reuse** — bind the preset directly to the flow. Nothing is cloned; the preset
+  stays shared and unedited.
+- **Clone** — copy the preset into a new canvas, change what needs changing, then
+  bind. The preset is untouched, so one team's edit cannot alter another's
+  deployment shape.
 
-**Authority still comes from Cedar, not from the config.** The overlay says what
-is wanted; `flow:deploy` decides whether this principal may have it. Config
-composes freely; placement is authorized. Keeping those two separate is what lets
-the merge stay a plain deep-merge without becoming a security surface.
+Cloning and binding are **authoring**: they write configuration and place nothing.
+Only `deploy_flow` acts.
 
----
+### 3.2 Review before deciding
+
+The user must be able to see what a preset actually does before choosing it —
+placement mode, target namespace, selector, replica range, restart policy,
+session mode. Prose is not enough: "prod-ha" tells you nothing about whether it
+is isolated or how far it scales.
+
+So a preset is rendered in chat as a **card**, the same way the approval question
+is: a data part the agent emits, rendered by the client, with the decision on it
+("Use this" / "Clone and edit"). The pattern, the stream path and the widget
+plumbing already exist.
 
 ## 4. Chat as the deploy surface
 
@@ -135,15 +133,22 @@ than mis-routing silently.
 
 | Tool | Kind | Gate |
 |---|---|---|
-| `list_runtimes` | read | open |
-| `list_canvases` | read | open |
+| `list_canvas_presets` | read | open |
 | `get_canvas` | read | open |
+| `list_runtimes` | read | open |
 | `preview_placement` | read | open |
 | `get_deployment_status` | read | open |
+| `clone_canvas` | write (config) | `resource:create` |
 | `create_canvas` | write (config) | `resource:create` |
 | `update_canvas` | write (config) | `resource:update` |
+| `bind_canvas` | write (config) | `resource:update` |
 | `deploy_flow` | **act** | `flow:deploy` |
 | `pause_flow` / `resume_flow` | **act** | `flow:deploy` |
+
+`list_canvas_presets` is what makes the flow in §4.4 work — it returns presets
+with their `description`, placement summary and scaling range, for rendering as
+review cards. `clone_canvas` takes a preset plus a patch, so "prod-ha but with 4
+replicas minimum" is one call and the shared preset is untouched.
 
 **Authoring is inert until deploy, and that is what makes authoring tools safe to
 give an agent.** `create_canvas`/`update_canvas` only write configuration; nothing
@@ -182,14 +187,23 @@ the tool can call it.
 ### 4.4 The conversation shape
 
 ```
-user:  test this flow
-agent: preview_placement(env=test) → "lands in team-a-test on runtime-test-2, 1 replica"
-       deploy_flow(env=test)       → deployed, status Synced
-user:  looks good, ship it
-agent: preview_placement(env=prod) → "isolated, team-a-prod, 2-10 replicas, gpu tier"
-       deploy_flow(env=prod)       → Cedar: Ask → APPROVAL CARD IN CHAT
-user:  [Approve]                   → deployed
+user:  deploy this flow
+agent: list_canvas_presets()            → renders preset cards for review
+       "test-single and prod-ha fit; test-single is the usual starting point"
+user:  [Use this] on test-single
+agent: bind_canvas(test-single, flow)   → authoring, nothing placed
+       preview_placement(flow)          → "runtime-test-2, team-a-test, 1 replica"
+       deploy_flow(flow)                → deployed, Synced
+user:  ship it to prod but give it 4 replicas minimum
+agent: clone_canvas(prod-ha, {scaling.min: 4})   → a new canvas, prod-ha untouched
+       preview_placement(flow)                    → isolated, tier=prod, 4-10
+       deploy_flow(flow)                          → Cedar: Ask → APPROVAL CARD
+user:  [Approve]                                  → deployed
 ```
+
+Note what the agent never does: invent placement from scratch. It picks from
+presets, shows them, and clones on request. The blast radius of a model getting
+this wrong is a badly-scaled clone that still has to pass preview and approval.
 
 ### 4.5 Prod deploy reuses the approval mechanism exactly
 
@@ -228,17 +242,23 @@ only, the same way `Agent` is filtered out today for lacking persistence.
 agent deploying to prod raises the approval card; the endpoint refuses an
 unauthenticated call. Cedar decisions visible in `/security/audit`.
 
-### Phase D2 — Environment overlays
+### Phase D2 — Presets: list, review, reuse, clone
 
-1. `environment` on the canvas record; `base` + `<env>` overlays stored together.
-2. `effective_canvas(flow, env)` = deep-merge, with the merge covered by tests
-   (overlay wins per key; absent overlay = base unchanged).
-3. `preview_placement` and `deploy` take an `environment` argument, defaulting to
-   `test` — **never** `prod`, so an unqualified "deploy" can never mean production.
+1. Seed a small set of presets (§3) as `type_ref: canvas` registry records with
+   empty `flowRef`.
+2. `list_canvas_presets` returning description + a placement/scaling summary.
+3. `clone_canvas(preset, patch)` — deep-merge the patch over the preset, run
+   `CanvasSpec::validate()`, refuse on error, store as a new canvas. The source
+   preset is never mutated.
+4. `bind_canvas(canvas, flow)` — set `flowRef`; this is the step that makes a
+   canvas deployable, so it validates the ref.
+5. Preset review card in chat: a data part rendering mode, namespace, selector,
+   replica range, restart and session mode, with "Use this" / "Clone and edit".
 
-**Verify:** the same flow lands in different namespaces/tiers per environment;
-prod overlay expresses more replicas and `isolated` mode; a flow with no overlay
-deploys on base alone.
+**Verify:** a preset can be reused by two flows without either affecting the
+other; a clone with a patch differs only in the patched keys; binding a preset
+with a malformed flowRef is refused; `is_preset()` stays true for the source
+after a clone.
 
 ### Phase D3 — Canvas tools in chat
 
