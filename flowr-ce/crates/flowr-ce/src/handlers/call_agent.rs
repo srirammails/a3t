@@ -332,8 +332,26 @@ impl AgentState {
 
     /// Append the console context to the system prompt. Kept out of the message
     /// text so the visible transcript stays exactly what the user typed.
+    /// How the platform wants an agent to behave around permissions.
+    ///
+    /// Appended to every agent's prompt because it describes the RUNTIME, not the
+    /// agent's job, and getting it wrong deadlocks the feature: a model that
+    /// checks whether it is allowed and then asks the user to go and grant
+    /// something never attempts the call, so the approval request is never
+    /// raised and there is nothing for the user to approve. Observed live — the
+    /// agent called `list_permissions`, saw an empty list, and told the user to
+    /// approve in a panel that had nothing in it.
+    const PERMISSION_NOTE: &'static str = "\n\n## Tool permissions\n\
+Some tools need the user's approval. You do not have to arrange that, and you \
+must not try to: just call the tool you need. If approval is required the \
+platform pauses and asks the user at that moment, and your call proceeds by \
+itself once they allow it. Never check your permissions before calling \
+something, and never tell the user to go and grant a permission — attempting \
+the call is what raises the request they would approve. If a call comes back \
+refused, say so plainly and move on; do not retry it.";
+
     fn prompt_with_ui_context(config: &AgentConfig) -> String {
-        let base = config.config.system_prompt.clone();
+        let base = format!("{}{}", config.config.system_prompt, Self::PERMISSION_NOTE);
         let Some(ui) = config.ui_context.as_ref().and_then(|v| v.as_object()) else {
             return base;
         };

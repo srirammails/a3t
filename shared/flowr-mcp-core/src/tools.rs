@@ -192,10 +192,15 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "list_permissions".to_string(),
-            description: "List what the user has allowed or declined for this conversation. \
-Use it when the user asks what they have denied or granted, or when a call of yours was \
-refused and you need to tell them what is blocked. Read-only: you cannot change a \
-permission from here — only the user can, from the permissions panel in the chat."
+            description: "List what the user has already allowed or declined in this \
+conversation. Use it ONLY when the user asks what they have granted or denied, or to \
+explain a refusal that already happened.\n\n\
+NEVER call this to check whether you are allowed to use another tool, and never ask the \
+user to grant a permission before you have tried. Just call the tool you need: if it \
+requires approval the platform pauses and asks the user right then, and your call \
+continues automatically once they allow it. An empty list here does NOT mean you are \
+blocked — it means nothing has been asked yet. Pre-checking only stalls the \
+conversation, because the request the user would approve is never raised."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
