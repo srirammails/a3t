@@ -21,6 +21,8 @@
   import ArtifactWidget from '$lib/components/chat/ArtifactWidget.svelte';
   import ArtifactPane from '$lib/components/chat/ArtifactPane.svelte';
   import ApprovalCard from '$lib/components/chat/ApprovalCard.svelte';
+  import CanvasPresetCards from '$lib/components/chat/CanvasPresetCards.svelte';
+  import CanvasPlacementCard from '$lib/components/chat/CanvasPlacementCard.svelte';
   import PermissionsPanel from '$lib/components/chat/PermissionsPanel.svelte';
   import { listPendingApprovals, type PendingApproval } from '$lib/services/api';
   import ListWidget from '$lib/components/chat/ListWidget.svelte';
@@ -787,7 +789,13 @@
               <ApprovalCard request={a.request} resolved={a.resolved} />
             {/each}
             {#each widgetsOf(msg) as w}
-              {#if w.kind in ARTIFACTS}
+              {#if w.kind === 'canvas-presets'}
+                <!-- A choice is sent back as a message, so it passes the same
+                     tools and gates as anything the user types. -->
+                <CanvasPresetCards data={w.data} onchoose={noteChange} />
+              {:else if w.kind === 'canvas-placement'}
+                <CanvasPlacementCard data={w.data} />
+              {:else if w.kind in ARTIFACTS}
                 <ArtifactWidget kind={w.kind as ArtifactKind} data={w.data} onopen={(a) => (openArtifact = a)} />
               {:else if w.kind in LIST_KIND_TO_ITEM}
                 <ListWidget kind={w.kind} data={w.data} onopen={(a) => (openArtifact = a)} />

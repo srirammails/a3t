@@ -842,6 +842,32 @@ impl TaskHandler for AgentHandler {
                                 crate::token_stream::publish(&config.session_id, "data",
                                     json!({"name": kind, "data": data}).to_string());
                             }
+
+                            // Deployment results render as cards the user DECIDES on,
+                            // not as JSON in the execution log. Choosing a deployment
+                            // shape is the user's call — "prod-ha" says nothing about
+                            // isolation or scale, so the card shows what they weigh.
+                            let deploy_card = match tool_name {
+                                "list_canvas_presets" => tool_value.as_ref()
+                                    .and_then(|v| v.get("presets")).cloned()
+                                    .filter(|p| p.as_array().is_some_and(|a| !a.is_empty()))
+                                    .map(|p| ("canvas-presets", json!({ "presets": p }))),
+                                "get_canvas" => tool_value.as_ref()
+                                    .and_then(|v| v.get("summary")).cloned()
+                                    .map(|s| ("canvas-presets", json!({ "presets": [s] }))),
+                                "clone_canvas" => tool_value.as_ref()
+                                    .and_then(|v| v.get("summary")).cloned()
+                                    .map(|s| ("canvas-presets", json!({ "presets": [s], "cloned": true }))),
+                                "preview_placement" | "deploy_flow" => tool_value.as_ref()
+                                    .filter(|v| v.get("placedRuntime").is_some())
+                                    .cloned()
+                                    .map(|v| ("canvas-placement", v)),
+                                _ => None,
+                            };
+                            if let Some((kind, data)) = deploy_card {
+                                crate::token_stream::publish(&config.session_id, "data",
+                                    json!({"name": kind, "data": data}).to_string());
+                            }
                         }
 
                         state.tool_calls_made += 1;
