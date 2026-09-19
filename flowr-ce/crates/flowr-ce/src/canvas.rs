@@ -137,6 +137,7 @@ fn preset_summary(ns: &str, name: &str, spec: &CanvasSpec) -> serde_json::Value 
         "namespace": ns,
         "name": name,
         "description": spec.description,
+        "shared": spec.is_protected_preset(),
         "mode": spec.placement.mode,
         "targetNamespace": spec.placement.namespace,
         "selector": spec.placement.runtime_selector,
@@ -153,13 +154,7 @@ fn preset_summary(ns: &str, name: &str, spec: &CanvasSpec) -> serde_json::Value 
 /// A preset is a canvas with no `flowRef`. Bound canvases are excluded: they
 /// belong to a flow already and are not something to pick from a menu.
 async fn list_presets(State(state): State<Arc<CanvasState>>) -> impl IntoResponse {
-    let presets: Vec<serde_json::Value> = stored_canvases(&*state.storage)
-        .await
-        .into_iter()
-        .filter(|(_, _, spec)| spec.is_preset())
-        .map(|(ns, name, spec)| preset_summary(&ns, &name, &spec))
-        .collect();
-    Json(json!({ "count": presets.len(), "presets": presets }))
+    Json(op_list_presets(&*state.storage).await)
 }
 
 /// `POST /canvas/presets/:ns/:name/clone` — copy a preset, with changes.
@@ -175,50 +170,18 @@ async fn clone_preset(
     Path((ns, name)): Path<(String, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    // Delegates to the same operation the tool uses, so the HTTP route and chat
+    // cannot clone differently (e.g. one forgetting to mark the copy as the
+    // caller's own).
     let Some(new_name) = body.get("name").and_then(|v| v.as_str()) else {
         return (axum::http::StatusCode::BAD_REQUEST,
             Json(json!({ "error": "name is required for the clone" }))).into_response();
     };
     let new_ns = body.get("namespace").and_then(|v| v.as_str()).unwrap_or(&ns).to_string();
-
-    let src = match state.storage.resources().get(&ns, &name).await {
-        Ok(r) if r.type_ref == "canvas" => r,
-        Ok(r) => return (axum::http::StatusCode::BAD_REQUEST,
-            Json(json!({ "error": format!("'{ns}/{name}' is type '{}', not 'canvas'", r.type_ref) }))).into_response(),
-        Err(e) => return (axum::http::StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("preset '{ns}/{name}' not found: {e}") }))).into_response(),
-    };
-    let base: CanvasSpec = match serde_json::from_value(src.config.clone()) {
-        Ok(c) => c,
-        Err(e) => return (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({ "error": format!("stored canvas is not a valid spec: {e}") }))).into_response(),
-    };
-
     let patch = body.get("patch").cloned().unwrap_or_else(|| json!({}));
-    let cloned = match apply_patch(&base, &patch) {
-        Ok(c) => c,
-        Err(problems) => return (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({ "error": "patch produced an invalid canvas", "problems": problems }))).into_response(),
-    };
-
-    let resource = flowr_types::Resource::new(
-        new_name.to_string(),
-        "canvas",
-        serde_json::to_value(&cloned).unwrap_or(json!({})),
-    )
-    .with_namespace(new_ns.clone())
-    .with_description(cloned.description.clone());
-    match state.storage.resources().create(resource).await {
-        Ok(_) => Json(json!({
-            "cloned": true,
-            "from": format!("{ns}/{name}"),
-            "canvas": format!("{new_ns}/{new_name}"),
-            "spec": cloned,
-            "note": "Not deployed. Bind it to a flow, then deploy.",
-        }))
-        .into_response(),
-        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("failed to store clone: {e}") }))).into_response(),
+    match op_clone_preset(&*state.storage, &ns, &name, &new_ns, new_name, &patch).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (axum::http::StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": e }))).into_response(),
     }
 }
 
@@ -237,34 +200,9 @@ async fn bind_canvas(
         return (axum::http::StatusCode::BAD_REQUEST,
             Json(json!({ "error": "flow is required, as 'namespace/name'" }))).into_response();
     };
-    let res = match state.storage.resources().get(&ns, &name).await {
-        Ok(r) if r.type_ref == "canvas" => r,
-        Ok(r) => return (axum::http::StatusCode::BAD_REQUEST,
-            Json(json!({ "error": format!("'{ns}/{name}' is type '{}', not 'canvas'", r.type_ref) }))).into_response(),
-        Err(e) => return (axum::http::StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("canvas '{ns}/{name}' not found: {e}") }))).into_response(),
-    };
-    let spec: CanvasSpec = match serde_json::from_value(res.config.clone()) {
-        Ok(c) => c,
-        Err(e) => return (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({ "error": format!("stored canvas is not a valid spec: {e}") }))).into_response(),
-    };
-    let bound = match bind_to_flow(&spec, flow) {
-        Ok(b) => b,
-        Err(problems) => return (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({ "error": "cannot bind", "problems": problems }))).into_response(),
-    };
-    let cfg = serde_json::to_value(&bound).unwrap_or(json!({}));
-    match state.storage.resources().update(&ns, &name, cfg).await {
-        Ok(_) => Json(json!({
-            "bound": true,
-            "canvas": format!("{ns}/{name}"),
-            "flow": flow,
-            "note": "Not deployed. Preview the placement, then deploy.",
-        }))
-        .into_response(),
-        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("failed to bind: {e}") }))).into_response(),
+    match op_bind_canvas(&*state.storage, &ns, &name, flow).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (axum::http::StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": e }))).into_response(),
     }
 }
 
@@ -335,8 +273,11 @@ pub(crate) async fn op_clone_preset(
     }
     let base: CanvasSpec = serde_json::from_value(src.config.clone())
         .map_err(|e| format!("stored canvas is not a valid spec: {e}"))?;
-    let cloned = apply_patch(&base, patch)
+    let mut cloned = apply_patch(&base, patch)
         .map_err(|problems| format!("patch produced an invalid canvas: {}", problems.join("; ")))?;
+    // A clone is the caller's own copy, never a shared preset — whatever the
+    // patch said — so it can be edited before it is bound.
+    cloned.shared = false;
 
     let resource = flowr_types::Resource::new(
         new_name.to_string(),
@@ -474,7 +415,7 @@ pub(crate) async fn op_update_canvas(
     }
     let spec: CanvasSpec = serde_json::from_value(res.config.clone())
         .map_err(|e| format!("stored canvas is not a valid spec: {e}"))?;
-    if spec.is_preset() {
+    if spec.is_protected_preset() {
         return Err(format!(
             "'{ns}/{name}' is a shared preset and is not edited in place — clone it with clone_canvas and change the copy"
         ));

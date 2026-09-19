@@ -10,10 +10,27 @@
   /// message, so reuse and clone go through the same tools, the same validation
   /// and the same policy gates as anything typed — a card is a shortcut for
   /// saying it, not a side door.
-  let { data, onchoose }: {
+  import { mcpCall } from '$lib/services/api';
+  import { toEditorText } from './artifacts';
+
+  let { data, onchoose, onview }: {
     data: { presets: any[]; cloned?: boolean };
     onchoose?: (text: string) => void;
+    /// Open the canvas in the side pane (Script + Form). Deciding to reuse or
+    /// clone needs the whole definition, not a card's summary.
+    onview?: (a: { kind: 'canvas'; namespace: string; name: string; text: string }) => void;
   } = $props();
+
+  let viewing = $state('');
+  let viewError = $state('');
+
+  async function view(p: any) {
+    viewing = `${p.namespace}/${p.name}`; viewError = '';
+    const res = await mcpCall('get_canvas', { namespace: p.namespace, name: p.name });
+    viewing = '';
+    if (!res.ok) { viewError = res.error ?? `Could not open ${p.name}`; return; }
+    onview?.({ kind: 'canvas', namespace: p.namespace, name: p.name, text: toEditorText(res.data, 'json') });
+  }
 
   const presets = $derived(Array.isArray(data?.presets) ? data.presets : []);
 
@@ -37,6 +54,7 @@
 </script>
 
 <div class="cpc">
+  {#if viewError}<div class="cpc-banner err">{viewError}</div>{/if}
   {#if data?.cloned}
     <div class="cpc-banner">New canvas created from a preset — not deployed yet.</div>
   {/if}
@@ -47,6 +65,11 @@
         <span class="cpc-mode" class:iso={p.mode === 'isolated'}>
           {p.mode === 'isolated' ? 'dedicated runtime' : 'shared pool'}
         </span>
+        {#if p.shared === false}
+          <!-- An unbound clone is listed alongside presets because it deploys
+               nothing yet; say whose it is, so it is not mistaken for a shared one. -->
+          <span class="cpc-own" title="Your own copy — editable, not bound to a flow yet">your copy</span>
+        {/if}
         {#if needsApproval(p)}<span class="cpc-flag" title="Deploying with this needs Admin approval">needs approval</span>{/if}
       </div>
       {#if p.description}<p class="cpc-desc">{p.description}</p>{/if}
@@ -60,7 +83,11 @@
 
       {#if onchoose && !data?.cloned}
         <div class="cpc-actions">
-          <button class="cpc-btn primary" onclick={() => onchoose?.(`Use the ${p.namespace}/${p.name} preset as it is.`)}>
+          <!-- View first: reuse-or-clone is decided on the full definition. -->
+          <button class="cpc-btn primary" onclick={() => view(p)} disabled={viewing === `${p.namespace}/${p.name}`}>
+            {viewing === `${p.namespace}/${p.name}` ? 'Opening…' : 'View'}
+          </button>
+          <button class="cpc-btn" onclick={() => onchoose?.(`Use the ${p.namespace}/${p.name} preset as it is.`)}>
             Use this
           </button>
           <button class="cpc-btn" onclick={() => onchoose?.(`Clone the ${p.namespace}/${p.name} preset so I can change it.`)}>
@@ -75,6 +102,8 @@
 <style>
   .cpc { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; max-width: 680px; }
   .cpc-banner { font-size: 12px; color: var(--text-3); padding: 2px 2px 0; }
+  .cpc-banner.err { color: #b91c1c; }
+  .cpc-btn:disabled { opacity: 0.6; cursor: default; }
   .cpc-card {
     border: 1px solid var(--border); border-radius: var(--r, 10px);
     background: var(--bg-surface); padding: 12px 14px;
@@ -86,6 +115,10 @@
     background: var(--bg-subtle); color: var(--text-3); border: 1px solid var(--border);
   }
   .cpc-mode.iso { color: var(--spec, #5530a8); border-color: var(--spec-bg, #ede7ff); background: var(--spec-bg, #ede7ff); }
+  .cpc-own {
+    font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+    color: var(--runtime, #1a7158); background: var(--runtime-bg, #e3f4ef);
+  }
   .cpc-flag {
     font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
     color: var(--control, #c97c2e); background: var(--control-bg, #fbf0e0);

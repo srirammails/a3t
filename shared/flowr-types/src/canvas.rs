@@ -66,6 +66,7 @@ pub struct CanvasMeta {
     pub namespace: String,
 }
 fn default_ns() -> String { "default".to_string() }
+fn default_shared() -> bool { true }
 
 /// The deployment metadata itself.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
@@ -82,6 +83,15 @@ pub struct CanvasSpec {
     /// cloned for an agent. Empty on presets. Two-way with `agent.variables.canvasRef`.
     #[serde(default)]
     pub agent_ref: String,
+    /// Whether this is a SHARED preset — a published deployment shape other flows
+    /// reuse — as opposed to someone's own copy.
+    ///
+    /// Needed because "no flowRef" does not tell them apart: a fresh clone has no
+    /// flowRef either, so inferring "shared" from that made every clone
+    /// uneditable until it was bound. Defaults to TRUE so every preset that
+    /// predates the field stays protected; `clone` sets it false on the copy.
+    #[serde(default = "default_shared")]
+    pub shared: bool,
     /// (a) where the flow loads.
     #[serde(default)]
     pub placement: Placement,
@@ -316,6 +326,13 @@ impl CanvasSpec {
     /// Whether this canvas can be deployed (a preset cannot — it has no flow).
     pub fn is_preset(&self) -> bool {
         self.flow_ref.is_empty()
+    }
+
+    /// Whether editing this canvas in place is refused: only an UNBOUND SHARED
+    /// preset is protected. A clone is the caller's own copy and editable before
+    /// binding; a bound canvas belongs to its flow and is editable too.
+    pub fn is_protected_preset(&self) -> bool {
+        self.is_preset() && self.shared
     }
 }
 
@@ -592,6 +609,25 @@ mod tests {
         let mut labels = BTreeMap::new();
         labels.insert("tier".to_string(), tier.to_string());
         RuntimeSpec { name: name.into(), namespace: "default".into(), labels, url: None, default: false }
+    }
+
+    #[test]
+    fn a_stored_preset_without_the_flag_stays_protected() {
+        // Presets written before `shared` existed must not become editable in
+        // place just because the field is missing.
+        let spec: CanvasSpec = serde_json::from_value(serde_json::json!({
+            "flowRef": "", "description": "old preset"
+        }))
+        .unwrap();
+        assert!(spec.is_protected_preset());
+    }
+
+    #[test]
+    fn a_clone_is_editable_before_it_is_bound() {
+        let base: CanvasSpec = serde_json::from_value(serde_json::json!({ "flowRef": "" })).unwrap();
+        let clone = apply_patch(&base, &serde_json::json!({ "shared": false })).unwrap();
+        assert!(clone.is_preset(), "still unbound");
+        assert!(!clone.is_protected_preset(), "but it is the caller's own copy");
     }
 
     #[test]

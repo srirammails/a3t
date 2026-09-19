@@ -10,8 +10,19 @@
   import { canvasApi, mcpCall } from '$lib/services/api';
   import * as YAML from 'yaml';
 
-  let { open = false, canvas = null, onclose, onsaved }:
-    { open?: boolean; canvas?: any; onclose: () => void; onsaved?: () => void } = $props();
+  let { open = false, canvas = null, onclose, onsaved, embedded = false, readonly = false, onsavespec }:
+    {
+      open?: boolean; canvas?: any; onclose: () => void; onsaved?: () => void;
+      /// Render inline (e.g. the chat side pane) instead of as a slide-in panel.
+      embedded?: boolean;
+      /// View only — for a shared preset, which is not edited in place. The
+      /// Script and Form views still show everything; nothing can be changed.
+      readonly?: boolean;
+      /// Save through the caller instead of the canvas registry API. The chat
+      /// pane uses this to save via `update_canvas`, the same Cedar-gated tool
+      /// the agent uses.
+      onsavespec?: (spec: any) => Promise<{ ok: boolean; error?: string }>;
+    } = $props();
 
   // Single "Designer" node — the whole editor is the split-pane designer
   // (config/code on the left, form + AI on the right), mirroring the flow/agent editor.
@@ -62,6 +73,8 @@
   let tolerations = $state<any[]>([]);      // placement.tolerations
   let circuit = $state<any>(null);          // health.circuit
   let agentRef = $state('');                // set when cloned from a preset for an agent
+  let pinRuntime = $state('');              // placement.runtime — a runtime chosen by name
+  let shared = $state(true);                // a shared preset (true) vs someone's own copy
   // The published schema (single source of truth), fetched on open — the editor
   // scaffolds the full spec and can point authors at it for verification.
   let schema = $state<any>(null);
@@ -71,7 +84,9 @@
   let saving = $state(false);
   let msg = $state('');
 
-  $effect(() => { if (open) void init(); });
+  // Embedded instances are mounted per canvas (the pane keys them), so they
+  // initialise once on mount; the slide-in panel initialises each time it opens.
+  $effect(() => { if (open || embedded) void init(); });
 
   async function init() {
     msg = ''; activeSection = 'designer'; depInput = ''; leftMode = 'code'; rightMode = 'form';
@@ -127,11 +142,17 @@
       flowRef,
       description,
       agentRef,
+      // Carried through so saving from this editor never silently turns a
+      // user's copy back into a protected shared preset, or vice versa.
+      shared,
       placement: {
         mode,
         runtimeSelector: textToSelector(selectorText),
         namespace: placeNamespace,
         tolerations,
+        // The pin must round-trip: dropping it here would erase a runtime the
+        // user picked the moment they saved anything else.
+        runtime: pinRuntime || null,
       },
       lifecycle: {
         state: lifeState,
@@ -208,6 +229,8 @@
     onDepDown = h.onDependencyDown ?? 'queue';
     dependsOn = Array.isArray(h.dependsOn) ? h.dependsOn.map((d: any) => d.resource).filter(Boolean) : [];
     tolerations = Array.isArray(p.tolerations) ? p.tolerations : [];
+    pinRuntime = p.runtime ?? '';
+    shared = c.shared ?? true;
     circuit = h.circuit ?? null;
   }
 
@@ -217,6 +240,10 @@
     const ns = placeNamespace.trim();
     const nsOk = (r: any) => !ns || r.namespace === ns;
     const pool = runtimes.filter(nsOk);
+    const labelsOk = (r: any) => Object.entries(sel).every(([k, v]) => (r.labels ?? {})[k] === v);
+    // A pin names the pool, but must still satisfy the selector — same rule as
+    // the server, so the preview never promises a placement deploy would refuse.
+    if (pinRuntime) return pool.find((r) => r.name === pinRuntime && labelsOk(r)) ?? null;
     if (Object.keys(sel).length === 0) return pool.find((r) => r.default) ?? pool[0] ?? null;
     return pool.find((r) => Object.entries(sel).every(([k, v]) => (r.labels ?? {})[k] === v)) ?? null;
   });
@@ -224,8 +251,10 @@
   // Local validation mirroring CanvasSpec::validate.
   const problems = $derived.by(() => {
     const e: string[] = [];
-    if (!flowRef) e.push('Flow is required');
-    else if (!flowRef.includes('/')) e.push("Flow must be 'namespace/name'");
+    // A clone may be saved before it is bound to a flow, so the flow is only
+    // required on the Canvas page, where every canvas is created for a flow.
+    if (!flowRef && !embedded) e.push('Flow is required');
+    else if (flowRef && !flowRef.includes('/')) e.push("Flow must be 'namespace/name'");
     if (Number(scMax) < Number(scMin)) e.push('scaling max must be ≥ min');
     for (const d of dependsOn) if (!d.includes('/')) e.push(`dependsOn '${d}' must be 'namespace/name'`);
     return e;
@@ -236,26 +265,20 @@
     if (problems.length) { msg = problems[0]; return; }
     saving = true; msg = '';
     const body = buildSpec();
+    if (onsavespec) {
+      const r = await onsavespec(body);
+      saving = false;
+      msg = r.ok ? 'Saved' : (r.error || 'Save failed');
+      if (r.ok) onsaved?.();
+      return;
+    }
     const res = canvas ? await canvasApi.update(namespace, name.trim(), body) : await canvasApi.create(namespace, name.trim(), body);
     saving = false;
     if (res.ok) { onsaved?.(); onclose(); } else msg = res.error || `Save failed (HTTP ${res.status})`;
   }
 </script>
 
-<SlideEditor
-  {open}
-  icon="CV"
-  color="var(--control-ink, #3a6ea5)"
-  name={name || 'New Canvas'}
-  meta={canvas ? namespace : 'a3t.io/v1alpha1 · Canvas'}
-  sections={SECTIONS}
-  active={activeSection}
-  onselect={(id) => (activeSection = id)}
-  onsave={save}
-  {saving}
-  saveLabel={canvas ? 'Save canvas' : 'Create canvas'}
-  {onclose}
->
+{#snippet body()}
   {#if msg}<div class="cd-error">{msg}</div>{/if}
 
   <div class="cd-split" class:dragging bind:this={splitContainer} style="grid-template-columns: {splitPercent}% 6px 1fr;">
@@ -276,7 +299,7 @@
       </div>
       <div class="cd-pane-body">
         {#if leftMode === 'code'}
-          <YamlEditor value={yamlSource} onchange={onCodeChange} />
+          <YamlEditor value={yamlSource} onchange={onCodeChange} readOnly={readonly} />
         {:else}
           <div class="cd-preview">
             <div class="cd-sub">Placement</div>
@@ -316,14 +339,17 @@
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg>
             Form
           </button>
+          {#if !embedded}
           <button class="cd-tab" class:active={rightMode === 'ai'} onclick={() => (rightMode = 'ai')}>
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h12a1 1 0 011 1v7a1 1 0 01-1 1H6l-3 2v-2H2a1 1 0 01-1-1V4a1 1 0 011-1z"/></svg>
             AI
           </button>
+          {/if}
         </div>
       </div>
       <div class="cd-pane-body">
         {#if rightMode === 'form'}
+          <fieldset class="cd-fieldset" disabled={readonly}>
           <div class="cd-formcol">
             <div class="cd-sub">Canvas — the flow this deploys</div>
             <label class="cf-field"><span>Name</span><input bind:value={name} placeholder="orders-canvas" readonly={!!canvas} /></label>
@@ -343,6 +369,13 @@
             </label>
             <label class="cf-field"><span>Runtime selector (labels)</span><input bind:value={selectorText} placeholder="class=gpu, tier=prod" /></label>
             <label class="cf-field"><span>Namespace override</span><input bind:value={placeNamespace} placeholder="(flow's namespace)" /></label>
+            <label class="cf-field"><span>Pinned runtime</span>
+              <select bind:value={pinRuntime}>
+                <option value="">— none: select by labels —</option>
+                {#if pinRuntime && !runtimes.some((r) => r.name === pinRuntime)}<option value={pinRuntime}>{pinRuntime} (not registered)</option>{/if}
+                {#each runtimes as r}<option value={r.name}>{r.name}</option>{/each}
+              </select>
+            </label>
 
             <div class="cd-sub">Lifecycle — how it runs</div>
             <div class="cf-grid">
@@ -387,6 +420,7 @@
               <select bind:value={onDepDown}>{#each ON_DEP_DOWN as o}<option value={o}>{o}</option>{/each}</select>
             </label>
           </div>
+          </fieldset>
         {:else}
           <div class="cd-ai">
             <div class="cd-ai-messages">
@@ -403,9 +437,46 @@
       </div>
     </div>
   </div>
+{/snippet}
+
+{#if embedded}
+  <!-- Inline in the chat pane: same Script and Form views, no slide-in chrome. -->
+  <div class="cd-embedded">
+    <div class="cd-embar">
+      <span class="cd-embar-note">{readonly ? "Shared preset — view only. Clone it to make your own." : (flowRef ? `Deploys ${flowRef}` : "Your copy — not bound to a flow yet")}</span>
+      {#if !readonly && onsavespec}
+        <button class="btn sm primary" onclick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+      {/if}
+    </div>
+    {@render body()}
+  </div>
+{:else}
+<SlideEditor
+  {open}
+  icon="CV"
+  color="var(--control-ink, #3a6ea5)"
+  name={name || 'New Canvas'}
+  meta={canvas ? namespace : 'a3t.io/v1alpha1 · Canvas'}
+  sections={SECTIONS}
+  active={activeSection}
+  onselect={(id) => (activeSection = id)}
+  onsave={save}
+  {saving}
+  saveLabel={canvas ? 'Save canvas' : 'Create canvas'}
+  {onclose}
+>
+  {@render body()}
 </SlideEditor>
+{/if}
 
 <style>
+  .cd-embedded { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .cd-embedded .cd-split { flex: 1; min-height: 0; }
+  .cd-embar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .cd-embar-note { font-size: 11.5px; color: var(--text-3); }
+  .cd-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+  .cd-fieldset:disabled { opacity: 0.85; }
+
   .cd-error { position: absolute; top: 48px; right: 16px; z-index: 30; background: var(--warn-bg, #fde8e8); color: var(--warn, #d66); border: 1px solid var(--warn, #d66); border-radius: 6px; padding: 6px 12px; font-size: 12px; }
   .sf-note { font-size: 11.5px; color: var(--text-4); margin: 4px 0 8px; }
   .cf-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; font-size: 12px; color: var(--text-3); }

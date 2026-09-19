@@ -7,6 +7,7 @@
   // so it passes the same Cedar choke point as any other tool call. There is no
   // direct storage path, and a denial is shown rather than swallowed.
   import CanvasDeployBar from './CanvasDeployBar.svelte';
+  import CanvasDesigner from '$lib/components/editor/CanvasDesigner.svelte';
   import { mcpCall } from '$lib/services/api';
   import { navigateToDetail } from '$lib/stores/panels.svelte';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
@@ -138,6 +139,32 @@
     status = { kind: 'ok', text: 'Loaded the agent’s revision' };
   }
 
+  /// The canvas designer's inputs, from the `get_canvas` payload the pane holds.
+  /// `summary.shared` is the server's word on whether this is a protected shared
+  /// preset — the UI does not guess from a missing flowRef, which is what made
+  /// fresh clones look uneditable.
+  const canvasView = $derived.by(() => {
+    if (artifact.kind !== 'canvas') return { canvas: null, readonly: false };
+    let raw: any = null;
+    try { raw = JSON.parse(artifact.text); } catch { raw = null; }
+    const cfg = raw?.spec ?? raw ?? {};
+    return {
+      canvas: { name: artifact.name, namespace: artifact.namespace, config: cfg },
+      readonly: !!raw?.summary?.shared,
+    };
+  });
+
+  /// Save a canvas through `update_canvas` — the same Cedar-gated tool the agent
+  /// uses — then tell the conversation, so the agent is not left reasoning about
+  /// the version it last saw.
+  async function saveCanvasSpec(specObj: any): Promise<{ ok: boolean; error?: string }> {
+    const res = await mcpCall('update_canvas', {
+      namespace: artifact.namespace, name: artifact.name, spec: specObj,
+    });
+    if (res.ok) onapplied?.(`I saved changes to canvas ${artifact.namespace}/${artifact.name}.`);
+    return { ok: res.ok, error: res.error };
+  }
+
   async function save() {
     if (!spec.save) { status = { kind: 'err', text: `No write tool for ${spec.label}` }; return; }
     saving = true; status = null;
@@ -188,7 +215,7 @@
     <div class="pane-id-inline"><span class="pane-kind">{spec.label}</span>{artifact.namespace}/{artifact.name}</div>
     <div class="pane-actions">
       <button class="pbtn" onclick={() => onask?.(`About ${spec.label} ${artifact.namespace}/${artifact.name} (${section}): `)} title="Ask the agent about this">Ask to change…</button>
-      {#if spec.save}
+      {#if spec.save && artifact.kind !== 'canvas'}
         <button class="pbtn primary" onclick={save} disabled={saving}>
           {saving ? 'Saving…' : (spec.draft ? 'Save to registry' : 'Save')}
         </button>
@@ -215,7 +242,20 @@
   {#if status}<div class="pane-status {status.kind}">{status.text}</div>{/if}
   <div class="pane-editor">
     {#key `${artifact.kind}:${artifact.namespace}/${artifact.name}:${appliedSeq}`}
-      {#if artifact.kind === 'flow' || artifact.kind === 'flow_draft' || artifact.kind === 'template'}
+      {#if artifact.kind === 'canvas'}
+        <!-- A canvas gets the canvas designer: Script and Form views, with a live
+             placement preview. Shared presets open READ-ONLY — they are reused by
+             other flows and are cloned, never edited in place. -->
+        <div class="pane-fill">
+          <CanvasDesigner
+            embedded
+            onclose={() => onclose?.()}
+            canvas={canvasView.canvas}
+            readonly={canvasView.readonly}
+            onsavespec={saveCanvasSpec}
+          />
+        </div>
+      {:else if artifact.kind === 'flow' || artifact.kind === 'flow_draft' || artifact.kind === 'template'}
         <!-- Templates are agent flows, so they get the designer too — its form
              is the AgentTemplateEditor with the full sub-tab set.
              Wrapped because `.pane-editor` is a flex column: an unwrapped child

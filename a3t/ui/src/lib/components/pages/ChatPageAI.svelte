@@ -792,7 +792,7 @@
               {#if w.kind === 'canvas-presets'}
                 <!-- A choice is sent back as a message, so it passes the same
                      tools and gates as anything the user types. -->
-                <CanvasPresetCards data={w.data} onchoose={noteChange} />
+                <CanvasPresetCards data={w.data} onchoose={noteChange} onview={(a) => (openArtifact = a)} />
               {:else if w.kind === 'canvas-placement'}
                 <CanvasPlacementCard data={w.data} />
               {:else if w.kind in ARTIFACTS}
