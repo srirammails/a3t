@@ -108,6 +108,16 @@ pub struct Placement {
     /// k8s tolerations (for dedicated/tainted nodes; used mainly by `isolated`).
     #[serde(default)]
     pub tolerations: Vec<Toleration>,
+    /// Pin to one runtime pool BY NAME, instead of selecting by labels.
+    ///
+    /// Labels answer "any pool like this"; a pin answers "that pool" — what a
+    /// person means when they pick a runtime from a list. When set it wins over
+    /// `runtime_selector`, but the selector (and namespace) must still agree with
+    /// the pinned pool: pinning cannot be used to escape a selector that says
+    /// `tier=test` into a prod pool. A pin that contradicts the selector matches
+    /// nothing, which surfaces as "no runtime matches" rather than a silent move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
 }
 
 impl Default for Placement {
@@ -117,6 +127,7 @@ impl Default for Placement {
             runtime_selector: BTreeMap::new(),
             namespace: String::new(),
             tolerations: Vec::new(),
+            runtime: None,
         }
     }
 }
@@ -405,6 +416,21 @@ pub fn select_runtime<'a>(
     runtimes: &'a [RuntimeSpec],
 ) -> Option<&'a RuntimeSpec> {
     let ns_ok = |r: &RuntimeSpec| placement.namespace.is_empty() || r.namespace == placement.namespace;
+    let labels_ok = |r: &RuntimeSpec| {
+        placement
+            .runtime_selector
+            .iter()
+            .all(|(k, v)| r.labels.get(k).map(|rv| rv == v).unwrap_or(false))
+    };
+
+    // A pin names the pool outright — but it still has to satisfy the selector
+    // and namespace, so choosing a runtime by name can never step outside what
+    // the canvas otherwise allows.
+    if let Some(pinned) = placement.runtime.as_deref().filter(|n| !n.is_empty()) {
+        return runtimes
+            .iter()
+            .find(|r| r.name == pinned && ns_ok(r) && labels_ok(r));
+    }
 
     if placement.runtime_selector.is_empty() {
         return runtimes
@@ -560,6 +586,37 @@ mod tests {
         let base = preset("test-single");
         let errs = bind_to_flow(&base, "orders").expect_err("no namespace");
         assert!(errs.iter().any(|e| e.contains("namespace/name")), "{errs:?}");
+    }
+
+    fn pool(name: &str, tier: &str) -> RuntimeSpec {
+        let mut labels = BTreeMap::new();
+        labels.insert("tier".to_string(), tier.to_string());
+        RuntimeSpec { name: name.into(), namespace: "default".into(), labels, url: None, default: false }
+    }
+
+    #[test]
+    fn a_pin_selects_that_runtime_by_name() {
+        let pools = vec![pool("rt-a", "test"), pool("rt-b", "test")];
+        let p = Placement { runtime: Some("rt-b".into()), ..Default::default() };
+        assert_eq!(select_runtime(&p, &pools).map(|r| r.name.as_str()), Some("rt-b"));
+    }
+
+    #[test]
+    fn a_pin_cannot_escape_the_selector() {
+        // Picking a runtime by name must not be a way out of a tier=test canvas
+        // into a production pool. It matches nothing instead, so the caller sees
+        // "no runtime matches" rather than a silent move into prod.
+        let pools = vec![pool("rt-test", "test"), pool("rt-prod", "prod")];
+        let mut p = Placement { runtime: Some("rt-prod".into()), ..Default::default() };
+        p.runtime_selector.insert("tier".into(), "test".into());
+        assert!(select_runtime(&p, &pools).is_none());
+    }
+
+    #[test]
+    fn a_pin_to_an_unknown_runtime_matches_nothing() {
+        let pools = vec![pool("rt-a", "test")];
+        let p = Placement { runtime: Some("rt-gone".into()), ..Default::default() };
+        assert!(select_runtime(&p, &pools).is_none(), "must not fall back to another pool");
     }
 
     #[test]

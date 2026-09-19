@@ -3,7 +3,7 @@
 // Adding a kind means adding a row here and a row in the server's widget table —
 // not another component. `get`/`save` name the MCP tools, so every mutation keeps
 // going through the Cedar-gated tool path with the user's own token.
-export type ArtifactKind = 'flow' | 'flow_draft' | 'agent' | 'template' | 'resource' | 'trigger';
+export type ArtifactKind = 'flow' | 'flow_draft' | 'agent' | 'template' | 'resource' | 'trigger' | 'canvas';
 
 export interface ArtifactSpec {
   label: string;
@@ -34,6 +34,9 @@ export const ARTIFACTS: Record<ArtifactKind, ArtifactSpec> = {
   resource: { label: 'resource', get: 'get_resource',       save: 'create_resource',       idField: 'name', idArgs: ['name'],             format: 'json' },
   // get_trigger takes the trigger UUID, not its name.
   trigger:  { label: 'trigger',  get: 'get_trigger',        save: 'create_trigger',        idField: 'id',   idArgs: ['id'],               format: 'json' },
+  // A flow's deployment metadata. Saving goes through update_canvas, which
+  // refuses shared presets (clone those instead) and validates the spec.
+  canvas:   { label: 'canvas',   get: 'get_canvas',         save: 'update_canvas',         idField: 'name', idArgs: ['name'],             format: 'json' },
 };
 
 /// Build the get/save arguments for one item.
@@ -49,6 +52,8 @@ export function idArgsFor(spec: ArtifactSpec, item: { namespace?: string; name?:
 export const LIST_KIND_TO_ITEM: Record<string, ArtifactKind> = {
   flows: 'flow', agents: 'agent', templates: 'template',
   resources: 'resource', triggers: 'trigger',
+  // Runtime pools are registry resources.
+  runtimes: 'resource',
 };
 
 /// `get_flow` answers in markdown; everything else in JSON. Normalise both to

@@ -403,8 +403,17 @@ pub(crate) async fn op_deploy_flow(
     storage: &dyn StorageBackend,
     ns: &str,
     name: &str,
+    runtime: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let mut p = compute_placement(storage, ns, name).await?;
+    // Resolve against the requested runtime first; only if it actually matches
+    // is the pin written to the canvas. A deploy that fails to place leaves the
+    // stored configuration exactly as it was.
+    let mut p = compute_placement_with(storage, ns, name, runtime).await?;
+    if let Some(rt) = runtime.filter(|r| !r.is_empty()) {
+        if p.get("matched").and_then(|v| v.as_bool()).unwrap_or(false) {
+            pin_runtime(storage, &format!("{ns}/{name}"), rt).await?;
+        }
+    }
     if !p.get("matched").and_then(|v| v.as_bool()).unwrap_or(false) {
         return Err(format!(
             "no runtime matches this flow's placement selector — available: {}",
@@ -427,6 +436,182 @@ isolation requires the EE controller."),
     Ok(p)
 }
 
+/// Record a runtime pin on the canvas bound to `flow_ref`.
+async fn pin_runtime(storage: &dyn StorageBackend, flow_ref: &str, runtime: &str) -> Result<(), String> {
+    let (cns, cname, spec) = stored_canvases(storage)
+        .await
+        .into_iter()
+        .find(|(_, _, s)| s.flow_ref == flow_ref)
+        .ok_or_else(|| format!("no canvas is bound to {flow_ref} — bind one before choosing a runtime"))?;
+    let pinned = apply_patch(&spec, &json!({ "placement": { "runtime": runtime } }))
+        .map_err(|p| format!("cannot pin runtime: {}", p.join("; ")))?;
+    storage
+        .resources()
+        .update(&cns, &cname, serde_json::to_value(&pinned).unwrap_or(json!({})))
+        .await
+        .map_err(|e| format!("failed to record the runtime on the canvas: {e}"))?;
+    Ok(())
+}
+
+/// Change a canvas the caller owns — never a preset.
+///
+/// A preset is shared; editing it in place would change the deployment shape of
+/// every flow that later reuses it, which is precisely what cloning exists to
+/// prevent. So presets are refused here with a pointer to `clone_canvas`.
+pub(crate) async fn op_update_canvas(
+    storage: &dyn StorageBackend,
+    ns: &str,
+    name: &str,
+    patch: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let res = storage
+        .resources()
+        .get(ns, name)
+        .await
+        .map_err(|e| format!("canvas '{ns}/{name}' not found: {e}"))?;
+    if res.type_ref != "canvas" {
+        return Err(format!("'{ns}/{name}' is type '{}', not 'canvas'", res.type_ref));
+    }
+    let spec: CanvasSpec = serde_json::from_value(res.config.clone())
+        .map_err(|e| format!("stored canvas is not a valid spec: {e}"))?;
+    if spec.is_preset() {
+        return Err(format!(
+            "'{ns}/{name}' is a shared preset and is not edited in place — clone it with clone_canvas and change the copy"
+        ));
+    }
+    // Two shapes: a `patch` merged over the current spec (what the agent sends),
+    // or a whole `spec` from the editor. The editor case REPLACES rather than
+    // merges — otherwise deleting a key in the editor would silently keep it.
+    let updated = match patch.get("spec").filter(|v| v.is_object()) {
+        Some(full) => {
+            let replaced: CanvasSpec = serde_json::from_value(full.clone())
+                .map_err(|e| format!("not a valid canvas spec: {e}"))?;
+            let errs = replaced.validate();
+            if !errs.is_empty() {
+                return Err(format!("invalid canvas: {}", errs.join("; ")));
+            }
+            replaced
+        }
+        None => apply_patch(&spec, patch.get("patch").unwrap_or(patch))
+            .map_err(|p| format!("patch produced an invalid canvas: {}", p.join("; ")))?,
+    };
+    storage
+        .resources()
+        .update(ns, name, serde_json::to_value(&updated).unwrap_or(json!({})))
+        .await
+        .map_err(|e| format!("failed to update canvas: {e}"))?;
+    Ok(json!({
+        "updated": true,
+        "canvas": format!("{ns}/{name}"),
+        "summary": preset_summary(ns, name, &updated),
+        "note": "Configuration only — nothing is redeployed until deploy_flow.",
+    }))
+}
+
+/// Register a new runtime pool.
+///
+/// Authorization is the caller's (registry governance: `resource:create`), done
+/// where an approval can be put to a person. This only validates and stores.
+///
+/// Honest about what it creates: a runtime here is a REGISTERED pool — labels and
+/// an optional endpoint that placement can select. It does not start a process
+/// or a sandbox. Saying "created a runtime" without that qualification is how
+/// people come to believe they have isolation they do not.
+pub(crate) async fn op_create_runtime(
+    storage: &dyn StorageBackend,
+    ns: &str,
+    name: &str,
+    labels: &serde_json::Map<String, serde_json::Value>,
+    url: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let valid = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !valid(name) {
+        return Err(format!("runtime name '{name}' must be letters, digits, '-' or '_'"));
+    }
+    if storage.resources().get(ns, name).await.is_ok() {
+        return Err(format!("'{ns}/{name}' already exists"));
+    }
+    let mut lbl = std::collections::BTreeMap::new();
+    for (k, v) in labels {
+        let Some(v) = v.as_str() else {
+            return Err(format!("label '{k}' must be a string"));
+        };
+        lbl.insert(k.clone(), v.to_string());
+    }
+    let spec = RuntimeSpec {
+        name: name.to_string(),
+        namespace: ns.to_string(),
+        labels: lbl,
+        url: url.filter(|u| !u.is_empty()).map(str::to_string),
+        default: false,
+    };
+    let resource = flowr_types::Resource::new(
+        name.to_string(),
+        "runtime",
+        serde_json::to_value(&spec).unwrap_or(json!({})),
+    )
+    .with_namespace(ns.to_string())
+    .with_description(format!("Runtime pool {name}"));
+    storage
+        .resources()
+        .create(resource)
+        .await
+        .map_err(|e| format!("failed to register runtime: {e}"))?;
+    Ok(json!({
+        "created": true,
+        "runtime": spec,
+        "note": "Registered as a placement target. This does not start a process or a sandbox.",
+    }))
+}
+
+/// The `flow:deploy` request for deploying `ns/name` (onto `runtime`, if chosen).
+///
+/// ONE builder for every path that can deploy — the agent loop, direct MCP calls
+/// and the HTTP routes — so they cannot ask different questions. Returns `None`
+/// when nothing matches, which is not a privilege and is reported by the deploy
+/// itself as "no runtime matches".
+pub(crate) async fn deploy_request(
+    storage: &dyn StorageBackend,
+    principal: &flowr_policy::Principal,
+    ns: &str,
+    name: &str,
+    runtime: Option<&str>,
+    params: &serde_json::Value,
+) -> Option<(flowr_policy::ExecutionRequest, RuntimeSpec, String, String)> {
+    let (rt, eff_ns, mode) = placement_target(storage, ns, name, runtime).await?;
+    let resource = flowr_policy::Resource::runtime(
+        rt.name.clone(),
+        eff_ns.clone(),
+        mode.clone(),
+        rt.labels.iter().map(|(k, v)| (k.clone(), v.clone())),
+    );
+    let req = flowr_policy::ExecutionRequest {
+        principal: principal.clone(),
+        action: flowr_policy::actions::flow_deploy(),
+        resource,
+        context: Default::default(),
+        attributes: Default::default(),
+        params: params.clone(),
+    };
+    Some((req, rt, eff_ns, mode))
+}
+
+/// The `resource:create` request for registering runtime `name`.
+pub(crate) fn runtime_create_request(
+    principal: &flowr_policy::Principal,
+    name: &str,
+    params: &serde_json::Value,
+) -> flowr_policy::ExecutionRequest {
+    flowr_policy::ExecutionRequest {
+        principal: principal.clone(),
+        action: flowr_policy::actions::resource_create(),
+        resource: flowr_policy::Resource::registry("runtime", name),
+        context: Default::default(),
+        attributes: Default::default(),
+        params: params.clone(),
+    }
+}
+
 /// The runtime a flow's canvas would place it into, for the deployment gate.
 ///
 /// Returns the pool, the effective namespace and the mode — exactly what the
@@ -436,8 +621,12 @@ pub(crate) async fn placement_target(
     storage: &dyn StorageBackend,
     ns: &str,
     name: &str,
+    runtime_override: Option<&str>,
 ) -> Option<(RuntimeSpec, String, String)> {
-    let spec = resolve_canvas(storage, ns, name).await.ok()?;
+    let mut spec = resolve_canvas(storage, ns, name).await.ok()?;
+    if let Some(rt) = runtime_override.filter(|r| !r.is_empty()) {
+        spec.placement.runtime = Some(rt.to_string());
+    }
     let runtimes = collect_runtimes(storage).await;
     let placed = select_runtime(&spec.placement, &runtimes)?.clone();
     let effective_ns = if !spec.placement.namespace.is_empty() {
@@ -585,7 +774,24 @@ pub(crate) async fn compute_placement(
     ns: &str,
     name: &str,
 ) -> Result<serde_json::Value, String> {
-    let spec = resolve_canvas(storage, ns, name).await?;
+    compute_placement_with(storage, ns, name, None).await
+}
+
+/// Placement with an optional runtime pin applied on top of the stored canvas.
+///
+/// The override is TRANSIENT: previewing "what if I put it on rt-x" must not
+/// rewrite the canvas. `op_deploy_flow` persists the pin only once the deploy
+/// has been authorized.
+pub(crate) async fn compute_placement_with(
+    storage: &dyn StorageBackend,
+    ns: &str,
+    name: &str,
+    runtime_override: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let mut spec = resolve_canvas(storage, ns, name).await?;
+    if let Some(rt) = runtime_override.filter(|r| !r.is_empty()) {
+        spec.placement.runtime = Some(rt.to_string());
+    }
 
     let errs = spec.validate();
     if !errs.is_empty() {

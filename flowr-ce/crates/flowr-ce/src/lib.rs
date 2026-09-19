@@ -1229,7 +1229,9 @@ async fn handle_request(
             match params {
                 Some(p) => {
                     // Try agent-specific tools first (need flowr-ce-agents)
-                    let tool_result = match handle_agent_tool_call(storage, &principal, &p.name, &p.arguments).await {
+                    // Direct MCP call: no approver here, so the dispatcher makes the
+                    // target decisions itself (pre_authorized = false).
+                    let tool_result = match handle_agent_tool_call(storage, &principal, &p.name, &p.arguments, false).await {
                         Some(result) => result,
                         // Fall through to shared handler — authorize the caller.
                         None => handle_tool_call(storage.as_ref(), &principal, &p.name, p.arguments).await,
@@ -1276,8 +1278,43 @@ pub(crate) async fn handle_agent_tool_call(
     principal: &Principal,
     name: &str,
     arguments: &Option<Value>,
+    // True when the caller has ALREADY made the target decision — the agent
+    // loop does, because only it can put an approval to a person. Direct MCP
+    // calls (`/message`) pass false and are gated here, non-interactively.
+    // Without this flag it was either gate-twice (refusing a call the user had
+    // just approved) or gate-never (direct MCP could deploy to prod unchecked).
+    pre_authorized: bool,
 ) -> Option<CallToolResult> {
     let args = arguments.clone().unwrap_or(json!({}));
+
+    // ── Target decisions for direct MCP callers ──
+    // `flow:deploy` on the Runtime and `resource:create` for a new pool. There is
+    // no approver on this path, so an Ask degrades to a denial.
+    if !pre_authorized && (name == "deploy_flow" || name == "create_runtime") {
+        let req = if name == "deploy_flow" {
+            let ns = args.get("namespace").and_then(|v| v.as_str()).unwrap_or("a3t");
+            let flow = args.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+            let rt = args.get("runtime").and_then(|v| v.as_str());
+            crate::canvas::deploy_request(storage.as_ref(), principal, ns, flow, rt, &args)
+                .await
+                .map(|(req, ..)| req)
+        } else {
+            let rt_name = args.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+            Some(crate::canvas::runtime_create_request(principal, rt_name, &args))
+        };
+        if let Some(req) = req {
+            let decision = flowr_policy::policy_hook().check(&req).await;
+            flowr_policy::audit::record(&req, &decision);
+            if let flowr_policy::PolicyDecision::Deny { reason, policy_ids } =
+                decision.non_interactive()
+            {
+                return Some(CallToolResult::error(format!(
+                    "denied: {name} — {reason} (policies: {})",
+                    policy_ids.join(",")
+                )));
+            }
+        }
+    }
 
     // E2 #5 Phase C: these agent/flow *authoring* tools are dispatched here and
     // historically bypassed the site-A policy hook entirely. Gate the write
@@ -1338,8 +1375,37 @@ pub(crate) async fn handle_agent_tool_call(
             let Some(n) = args.get("name").and_then(|v| v.as_str()) else {
                 return Some(CallToolResult::error("name is required".to_string()));
             };
+            let chosen = args.get("runtime").and_then(|v| v.as_str());
             return Some(
-                match crate::canvas::compute_placement(storage.as_ref(), &ns_arg("a3t"), n).await {
+                match crate::canvas::compute_placement_with(storage.as_ref(), &ns_arg("a3t"), n, chosen).await {
+                    Ok(v) => CallToolResult::json(v),
+                    Err(e) => CallToolResult::error(e),
+                },
+            );
+        }
+        "update_canvas" => {
+            let Some(n) = args.get("name").and_then(|v| v.as_str()) else {
+                return Some(CallToolResult::error("name is required".to_string()));
+            };
+            // Pass the whole argument object: op_update_canvas reads `spec`
+            // (editor save, replace) or `patch` (agent edit, merge) from it.
+            return Some(
+                match crate::canvas::op_update_canvas(storage.as_ref(), &ns_arg("a3t"), n, &args).await {
+                    Ok(v) => CallToolResult::json(v),
+                    Err(e) => CallToolResult::error(e),
+                },
+            );
+        }
+        "create_runtime" => {
+            // Authorized in `call_mcp_tool` (resource:create), including any
+            // approval. Reaching here means it was allowed.
+            let Some(n) = args.get("name").and_then(|v| v.as_str()) else {
+                return Some(CallToolResult::error("name is required".to_string()));
+            };
+            let labels = args.get("labels").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+            let url = args.get("url").and_then(|v| v.as_str());
+            return Some(
+                match crate::canvas::op_create_runtime(storage.as_ref(), &ns_arg("default"), n, &labels, url).await {
                     Ok(v) => CallToolResult::json(v),
                     Err(e) => CallToolResult::error(e),
                 },
@@ -1386,7 +1452,9 @@ pub(crate) async fn handle_agent_tool_call(
             // Authorization already happened in `call_mcp_tool` — including any
             // approval the user was asked for. Reaching here means it was allowed.
             return Some(
-                match crate::canvas::op_deploy_flow(storage.as_ref(), &ns_arg("a3t"), n).await {
+                match crate::canvas::op_deploy_flow(
+                    storage.as_ref(), &ns_arg("a3t"), n, args.get("runtime").and_then(|v| v.as_str()),
+                ).await {
                     Ok(v) => CallToolResult::json(v),
                     Err(e) => CallToolResult::error(e),
                 },

@@ -747,6 +747,9 @@ impl TaskHandler for AgentHandler {
                                 // strings; they are resources, so they open the
                                 // same way.
                                 ("list_mcp_tools", "resources", "mcp_servers"),
+                                // Runtime pools are registry resources, so a row
+                                // opens the same way any resource does.
+                                ("list_runtimes", "runtimes", "runtimes"),
                             ];
                             const DETAIL_WIDGETS: &[(&str, &str)] = &[
                                 ("get_flow", "flow"),
@@ -867,6 +870,31 @@ impl TaskHandler for AgentHandler {
                             if let Some((kind, data)) = deploy_card {
                                 crate::token_stream::publish(&config.session_id, "data",
                                     json!({"name": kind, "data": data}).to_string());
+                            }
+
+                            // The canvas itself as an ARTIFACT — the same "Open" widget a
+                            // flow gets, so it can be edited in the side pane, pointed at a
+                            // runtime and deployed from there. The raw payload is exactly
+                            // what get_canvas returns, so the pane's stale-write check
+                            // compares like with like.
+                            let canvas_ref: Option<(String, String)> = match tool_name {
+                                "get_canvas" | "update_canvas" => Some((
+                                    tool_input.get("namespace").and_then(|v| v.as_str()).unwrap_or("a3t").to_string(),
+                                    tool_input.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                )),
+                                "clone_canvas" | "bind_canvas" => tool_value.as_ref()
+                                    .and_then(|v| v.get("canvas")).and_then(|v| v.as_str())
+                                    .and_then(|c| c.split_once('/'))
+                                    .map(|(a, b)| (a.to_string(), b.to_string())),
+                                _ => None,
+                            };
+                            if let Some((cns, cname)) = canvas_ref.filter(|(_, n)| !n.is_empty()) {
+                                if let Ok(raw) = crate::canvas::op_get_canvas(storage.as_ref(), &cns, &cname).await {
+                                    crate::token_stream::publish(&config.session_id, "data",
+                                        json!({"name": "canvas", "data": {
+                                            "namespace": cns, "name": cname, "raw": raw,
+                                        }}).to_string());
+                                }
                             }
                         }
 
@@ -1519,23 +1547,13 @@ async fn call_mcp_tool(
     if tool_name == "deploy_flow" {
         let flow_ns = arguments.get("namespace").and_then(|v| v.as_str()).unwrap_or("a3t");
         let flow_name = arguments.get("name").and_then(|v| v.as_str()).unwrap_or_default();
-        if let Some((rt, eff_ns, mode)) =
-            crate::canvas::placement_target(storage.as_ref(), flow_ns, flow_name).await
+        // Authorize against the runtime the user CHOSE, if they chose one — the
+        // decision must be about the placement that will actually happen.
+        let chosen = arguments.get("runtime").and_then(|v| v.as_str());
+        if let Some((req, rt, eff_ns, mode)) = crate::canvas::deploy_request(
+            storage.as_ref(), caller, flow_ns, flow_name, chosen, arguments,
+        ).await
         {
-            let resource = flowr_policy::Resource::runtime(
-                rt.name.clone(),
-                eff_ns.clone(),
-                mode.clone(),
-                rt.labels.iter().map(|(k, v)| (k.clone(), v.clone())),
-            );
-            let req = flowr_policy::ExecutionRequest {
-                principal: caller.clone(),
-                action: flowr_policy::actions::flow_deploy(),
-                resource,
-                context: Default::default(),
-                attributes: Default::default(),
-                params: arguments.clone(),
-            };
             let decision = flowr_policy::policy_hook().check(&req).await;
             flowr_policy::audit::record(&req, &decision);
 
@@ -1568,6 +1586,42 @@ async fn call_mcp_tool(
                     "policies": policy_ids,
                 }));
             }
+        }
+    }
+
+    // ── Registering a runtime is registry governance ──
+    //
+    // `resource:create` on a `runtime`-typed resource, the same rule that governs
+    // every registry write (baseline: Admin). Checked here, where the session is
+    // known, so an Admin's agent proposing a new pool raises the approval card
+    // instead of failing — the registry permit is scoped to `principal is User`.
+    if tool_name == "create_runtime" {
+        let rt_name = arguments.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+        let req = crate::canvas::runtime_create_request(caller, rt_name, arguments);
+        let decision = flowr_policy::policy_hook().check(&req).await;
+        flowr_policy::audit::record(&req, &decision);
+        let decision = flowr_mcp_core::apply_session_decisions(
+            session_id, decision, flowr_policy::actions::RESOURCE_CREATE, "Resource",
+            &format!("runtime/{rt_name}"),
+        );
+        let decision = match decision {
+            flowr_policy::PolicyDecision::Ask { reason, .. } => {
+                // One-shot, like deploy: approving one new pool must not
+                // authorize the next.
+                crate::approval::request_approval(
+                    session_id, caller, None, "create_runtime", arguments, &reason,
+                    &[flowr_policy::GrantScope::Once],
+                )
+                .await
+            }
+            settled => settled,
+        };
+        if let flowr_policy::PolicyDecision::Deny { reason, policy_ids } = decision {
+            return Ok(json!({
+                "error": format!("creating a runtime was denied: {reason}"),
+                "denied": true,
+                "policies": policy_ids,
+            }));
         }
     }
 
@@ -1637,7 +1691,7 @@ async fn call_mcp_tool(
             // Already authorized at the top of this function — one gate for both
             // the local and remote routes.
             if let Some(result) = crate::handle_agent_tool_call(
-                storage, caller, tool_name, &Some(arguments.clone()),
+                storage, caller, tool_name, &Some(arguments.clone()), true,
             ).await {
                 return callresult_to_value(result);
             }

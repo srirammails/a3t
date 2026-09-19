@@ -6,6 +6,7 @@
   // Saving always goes through the kind's MCP write tool with the user's token,
   // so it passes the same Cedar choke point as any other tool call. There is no
   // direct storage path, and a denial is shown rather than swallowed.
+  import CanvasDeployBar from './CanvasDeployBar.svelte';
   import { mcpCall } from '$lib/services/api';
   import { navigateToDetail } from '$lib/stores/panels.svelte';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
@@ -199,6 +200,11 @@
       <button class="pbtn" onclick={() => onclose?.()} title="Close">✕</button>
     </div>
   </div>
+  {#if artifact.kind === 'canvas'}
+    <!-- Runtime choice and deploy live with the canvas they apply to. Requests
+         go to the agent, so the same gates and approvals apply. -->
+    <CanvasDeployBar namespace={artifact.namespace} name={artifact.name} {text} onrequest={(m) => onapplied?.(m)} />
+  {/if}
   {#if offered}
     <div class="pane-revision">
       The agent revised this while you were editing.

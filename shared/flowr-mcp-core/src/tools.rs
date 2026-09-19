@@ -229,13 +229,14 @@ placement selects on (tier, class, zone)."
             description: "Show WHERE a flow would be deployed — which runtime pool, which \
 namespace, shared or isolated, and how far it would scale — WITHOUT deploying anything. \
 Always preview before deploying, and show the user the result: placement is the thing they \
-are agreeing to."
+are agreeing to. Pass `runtime` to see what would happen on a specific pool."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "namespace": { "type": "string", "default": "a3t" },
-                    "name": { "type": "string", "description": "Flow name" }
+                    "name": { "type": "string", "description": "Flow name" },
+                    "runtime": { "type": "string", "description": "Optional: a specific runtime pool to place on (from list_runtimes)" }
                 },
                 "required": ["name"]
             }),
@@ -278,17 +279,52 @@ Creates configuration only; nothing is deployed until deploy_flow."
             }),
         },
         Tool {
-            name: "deploy_flow".to_string(),
-            description: "Deploy a flow — place it into the runtime its canvas selects. This \
-is the step that actually acts, so preview_placement first and show the user what they are \
-approving. Deploying to a production pool, or taking a dedicated runtime, needs the user's \
-approval: call it anyway and the platform will pause and ask them."
+            name: "update_canvas".to_string(),
+            description: "Change a canvas that belongs to a flow — for example its scaling or \
+target namespace. Shared presets cannot be edited in place; clone them instead. Creates \
+configuration only; nothing is redeployed."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "namespace": { "type": "string", "default": "a3t" },
-                    "name": { "type": "string", "description": "Flow name" }
+                    "name": { "type": "string", "description": "Canvas name" },
+                    "patch": { "type": "object", "description": "Changes shaped like the canvas spec. Arrays replace rather than merge." }
+                },
+                "required": ["name", "patch"]
+            }),
+        },
+        Tool {
+            name: "create_runtime".to_string(),
+            description: "Register a new runtime pool that flows can be deployed onto, with the \
+labels placement selects on (tier, class, zone). Needs Admin, so the user will be asked to \
+approve it. This registers a placement target; it does not start a process or a sandbox."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Runtime name: letters, digits, '-' or '_'" },
+                    "namespace": { "type": "string", "default": "default" },
+                    "labels": { "type": "object", "description": "e.g. {\"tier\":\"test\",\"class\":\"cpu\"}" },
+                    "url": { "type": "string", "description": "Optional endpoint of the pool" }
+                },
+                "required": ["name", "labels"]
+            }),
+        },
+        Tool {
+            name: "deploy_flow".to_string(),
+            description: "Deploy a flow — place it into the runtime its canvas selects. This \
+is the step that actually acts, so preview_placement first and show the user what they are \
+approving. Deploying to a production pool, or taking a dedicated runtime, needs the user's \
+approval: call it anyway and the platform will pause and ask them. Pass `runtime` to deploy \
+onto a specific pool the user chose; it must still satisfy the canvas's selector."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "namespace": { "type": "string", "default": "a3t" },
+                    "name": { "type": "string", "description": "Flow name" },
+                    "runtime": { "type": "string", "description": "Optional: the runtime pool to deploy onto (from list_runtimes)" }
                 },
                 "required": ["name"]
             }),
@@ -838,7 +874,7 @@ pub const AGENT_RUNTIME_TOOLS: &[&str] = &[
     // Deployment (canvas) — implemented in flowr-ce beside the canvas handlers,
     // so they route through the agent-runtime interceptor like the agent tools.
     "list_canvas_presets", "get_canvas", "list_runtimes", "preview_placement",
-    "clone_canvas", "bind_canvas", "deploy_flow",
+    "clone_canvas", "bind_canvas", "deploy_flow", "update_canvas", "create_runtime",
 ];
 
 pub fn is_agent_runtime_tool(name: &str) -> bool {
