@@ -21,6 +21,12 @@ export type AppItem = {
   badgeStyle?: string;
   /// A conversation that exists only in this browser so far.
   pending?: boolean;
+  /// Registry namespace. The list GROUPS by this, so it is kept as data rather
+  /// than baked into `sub` — repeating it on every row under its own heading
+  /// was most of the visual noise.
+  namespace?: string;
+  /// Short state shown as a coloured dot (execution status, agent status).
+  status?: string;
 };
 
 /// The page merges these namespaces, so anything counting or listing across the
@@ -60,11 +66,50 @@ function rows(data: any, ...keys: string[]): any[] {
 const named = (r: any): AppItem => ({
   id: r.name ?? r.id ?? String(r),
   label: r.name ?? r.id ?? String(r),
-  sub: r.namespace ? `${r.namespace}${r.version ? ` · v${r.version}` : ''}` : (r.type_ref ?? r.type ?? ''),
+  namespace: r.namespace || undefined,
+  // Namespace is the group heading now, so the subtitle carries what differs
+  // between siblings: version, then type.
+  sub: [r.version ? `v${r.version}` : '', r.type_ref ?? r.type ?? ''].filter(Boolean).join(' · '),
+  status: r.status || undefined,
 });
 
 /// Load one app's items. Throws with a readable message so callers can surface a
 /// failure rather than rendering an empty list that looks like "nothing here".
+/// `document.namespace` from a CNCF workflow's YAML, without a YAML parser: the
+/// first `namespace:` inside the top-level `document:` block.
+function specNamespace(yaml: unknown): string | undefined {
+  if (typeof yaml !== 'string') return undefined;
+  const doc = yaml.split(/\n(?=\S)/).find((block) => block.startsWith('document:'));
+  return doc?.match(/^\s+namespace:\s*['"]?([\w.-]+)/m)?.[1];
+}
+
+/// Group items by namespace for display, keeping each group's original order.
+///
+/// Namespaces in `PREFERRED` come first in that order (the platform's own
+/// namespace before user ones), the rest alphabetically; items without a
+/// namespace collect under `''`, rendered last. Returns `null` when nothing in
+/// the list has a namespace — grouping a flat list would only add a heading.
+const PREFERRED = ['a3t', 'default', 'system'];
+export function groupByNamespace(items: AppItem[]): { ns: string; items: AppItem[] }[] | null {
+  if (!items.some((i) => i.namespace)) return null;
+  const map = new Map<string, AppItem[]>();
+  for (const it of items) {
+    const k = it.namespace ?? '';
+    (map.get(k) ?? map.set(k, []).get(k)!).push(it);
+  }
+  const rank = (ns: string) => {
+    if (!ns) return [2, ''];
+    const i = PREFERRED.indexOf(ns);
+    return i >= 0 ? [0, String(i)] : [1, ns];
+  };
+  return [...map.entries()]
+    .sort(([a], [b]) => {
+      const [ra, ka] = rank(a), [rb, kb] = rank(b);
+      return ra !== rb ? (ra as number) - (rb as number) : (ka as string).localeCompare(kb as string);
+    })
+    .map(([ns, items]) => ({ ns, items }));
+}
+
 export async function loadAppItems(source: string): Promise<AppItem[]> {
   if (source === 'sessions') {
     const remote = await fetchChatSessions();
@@ -86,8 +131,11 @@ export async function loadAppItems(source: string): Promise<AppItem[]> {
           // "~" not "/": the id becomes a single URL path segment.
           id: `${r.namespace ?? ns}~${r.name}`,
           label: r.name,
-          sub: `${r.namespace ?? ns}${r.version ? ` · v${r.version}` : ''}${
-            r.step_count != null ? ` · ${r.step_count} steps` : ''}`,
+          namespace: r.namespace ?? ns,
+          sub: [r.version ? `v${r.version}` : '',
+                r.step_count != null ? `${r.step_count} step${r.step_count === 1 ? '' : 's'}` : '']
+            .filter(Boolean).join(' · '),
+          status: r.enabled === false ? 'disabled' : undefined,
         });
       }
     }
@@ -128,21 +176,32 @@ export async function loadAppItems(source: string): Promise<AppItem[]> {
   if (source === 'templates') {
     const res = await mcpCall('list_agent_templates', {});
     if (!res.ok) throw new Error(res.error ?? 'list_agent_templates failed');
-    return rows(res.data, 'templates').map(named);
+    // Template rows have no namespace column — it lives in the definition
+    // (`document.namespace` in spec_yaml). Read it from there so templates group
+    // like everything else, and show where the template came from.
+    return rows(res.data, 'templates').map((r: any) => ({
+      ...named(r),
+      namespace: r.namespace || specNamespace(r.spec_yaml),
+      sub: [r.version ? `v${r.version}` : '', r.source === 'system' ? 'built-in' : r.source === 'my' ? 'yours' : r.source ?? '']
+        .filter(Boolean).join(' · '),
+    }));
   }
   if (source === 'triggers') {
     const res = await mcpCall('list_triggers', {});
     if (!res.ok) throw new Error(res.error ?? 'list_triggers failed');
     return rows(res.data, 'triggers').map((r: any) => ({
       id: r.id ?? r.name, label: r.name ?? r.id, sub: r.config?.type ?? r.type ?? '',
+      namespace: r.namespace || undefined, status: r.status || undefined,
     }));
   }
   if (source === 'executions') {
     const res = await mcpCall('list_executions', { limit: 100 });
     if (!res.ok) throw new Error(res.error ?? 'list_executions failed');
     return rows(res.data, 'executions').map((r: any) => ({
-      id: r.instance_id, label: `${r.namespace}/${r.name}`,
-      sub: `${r.status}${r.started_at ? ` · ${relTime(r.started_at)}` : ''}`,
+      id: r.instance_id, label: r.name ?? r.instance_id,
+      namespace: r.namespace || undefined,
+      sub: [r.status, r.started_at ? relTime(r.started_at) : ''].filter(Boolean).join(' · '),
+      status: r.status ? String(r.status).toLowerCase() : undefined,
     }));
   }
   return [];

@@ -95,7 +95,7 @@
                 {#if item.badge}<span class="home-badge" style={item.badgeStyle}>{item.badge}</span>{/if}
                 <span class="home-text">
                   <span class="home-label">{item.label}</span>
-                  {#if item.sub}<span class="home-meta">{item.sub}</span>{/if}
+                  {#if item.namespace || item.sub}<span class="home-meta">{[item.namespace, item.sub].filter(Boolean).join(' · ')}</span>{/if}
                 </span>
               </button>
               <button class="home-pin on" onclick={(e) => togglePin(e, item)} title="Unpin" aria-label="Unpin">★</button>
@@ -120,7 +120,7 @@
                 {#if item.badge}<span class="home-badge" style={item.badgeStyle}>{item.badge}</span>{/if}
                 <span class="home-text">
                   <span class="home-label">{item.label}</span>
-                  {#if item.sub}<span class="home-meta">{item.sub}</span>{/if}
+                  {#if item.namespace || item.sub}<span class="home-meta">{[item.namespace, item.sub].filter(Boolean).join(' · ')}</span>{/if}
                 </span>
               </button>
               <button class="home-pin" onclick={(e) => togglePin(e, item)} title="Pin" aria-label="Pin">☆</button>

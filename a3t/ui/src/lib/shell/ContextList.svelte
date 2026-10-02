@@ -9,7 +9,7 @@
     isContextOpen, closeContextPane, trackOpen, contextRev_,
   } from '$lib/stores/apps.svelte.ts';
   import { deleteChatSession } from '$lib/services/api';
-  import { loadAppItems, type AppItem } from './appItems';
+  import { loadAppItems, groupByNamespace, type AppItem } from './appItems';
 
   let { appType }: { appType: string } = $props();
 
@@ -37,11 +37,52 @@
     return [unsent, ...items];
   });
 
-  const shown = $derived(
-    filter.trim()
-      ? listed.filter((i) => i.label.toLowerCase().includes(filter.trim().toLowerCase()))
-      : listed,
-  );
+  const shown = $derived.by<Item[]>(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return listed;
+    // Namespace is matched too, so typing "a3t" narrows to that group.
+    return listed.filter((i) =>
+      i.label.toLowerCase().includes(q) || (i.namespace ?? '').toLowerCase().includes(q));
+  });
+
+  /// Rows grouped under their namespace, or null for lists that have none
+  /// (conversations, resource categories) — those stay flat.
+  const groups = $derived(groupByNamespace(shown));
+
+  // ── Collapsed namespace groups, remembered per app in this browser ──
+  const collapseKey = $derived(`a3t.ctx.collapsed.${appType}`);
+  let collapsed = $state<Set<string>>(new Set());
+  /// Plain `let` for the same reason as `loadedFor`: read and written below.
+  let collapseLoadedFor = '';
+  $effect(() => {
+    const key = collapseKey;
+    if (collapseLoadedFor === key) return;
+    collapseLoadedFor = key;
+    try { collapsed = new Set(JSON.parse(localStorage.getItem(key) ?? '[]')); }
+    catch { collapsed = new Set(); }
+  });
+  function toggleGroup(ns: string) {
+    const next = new Set(collapsed);
+    next.has(ns) ? next.delete(ns) : next.add(ns);
+    collapsed = next;
+    try { localStorage.setItem(collapseKey, JSON.stringify([...next])); } catch {}
+  }
+  /// A filter shows every match: a collapsed group must not hide what was searched for.
+  const isOpen = (ns: string) => !!filter.trim() || !collapsed.has(ns);
+
+  /// Dot colour for a short state word. Unknown states get no dot rather than a
+  /// guessed colour.
+  function statusTone(s?: string): string | null {
+    if (!s) return null;
+    const v = s.toLowerCase();
+    if (['completed', 'active', 'running', 'enabled', 'healthy', 'synced'].includes(v)) return v === 'running' ? 'run' : 'ok';
+    if (['failed', 'error', 'cancelled', 'degraded'].includes(v)) return 'bad';
+    if (['draft', 'paused', 'disabled', 'queued', 'pending'].includes(v)) return 'idle';
+    return null;
+  }
+
+  /// Avatar letter: first alphanumeric of the label, so "a3t-users" reads as "A".
+  const initial = (label: string) => (label.match(/[a-z0-9]/i)?.[0] ?? '·').toUpperCase();
 
   async function load(source: string) {
     loading = true;
@@ -112,6 +153,30 @@
   }
 </script>
 
+{#snippet row(item: Item)}
+  <div class="ctx-row" class:active={item.id === activeId} class:pending={item.pending}>
+    <button class="ctx-pick" onclick={() => select(item)} title={item.namespace ? `${item.namespace}/${item.label}` : item.label}>
+      {#if item.badge}
+        <span class="ctx-badge" style={item.badgeStyle}>{item.badge}</span>
+      {:else if spec?.source !== 'sessions'}
+        <span class="ctx-avatar">{initial(item.label)}</span>
+      {/if}
+      <span class="ctx-text">
+        <span class="ctx-label">{item.label}</span>
+        {#if item.sub}<span class="ctx-sub">{item.sub}</span>{/if}
+      </span>
+      {#if statusTone(item.status)}
+        <span class="ctx-dot {statusTone(item.status)}" title={item.status}></span>
+      {/if}
+    </button>
+    {#if spec?.source === 'sessions' && !item.pending}
+      <button class="ctx-del" onclick={(e) => removeItem(e, item)} title="Delete — this cannot be undone" aria-label="Delete">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4L4 12M4 4l8 8" /></svg>
+      </button>
+    {/if}
+  </div>
+{/snippet}
+
 <aside class="ctx" class:floating={!isContextPinned() && isContextOpen()}>
   <div class="ctx-head">
     <span class="ctx-title">{contextLabel(appType)}</span>
@@ -155,38 +220,36 @@
     </div>
   </div>
 
-  {#if items.length > 8}
+  {#if items.length > 8 || (groups?.length ?? 0) > 1}
     <div class="ctx-filter">
-      <input type="text" placeholder="Filter…" bind:value={filter} />
+      <input type="text" placeholder="Filter by name or namespace…" bind:value={filter} />
     </div>
   {/if}
 
   <div class="ctx-body">
-    {#if loading}
+    {#if loading && items.length === 0}
       <div class="ctx-note">Loading…</div>
     {:else if error}
       <div class="ctx-note err">{error}</div>
     {:else if shown.length === 0}
       <div class="ctx-note">{filter ? 'Nothing matches.' : 'Nothing here yet.'}</div>
-    {:else}
-      {#each shown as item}
-        <div class="ctx-row" class:active={item.id === activeId} class:pending={item.pending}>
-          <button class="ctx-pick" onclick={() => select(item)} title={item.label}>
-            {#if item.badge}
-              <span class="ctx-badge" style={item.badgeStyle}>{item.badge}</span>
-            {/if}
-            <span class="ctx-text">
-              <span class="ctx-label">{item.label}</span>
-              {#if item.sub}<span class="ctx-sub">{item.sub}</span>{/if}
-            </span>
+    {:else if groups}
+      {#each groups as g (g.ns)}
+        <section class="ctx-group">
+          <button class="ctx-ghead" onclick={() => toggleGroup(g.ns)} aria-expanded={isOpen(g.ns)}>
+            <svg class="ctx-chev" class:open={isOpen(g.ns)} width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 3l5 5-5 5" /></svg>
+            <span class="ctx-gname">{g.ns || 'no namespace'}</span>
+            <span class="ctx-gcount">{g.items.length}</span>
           </button>
-          {#if spec?.source === 'sessions' && !item.pending}
-            <button class="ctx-del" onclick={(e) => removeItem(e, item)} title="Delete — this cannot be undone" aria-label="Delete">
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4L4 12M4 4l8 8" /></svg>
-            </button>
+          {#if isOpen(g.ns)}
+            <div class="ctx-gitems">
+              {#each g.items as item}{@render row(item)}{/each}
+            </div>
           {/if}
-        </div>
+        </section>
       {/each}
+    {:else}
+      {#each shown as item}{@render row(item)}{/each}
     {/if}
   </div>
 
@@ -238,49 +301,108 @@
   .ctx-filter { flex: 0 0 auto; padding: 8px 10px; border-bottom: 1px solid var(--divider, var(--border)); }
   .ctx-filter input {
     width: 100%; box-sizing: border-box;
-    padding: 5px 8px; font-size: 11.5px;
-    border: 1px solid var(--border); border-radius: var(--r-sm);
+    padding: 6px 9px; font-size: 11.5px;
+    border: 1px solid var(--border); border-radius: 7px;
     background: var(--bg-page); color: var(--text-1);
+    outline: none; transition: border-color 0.1s ease, box-shadow 0.1s ease;
+  }
+  .ctx-filter input:focus {
+    border-color: var(--spec, #5530a8);
+    box-shadow: 0 0 0 3px var(--spec-bg, #ede7ff);
   }
 
   .ctx-body {
     flex: 1;
     min-height: 0;      /* required for overflow scrolling inside a flex column */
     overflow-y: auto;
-    padding: 6px;
+    padding: 6px 6px 10px;
   }
-  .ctx-note { padding: 12px 8px; font-size: 11.5px; color: var(--text-4); }
+  .ctx-note { padding: 14px 10px; font-size: 11.5px; color: var(--text-4); }
   .ctx-note.err { color: #dc2626; }
 
-  .ctx-row { display: flex; align-items: center; border-radius: var(--r-sm); }
+  /* ── Namespace groups ── */
+  .ctx-group + .ctx-group { margin-top: 6px; }
+  .ctx-ghead {
+    position: sticky; top: -6px; z-index: 1;
+    width: 100%; display: flex; align-items: center; gap: 6px;
+    padding: 7px 8px 5px;
+    border: none; background: var(--bg-surface); cursor: pointer;
+    color: var(--text-4); text-align: left;
+  }
+  .ctx-ghead:hover { color: var(--text-2); }
+  .ctx-chev { flex: 0 0 auto; transition: transform 0.12s ease; }
+  .ctx-chev.open { transform: rotate(90deg); }
+  .ctx-gname {
+    flex: 1; min-width: 0;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ctx-gcount {
+    flex: 0 0 auto; min-width: 18px; padding: 0 5px;
+    font-size: 10px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
+    border-radius: 8px; background: var(--bg-subtle); color: var(--text-4);
+  }
+  .ctx-gitems { display: flex; flex-direction: column; gap: 1px; }
+
+  /* ── Rows ── */
+  .ctx-row {
+    position: relative;
+    display: flex; align-items: center;
+    border-radius: 7px;
+    transition: background 0.1s ease;
+  }
   .ctx-row:hover { background: var(--bg-subtle); }
   .ctx-row.active { background: var(--bg-subtle); }
-  .ctx-row.active .ctx-label { color: var(--text-1); font-weight: 500; }
+  /* A bar, not just a tint, so the open item is findable in a long list. */
+  .ctx-row.active::before {
+    content: ''; position: absolute; left: 0; top: 7px; bottom: 7px;
+    width: 3px; border-radius: 0 3px 3px 0; background: var(--spec, #5530a8);
+  }
   .ctx-pick {
     flex: 1; min-width: 0;
-    display: flex; align-items: center; gap: 8px;
-    padding: 7px 8px;
+    display: flex; align-items: center; gap: 9px;
+    padding: 6px 8px 6px 10px;
     border: none; background: transparent; cursor: pointer; text-align: left;
   }
-  .ctx-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ctx-avatar {
+    flex: 0 0 auto;
+    width: 24px; height: 24px; border-radius: 6px;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 600;
+    color: var(--text-3); background: var(--bg-page);
+    border: 1px solid var(--border);
+  }
+  .ctx-row.active .ctx-avatar { color: var(--spec, #5530a8); border-color: var(--spec-bg, #ede7ff); background: var(--spec-bg, #ede7ff); }
+  .ctx-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   /* Matches the category chips on the Resources page, so the same category reads
      the same in the pane and in the app. */
   .ctx-badge {
     flex: 0 0 auto;
-    width: 20px; height: 20px; border-radius: 5px;
+    width: 24px; height: 24px; border-radius: 6px;
     display: grid; place-items: center;
     font-size: 10px; font-weight: 600;
   }
   .ctx-label {
-    font-size: 12px; color: var(--text-2);
+    font-size: 12.5px; line-height: 1.3; color: var(--text-1);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .ctx-sub { font-size: 10px; color: var(--text-4); }
-  .ctx-row.pending .ctx-label { font-style: italic; }
+  .ctx-row.active .ctx-label { font-weight: 600; }
+  .ctx-sub {
+    font-size: 10.5px; line-height: 1.3; color: var(--text-4);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ctx-row.pending .ctx-label { font-style: italic; color: var(--text-3); }
+
+  .ctx-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; }
+  .ctx-dot.ok   { background: #16a34a; }
+  .ctx-dot.run  { background: #2563eb; }
+  .ctx-dot.bad  { background: #dc2626; }
+  .ctx-dot.idle { background: transparent; border: 1.5px solid var(--text-5, #b8b8b8); }
+
   .ctx-del {
     width: 22px; height: 22px; margin-right: 4px;
     display: grid; place-items: center;
-    border: none; border-radius: 4px;
+    border: none; border-radius: 5px;
     background: transparent; color: var(--text-4); cursor: pointer;
     opacity: 0;
   }
