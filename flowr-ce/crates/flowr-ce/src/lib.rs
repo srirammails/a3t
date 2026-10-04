@@ -10,6 +10,7 @@ pub mod approval;
 pub mod token_stream;
 pub mod canvas;
 pub mod ops;
+pub mod integrity;
 pub mod handlers;
 pub mod registry;
 
@@ -120,6 +121,8 @@ pub async fn persist_triggers() {
 /// Returns a Router that can be extended with additional routes.
 pub fn build_ce_router(storage: Arc<dyn StorageBackend>) -> Router {
     let _ = GLOBAL_STORAGE.set(storage.clone());
+    // Deletes through the shared MCP tools respect the dependency tree too.
+    flowr_mcp_core::set_delete_guard(Arc::new(integrity::Guard { storage: storage.clone() }));
 
     let registry_routes = registry::registry_router(storage.clone());
     let canvas_routes = canvas::canvas_router(storage.clone());

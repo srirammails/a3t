@@ -1959,6 +1959,9 @@ async fn delete_flow(storage: &dyn StorageBackend, args: &Value) -> CallToolResu
         None => return CallToolResult::error("name is required".to_string()),
     };
 
+    if let Err(why) = crate::check_delete("flow", namespace, name).await {
+        return CallToolResult::error(why);
+    }
     match storage.workflows().delete(namespace, name).await {
         Ok(_) => CallToolResult::text(format!("Deleted workflow {}/{}", namespace, name)),
         Err(e) => CallToolResult::error(format!("Failed to delete: {}", e)),
@@ -2366,6 +2369,9 @@ async fn delete_resource(storage: &dyn StorageBackend, args: &Value) -> CallTool
         None => return CallToolResult::error("name is required".to_string()),
     };
 
+    if let Err(why) = crate::check_delete("resource", namespace, name).await {
+        return CallToolResult::error(why);
+    }
     match storage.resources().delete(namespace, name).await {
         Ok(_) => {
             info!(namespace = %namespace, name = %name, "Resource deleted");

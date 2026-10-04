@@ -10,6 +10,9 @@ interface ApiResponse<T = any> {
   data?: T;
   error?: string;
   status: number;
+  /// The error response's body. A refusal can carry more than a message — a
+  /// runtime delete answers 409 with the reschedule plan to show first.
+  detail?: any;
 }
 
 // ── Token management ──
@@ -77,8 +80,10 @@ async function request<T = any>(
     return {
       ok: res.ok,
       data: res.ok ? data : undefined,
-      error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`),
+      // Prefer the human sentence over the code ("confirm required").
+      error: res.ok ? undefined : (data?.message || data?.error || `HTTP ${res.status}`),
       status: res.status,
+      detail: res.ok ? undefined : data,
     };
   } catch (e) {
     return { ok: false, error: `Network error: ${e}`, status: 0 };
@@ -190,9 +195,10 @@ export const resources = {
     request(`/registry/resources/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, {
       method: 'PUT', body: JSON.stringify(config),
     }),
-  /** Delete a resource (registry REST DELETE — the MCP delete_resource tool is Cedar-gated in EE). */
-  remove: (namespace: string, name: string) =>
-    request(`/registry/resources/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, {
+  /** Delete a resource (registry REST DELETE — the MCP delete_resource tool is Cedar-gated in EE).
+   *  A runtime with deployments answers 409 + its reschedule plan; repeat with `confirm` = its name. */
+  remove: (namespace: string, name: string, confirm?: string) =>
+    request(`/registry/resources/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}${confirm ? `?confirm=${encodeURIComponent(confirm)}` : ''}`, {
       method: 'DELETE',
     }),
 };

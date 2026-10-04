@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { messages } from '$lib/core/status/messages';
   import {
     RESOURCE_CATEGORIES as CATEGORIES, CAT_COLORS, categorize, catMeta,
   } from '$lib/core/resources/categories';
@@ -559,7 +560,19 @@ do:
   async function deleteResource() {
     if (!deleteTarget) return;
     try {
-      await resourcesMcp.remove(deleteTarget.namespace, deleteTarget.name);
+      let res = await resourcesMcp.remove(deleteTarget.namespace, deleteTarget.name);
+      // A runtime is not refused: deleting it terminates it and reschedules what
+      // ran there. The server answers 409 with that plan first — show it.
+      if (res.status === 409 && res.detail?.impact) {
+        const im = res.detail.impact;
+        const lines = (im.plan ?? []).map((p: any) =>
+          `• ${p.target} (${p.mode}) → ${p.action === 'move' ? `moves to ${p.to}` : `fresh ${p.to} recreated`}${p.warning ? '  ⚠ ' + p.warning : ''}`);
+        const pinned = (im.pinnedCanvases ?? []).length ? `\nCanvases pinned to it: ${im.pinnedCanvases.join(', ')}` : '';
+        const ok = confirm(`Delete runtime ${deleteTarget.name}?\n\nRuns on it are cancelled and what is deployed there is rescheduled:\n${lines.join('\n')}${pinned}`);
+        if (!ok) { deleteTarget = null; return; }
+        res = await resourcesMcp.remove(deleteTarget.namespace, deleteTarget.name, deleteTarget.name);
+      }
+      if (!res.ok) { messages.error(res.error ?? 'Delete failed'); deleteTarget = null; return; }
       if (selected?.name === deleteTarget.name) selected = null;
       deleteTarget = null;
       allResources = await fetchAllResources();

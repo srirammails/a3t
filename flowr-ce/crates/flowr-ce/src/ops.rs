@@ -163,6 +163,21 @@ pub async fn load(storage: &dyn StorageBackend) {
     l.runtimes = runtimes;
 }
 
+/// The deployment of an agent, if it is deployed.
+pub fn deployment_of_agent(agent_id: &str) -> Option<Deployment> {
+    ledger().read().unwrap().deployments.values().find(|d| d.kind == "agent" && d.target == agent_id).cloned()
+}
+
+/// Deployments that run a flow — the flow itself, or agents built on it.
+pub fn deployments_of_flow(flow_ref: &str) -> Vec<Deployment> {
+    ledger().read().unwrap().deployments.values().filter(|d| d.flow_ref == flow_ref).cloned().collect()
+}
+
+/// Deployments placed from a canvas (`ns/name`).
+pub fn deployments_using_canvas(canvas: &str) -> Vec<Deployment> {
+    ledger().read().unwrap().deployments.values().filter(|d| d.canvas == canvas).cloned().collect()
+}
+
 fn cached(id: &str) -> Option<Deployment> {
     ledger().read().unwrap().deployments.get(id).cloned()
 }

@@ -187,6 +187,10 @@ impl TaskHandler for LanceDbHandler {
                 let filter = with.get("filter").and_then(|v| v.as_str())
                     .ok_or_else(|| RuntimeError::task_failed(&task.name, "delete requires 'filter'"))?;
 
+                // The dependency tree: a template with agents, a deployed agent.
+                if let Err(why) = crate::integrity::check_table_delete(&db, table_name, filter).await {
+                    return Err(RuntimeError::task_failed(&task.name, why));
+                }
                 let table = db.open_table(table_name).execute().await
                     .map_err(|e| RuntimeError::Communication(format!("open table error: {}", e)))?;
                 table.delete(filter).await

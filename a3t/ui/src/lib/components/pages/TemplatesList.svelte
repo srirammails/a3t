@@ -177,9 +177,16 @@ do:
   let deleteConfirmName = $state('');
   let deleting = $state(false);
 
-  function requestDelete(id: string, name: string) {
+  /// Agents built from the template being deleted. A template cannot be
+  /// deleted while any exist — the server refuses too; this says so up front.
+  let deleteUsers = $state<any[] | null>(null);
+  async function requestDelete(id: string, name: string) {
     deleteTarget = { id, name };
     deleteConfirmName = '';
+    deleteUsers = null;
+    const res = await execFlow('a3t-agents-list', 'a3t', { org_id: 'org-default' }, { silent: true });
+    const all = res.ok ? (Array.isArray(res.data) ? res.data : (res.data?.rows ?? res.data?.output ?? [])) : [];
+    deleteUsers = all.filter((a: any) => a.template_id === id);
   }
 
   // Agents for the selected template
@@ -313,6 +320,15 @@ do:
       return;
     }
 
+    // Agents built from this template take the change: say which before saving.
+    if (templateAgents.length > 0) {
+      const names = templateAgents.map((a: any) => a.name ?? a.id).slice(0, 10).join(', ');
+      const more = templateAgents.length > 10 ? ` and ${templateAgents.length - 10} more` : '';
+      if (!confirm(`This template is used by ${templateAgents.length} agent(s): ${names}${more}.\n\nSaving changes what those agents run. Continue?`)) {
+        saving = false;
+        return;
+      }
+    }
     const res = await execFlow('a3t-templates-update', 'a3t', {
       id: template.id,
       org_id: 'org-default',
@@ -332,7 +348,7 @@ do:
       saveMsg = 'Saved';
       setTimeout(() => saveMsg = '', 2000);
     } else {
-      saveMsg = 'Save failed';
+      saveMsg = res.error ?? 'Save failed';
     }
   }
 
@@ -610,12 +626,22 @@ do:
       <svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="var(--err, #d44)" stroke-width="1.5"><path d="M8 1L2 4v4c0 4 3 6.5 6 7.5 3-1 6-3.5 6-7.5V4z"/><path d="M8 5v4M8 11h.01" stroke-width="2" stroke-linecap="round"/></svg>
       <h3>Delete Template</h3>
     </div>
-    <p class="del-msg">This will permanently delete <strong>{deleteTarget.name}</strong> and cannot be undone.</p>
-    <p class="del-msg">Type the template name to confirm:</p>
-    <input class="del-input" type="text" bind:value={deleteConfirmName} placeholder={deleteTarget.name} />
+    {#if deleteUsers === null}
+      <p class="del-msg">Checking which agents use it…</p>
+    {:else if deleteUsers.length > 0}
+      <p class="del-msg"><strong>{deleteTarget.name}</strong> can’t be deleted while agents are built from it. Delete these {deleteUsers.length} agent(s) first:</p>
+      <ul class="del-users">
+        {#each deleteUsers as a}<li>{a.name ?? a.id}</li>{/each}
+      </ul>
+    {:else}
+      <p class="del-msg">This will permanently delete <strong>{deleteTarget.name}</strong> and cannot be undone.</p>
+      <p class="del-msg">Type the template name to confirm:</p>
+      <input class="del-input" type="text" bind:value={deleteConfirmName} placeholder={deleteTarget.name} />
+    {/if}
+    {#if error && deleteTarget}<p class="del-msg" style="color: var(--err)">{error}</p>{/if}
     <div class="del-actions">
       <button class="btn ghost" onclick={cancelDelete}>Cancel</button>
-      <button class="btn danger" disabled={deleting || deleteConfirmName !== deleteTarget.name} onclick={confirmDelete}>
+      <button class="btn danger" disabled={deleting || !deleteUsers || deleteUsers.length > 0 || deleteConfirmName !== deleteTarget.name} onclick={confirmDelete}>
         {deleting ? 'Deleting...' : 'Delete Template'}
       </button>
     </div>
@@ -982,4 +1008,5 @@ do:
   }
   .btn.danger:hover { opacity: 0.9; }
   .btn.danger:disabled { opacity: 0.4; cursor: default; }
+  .del-users { margin: 0 0 12px; padding-left: 18px; font-size: 13px; color: var(--text-2); max-height: 160px; overflow: auto; }
 </style>

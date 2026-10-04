@@ -99,6 +99,8 @@
     if (!confirm(`Delete canvas "${c.name}"?`)) return;
     const res = await canvasApi.remove(c.namespace, c.name);
     if (res.ok) await load();
+    // Refused while deployed or bound to an agent — the reason names what to remove first.
+    else deployMsg = `${c.name}: ${res.error ?? 'delete failed'}`;
   }
   async function deployCanvas(c: any) {
     const [ns, nm] = (c.flowRef || '').split('/');

@@ -46,3 +46,27 @@ pub use tools::{
 // Re-export the identity type so MCP-server call sites can name the principal
 // they pass to `handle_tool_call` without a direct flowr-policy dependency (E0.4a).
 pub use flowr_policy::{Principal, AgentId};
+
+/// Referential-integrity check for destructive tools, supplied by the runtime.
+///
+/// `delete_flow` and `delete_resource` live here but cannot see what depends on
+/// what (deployments, agent bindings) — that knowledge is in flowr-ce. The runtime
+/// installs a guard at startup; without one, deletes behave as before.
+#[async_trait::async_trait]
+pub trait DeleteGuard: Send + Sync {
+    /// `kind` is "flow" or "resource". `Err` carries the user-facing reason.
+    async fn check(&self, kind: &str, ns: &str, name: &str) -> Result<(), String>;
+}
+
+static DELETE_GUARD: std::sync::OnceLock<std::sync::Arc<dyn DeleteGuard>> = std::sync::OnceLock::new();
+
+pub fn set_delete_guard(g: std::sync::Arc<dyn DeleteGuard>) {
+    let _ = DELETE_GUARD.set(g);
+}
+
+pub async fn check_delete(kind: &str, ns: &str, name: &str) -> Result<(), String> {
+    match DELETE_GUARD.get() {
+        Some(g) => g.check(kind, ns, name).await,
+        None => Ok(()),
+    }
+}

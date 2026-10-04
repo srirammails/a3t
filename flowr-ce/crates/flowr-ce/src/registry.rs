@@ -439,9 +439,16 @@ async fn update_resource(
 
 /// DELETE /registry/resources/:ns/:name — remove a resource. Gated by
 /// `resource:delete`; deleting a `type: cedar` policy needs the InfoSec role.
+#[derive(Deserialize, Default)]
+struct DeleteQuery {
+    /// For a runtime: its name again, to confirm the reschedule.
+    confirm: Option<String>,
+}
+
 async fn delete_resource(
     State(state): State<Arc<RegistryState>>,
     Path((ns, name)): Path<(String, String)>,
+    Query(q): Query<DeleteQuery>,
     principal: Option<Extension<Principal>>,
 ) -> impl IntoResponse {
     let who = caller(principal);
@@ -457,6 +464,44 @@ async fn delete_resource(
         .await
         {
             return resp.into_response();
+        }
+        // A runtime is never refused — deleting it is terminating a container, and
+        // what ran there is rescheduled. Without `?confirm=<name>` this answers
+        // 409 with the plan (moves, fresh runtimes, isolated warnings) so the
+        // caller can show it before anything changes.
+        if r.type_ref == "runtime" {
+            let by = who.id().to_string();
+            return match crate::ops::terminate_runtime(state.storage.as_ref(), &name, &by, q.confirm.as_deref()).await {
+                Ok(v) if v["preview"].as_bool() == Some(true) => {
+                    let has_impact = v["impact"]["plan"].as_array().is_some_and(|a| !a.is_empty())
+                        || v["impact"]["pinnedCanvases"].as_array().is_some_and(|a| !a.is_empty());
+                    if has_impact {
+                        (StatusCode::CONFLICT, Json(json!({
+                            "error": "confirm required",
+                            "message": format!("Deleting runtime '{name}' reschedules what runs on it. Review the plan, then repeat with ?confirm={name}."),
+                            "impact": v["impact"],
+                        }))).into_response()
+                    } else {
+                        match crate::ops::terminate_runtime(state.storage.as_ref(), &name, &by, Some(&name)).await {
+                            Ok(_) => StatusCode::NO_CONTENT.into_response(),
+                            Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+                        }
+                    }
+                }
+                Ok(v) => Json(v).into_response(),
+                Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+            };
+        }
+        // A deployment record is removed by undeploying it, so the ledger the
+        // runtime admits against stays in step.
+        if r.type_ref == "deployment" {
+            return match crate::ops::undeploy(state.storage.as_ref(), &name, &who.id().to_string()).await {
+                Ok(_) => StatusCode::NO_CONTENT.into_response(),
+                Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+            };
+        }
+        if let Err(why) = crate::integrity::check_resource_delete(state.storage.as_ref(), &ns, &name).await {
+            return (StatusCode::CONFLICT, Json(json!({ "error": why }))).into_response();
         }
         return match state.storage.resources().delete(&ns, &name).await {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -478,6 +523,9 @@ async fn delete_resource(
         .await
         {
             return resp.into_response();
+        }
+        if let Err(why) = crate::integrity::check_flow_delete(&ns, &name) {
+            return (StatusCode::CONFLICT, Json(json!({ "error": why }))).into_response();
         }
         return match state.storage.workflows().delete(&ns, &name).await {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
