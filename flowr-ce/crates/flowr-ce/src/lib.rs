@@ -1952,7 +1952,23 @@ async fn write_response<W: AsyncWriteExt + Unpin>(writer: &mut W, response: &Jso
 // --- Execution worker ---
 
 async fn run_worker(storage: Arc<dyn StorageBackend>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     info!("Execution worker started");
+
+    // Executions currently running. Compaction waits for this to reach zero:
+    // it rewrites the executions table's files, and a status update committing
+    // to the same file at that moment would fail.
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    // Executions finished since the last compaction — skip compaction when
+    // there is nothing new to fold in.
+    let finished = Arc::new(AtomicUsize::new(0));
+    // First pass soon after start (the table may have been left fragmented by
+    // an earlier build that never compacted), then periodically.
+    let interval = std::time::Duration::from_secs(
+        std::env::var("FLOWR_COMPACT_INTERVAL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(600),
+    );
+    let mut next_compact = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut first_pass = true;
 
     loop {
         // Poll the queue for execution requests
@@ -1968,6 +1984,9 @@ async fn run_worker(storage: Arc<dyn StorageBackend>) {
                     "Processing execution request"
                 );
 
+                in_flight.fetch_add(1, Ordering::SeqCst);
+                let in_flight_c = in_flight.clone();
+                let finished_c = finished.clone();
                 tokio::spawn(async move {
                     match execute_workflow(storage_clone, &http_client, request).await {
                         Ok(state) => {
@@ -1981,10 +2000,28 @@ async fn run_worker(storage: Arc<dyn StorageBackend>) {
                             error!(error = %e, "Workflow execution failed");
                         }
                     }
+                    finished_c.fetch_add(1, Ordering::SeqCst);
+                    in_flight_c.fetch_sub(1, Ordering::SeqCst);
                 });
             }
             Ok(None) => {
-                // No pending requests — sleep briefly
+                // Idle. Compact here, inline: while this runs no new execution
+                // is dequeued, and in_flight == 0 means none is still writing.
+                // A long-running execution simply postpones compaction.
+                if std::time::Instant::now() >= next_compact
+                    && in_flight.load(Ordering::SeqCst) == 0
+                    && (first_pass || finished.load(Ordering::SeqCst) > 0)
+                {
+                    finished.store(0, Ordering::SeqCst);
+                    first_pass = false;
+                    match storage.maintain().await {
+                        Ok(summary) if !summary.is_empty() => info!(%summary, "storage maintenance"),
+                        Ok(_) => {}
+                        // Not fatal: reads stay correct, just slower. Retried next interval.
+                        Err(e) => warn!(error = %e, "storage maintenance failed"),
+                    }
+                    next_compact = std::time::Instant::now() + interval;
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
             Err(e) => {

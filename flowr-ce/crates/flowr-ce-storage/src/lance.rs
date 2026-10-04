@@ -14,7 +14,7 @@ use flowr_storage::{
     CheckpointStore, EventBus, ExecutionQueue, ExecutionStore, ResourceStore, SettingsStore,
     StateStore, StorageBackend, TriggerStore, WorkflowStore,
 };
-use flowr_types::FlowResult;
+use flowr_types::{FlowError, FlowResult};
 
 use crate::checkpoints::LanceCheckpointStore;
 use crate::events::InMemoryEventBus;
@@ -183,5 +183,72 @@ impl StorageBackend for LanceStorage {
     async fn close(&self) -> FlowResult<()> {
         // LanceDB handles cleanup automatically
         Ok(())
+    }
+
+    /// Compact the executions table and prune old versions.
+    ///
+    /// LanceDB never rewrites in place: every write appends a new data file, and
+    /// an execution writes its row several times (queued, running, completed —
+    /// each an update, i.e. delete + append). Uncompacted, the table had grown
+    /// to 2,006 data files across 556 versions, so every read opened and scanned
+    /// all of them: 0.5-0.7 s per access, and a page load touches this table 4-6
+    /// times. A list that runs in 14 ms took 2-4 s.
+    ///
+    /// Only the executions table is compacted here, because only the worker
+    /// writes it and the worker calls this with no execution in flight —
+    /// compaction rewrites fragments, and a concurrent update to the same
+    /// fragment would fail its commit. Other tables are written by request
+    /// handlers at any moment and are small; they are left alone.
+    ///
+    async fn maintain(&self) -> FlowResult<String> {
+        let conn = self.conn.read().await;
+        let table = match conn.open_table("executions").execute().await {
+            Ok(t) => t,
+            // No table yet means nothing to compact.
+            Err(_) => return Ok(String::new()),
+        };
+        let started = std::time::Instant::now();
+        let compact = table
+            .optimize(lancedb::table::OptimizeAction::Compact {
+                options: Default::default(),
+                remap_options: None,
+            })
+            .await
+            .map_err(|e| FlowError::Storage(format!("executions compaction failed: {e}")))?;
+
+        // Prune old versions AGGRESSIVELY, not LanceDB's default seven days.
+        //
+        // Retained versions were the second cost: LanceDB's auto-cleanup hook
+        // fires every 20th commit and walks every retained version. With 558
+        // kept, that walk stalled one status write in ~5 for ~2 s — the slow
+        // outliers left after compaction. It also kept 120 MB of dead files.
+        //
+        // Ten minutes is safe here: this runs with no execution in flight (the
+        // worker is the only writer, and it is blocked running this), and
+        // readers always open the latest version, held for milliseconds.
+        // `delete_unverified` is needed because LanceDB otherwise refuses to
+        // delete anything newer than seven days in case a transaction is open —
+        // which the in-flight check rules out.
+        let prune = table
+            .optimize(lancedb::table::OptimizeAction::Prune {
+                older_than: Some(chrono::Duration::minutes(10)),
+                delete_unverified: Some(true),
+                error_if_tagged_old_versions: Some(false),
+            })
+            .await
+            .map_err(|e| FlowError::Storage(format!("executions version pruning failed: {e}")))?;
+
+        let mut out = format!("executions optimized in {:.1}s", started.elapsed().as_secs_f32());
+        if let Some(c) = compact.compaction {
+            out.push_str(&format!(", {} files -> {}", c.fragments_removed, c.fragments_added));
+        }
+        if let Some(p) = prune.prune {
+            out.push_str(&format!(
+                ", {} old versions pruned ({:.1} MB freed)",
+                p.old_versions,
+                p.bytes_removed as f64 / 1_048_576.0
+            ));
+        }
+        Ok(out)
     }
 }

@@ -1877,7 +1877,10 @@ async fn execute_flow(
         .and_then(|v| v.parse().ok())
         .unwrap_or(120);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(wait_secs);
-    let mut delay = std::time::Duration::from_millis(100);
+    // Short first checks, capped low: list flows finish in milliseconds, and a
+    // 1 s cap meant a flow done at 1.6 s was reported at 2.5 s. Each check is one
+    // execution-row read, which is cheap once the table is compacted.
+    let mut delay = std::time::Duration::from_millis(25);
     loop {
         if let Ok(Some(state)) = storage.executions().get(instance_id).await {
             match state.status {
@@ -1911,7 +1914,7 @@ async fn execute_flow(
             ));
         }
         tokio::time::sleep(delay).await;
-        delay = std::cmp::min(delay * 2, std::time::Duration::from_millis(1000));
+        delay = std::cmp::min(delay * 2, std::time::Duration::from_millis(250));
     }
 }
 

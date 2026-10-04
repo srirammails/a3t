@@ -307,4 +307,12 @@ pub trait StorageBackend: Send + Sync {
 
     /// Close the storage backend
     async fn close(&self) -> FlowResult<()>;
+
+    /// Housekeeping that must not run concurrently with execution writes —
+    /// compaction for an append-only store. The worker calls it only while no
+    /// execution is in flight. Returns a short summary for the log; backends
+    /// with nothing to do keep the default.
+    async fn maintain(&self) -> FlowResult<String> {
+        Ok(String::new())
+    }
 }

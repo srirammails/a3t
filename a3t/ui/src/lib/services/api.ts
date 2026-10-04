@@ -377,8 +377,27 @@ export async function execFlow(
       return { ok: false, error: err };
     }
 
-    // Step 2: Extract instance ID
+    // Step 2: Use the result if the server already has it.
+    //
+    // execute_flow waits for the flow and returns "Workflow execution completed
+    // … Output:\n<json>". This used to be discarded: the client took only the
+    // instance id, slept 500 ms, then asked again — paying a fixed half second
+    // plus a second round trip on every page load, for an answer it already had.
     const text = typeof execRes.data === 'string' ? execRes.data : '';
+    if (/Status:\s*completed/i.test(text)) {
+      const out = text.split(/\nOutput:\n/)[1];
+      if (out !== undefined) {
+        try {
+          const parsed = JSON.parse(out);
+          // A null output used to yield the whole status object (`d.output ?? d`
+          // below); keep that by letting it fall through to the poll.
+          if (parsed !== null) {
+            progressDone();
+            return { ok: true, data: parsed };
+          }
+        } catch { /* unexpected shape — fall back to polling below */ }
+      }
+    }
     const match = text.match(/Instance ID:\s*`?([0-9a-f-]+)`?/);
     const instanceId = match?.[1];
 
@@ -392,15 +411,15 @@ export async function execFlow(
       return { ok: false, error: err };
     }
 
-    // Step 3: Poll for completion
+    // Step 3: Still running (a long flow outlived the server's wait) — poll.
+    // Check first, then wait: sleeping BEFORE the first check added a fixed
+    // delay even when the answer was already there.
     for (let i = 0; i < maxPolls; i++) {
-      await new Promise(r => setTimeout(r, pollInterval));
+      if (i > 0) await new Promise(r => setTimeout(r, pollInterval));
       const statusRes = await mcpCall('get_execution_status', { instance_id: instanceId });
-      console.log(`[execFlow] poll ${i}/${maxPolls} for ${instanceId}:`, statusRes.ok, typeof statusRes.data, statusRes.data?.status);
       if (!statusRes.ok) continue;
       const d = statusRes.data;
       if (d?.status === 'Completed' || d?.status === 'completed') {
-        console.log(`[execFlow] ${flowName} completed, output type:`, typeof d.output, Array.isArray(d.output) ? `array(${d.output.length})` : d.output);
         progressDone();
         return { ok: true, data: d.output ?? d };
       }
