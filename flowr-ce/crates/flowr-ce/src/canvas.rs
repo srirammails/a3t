@@ -113,7 +113,7 @@ async fn authorize_deploy(
 }
 
 /// Read every stored canvas as a typed spec, paired with its registry identity.
-async fn stored_canvases(storage: &dyn StorageBackend) -> Vec<(String, String, CanvasSpec)> {
+pub(crate) async fn stored_canvases(storage: &dyn StorageBackend) -> Vec<(String, String, CanvasSpec)> {
     let mut out = Vec::new();
     for ns in ["a3t", "default", "system"] {
         let Ok(list) = storage.resources().list(ns).await else { continue };
@@ -342,6 +342,7 @@ pub(crate) async fn op_bind_canvas(
 /// granted, earlier in this work; one gate, at the layer that can prompt.
 pub(crate) async fn op_deploy_flow(
     storage: &dyn StorageBackend,
+    by: &str,
     ns: &str,
     name: &str,
     runtime: Option<&str>,
@@ -373,8 +374,29 @@ pub(crate) async fn op_deploy_flow(
 isolation requires the EE controller."),
         );
     }
+    // Leave a record behind. Without one there is nothing to list, pause or
+    // undeploy later — which is exactly how deployments used to vanish.
+    let rec = record_deployment(storage, by, ns, name, runtime).await?;
+    if let Some(obj) = p.as_object_mut() {
+        obj.insert("deployment".to_string(), rec);
+    }
     tracing::info!(flow = %format!("{ns}/{name}"), "flow deployed via tool");
     Ok(p)
+}
+
+/// Write the deployment record for a placement that just succeeded.
+async fn record_deployment(
+    storage: &dyn StorageBackend,
+    by: &str,
+    ns: &str,
+    name: &str,
+    runtime: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let (rt, eff_ns, mode) = placement_target(storage, ns, name, runtime)
+        .await
+        .ok_or_else(|| "placement resolved but could not be recorded".to_string())?;
+    let d = crate::ops::record_deploy(storage, by, ns, name, &rt.name, &eff_ns, &mode).await?;
+    Ok(serde_json::to_value(d).unwrap_or(json!({})))
 }
 
 /// Record a runtime pin on the canvas bound to `flow_ref`.
@@ -485,6 +507,7 @@ pub(crate) async fn op_create_runtime(
         labels: lbl,
         url: url.filter(|u| !u.is_empty()).map(str::to_string),
         default: false,
+        ..Default::default()
     };
     let resource = flowr_types::Resource::new(
         name.to_string(),
@@ -613,7 +636,7 @@ async fn gate_placement(
 }
 
 /// Collect all registered runtime pools (`type_ref == "runtime"`) as typed specs.
-async fn collect_runtimes(storage: &dyn StorageBackend) -> Vec<RuntimeSpec> {
+pub(crate) async fn collect_runtimes(storage: &dyn StorageBackend) -> Vec<RuntimeSpec> {
     let mut out = Vec::new();
     for ns in &["system", "a3t", "default"] {
         if let Ok(resources) = storage.resources().list(ns).await {
@@ -654,7 +677,7 @@ async fn find_canvas_by_flow_ref(storage: &dyn StorageBackend, flow_ref: &str) -
 
 /// Resolve a flow's effective canvas: the inline block, the referenced canvas
 /// resource, a standalone canvas that targets this flow, or a default canvas.
-async fn resolve_canvas(storage: &dyn StorageBackend, ns: &str, name: &str) -> Result<CanvasSpec, String> {
+pub(crate) async fn resolve_canvas(storage: &dyn StorageBackend, ns: &str, name: &str) -> Result<CanvasSpec, String> {
     let wf = storage
         .workflows()
         .get(ns, name)
@@ -853,6 +876,10 @@ async fn deploy_flow(
                             obj.insert("edition".into(), json!("ee"));
                             obj.insert("controller".into(), applied);
                         }
+                        match record_deployment(&*state.storage, &principal.id(), &ns, &name, None).await {
+                            Ok(rec) => { if let Some(obj) = p.as_object_mut() { obj.insert("deployment".into(), rec); } }
+                            Err(e) => tracing::warn!(error = %e, "deployment not recorded"),
+                        }
                         tracing::info!(flow = %format!("{ns}/{name}"), "canvas pushed to controller (EE)");
                         return Json(p).into_response();
                     }
@@ -867,6 +894,10 @@ async fn deploy_flow(
             }
 
             // CE (or EE without a controller): logical placement only.
+            match record_deployment(&*state.storage, &principal.id(), &ns, &name, None).await {
+                Ok(rec) => { if let Some(obj) = p.as_object_mut() { obj.insert("deployment".into(), rec); } }
+                Err(e) => tracing::warn!(error = %e, "deployment not recorded"),
+            }
             if let Some(obj) = p.as_object_mut() {
                 obj.insert("deployed".into(), json!(true));
                 obj.insert("edition".into(), json!("ce"));
@@ -964,6 +995,11 @@ async fn deploy_canvas_resource(
     match push_spec_to_controller(&url, &ns, &name, &res.config).await {
         Ok(applied) => {
             tracing::info!(canvas = %format!("{ns}/{name}"), flow = %spec.flow_ref, "canvas resource deployed to controller (EE)");
+            if let Some((fns, fname)) = spec.flow_ref.split_once('/') {
+                if let Err(e) = record_deployment(&*state.storage, &principal.id(), fns, fname, None).await {
+                    tracing::warn!(error = %e, "deployment not recorded");
+                }
+            }
             Json(json!({ "deployed": true, "edition": "ee", "canvas": format!("{ns}/{name}"), "flowRef": spec.flow_ref, "agentRef": spec.agent_ref, "controller": applied })).into_response()
         }
         Err(e) => (axum::http::StatusCode::BAD_GATEWAY, Json(json!({ "deployed": false, "error": format!("controller push failed: {e}") }))).into_response(),

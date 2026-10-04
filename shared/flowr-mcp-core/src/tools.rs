@@ -330,6 +330,106 @@ onto a specific pool the user chose; it must still satisfy the canvas's selector
             }),
         },
         Tool {
+            name: "list_deployments".to_string(),
+            description: "Show every runtime with what is deployed on it (flows and agents), \
+each deployment's state (serving, paused, runtime-paused, hibernated), recent activity (runs, \
+in flight, error rate, p50/p95) and the host's CPU, memory and disk. Use it to answer \
+\"what is deployed / running where\" and to find a deployment's id."
+                .to_string(),
+            input_schema: json!({ "type": "object", "properties": {} }),
+        },
+        Tool {
+            name: "probe_deployment".to_string(),
+            description: "Live look at one deployment: whether it is serving, its last runs \
+with errors, the triggers that feed it, and health checks (flow exists, canvas resolves, \
+placement still matches)."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "deployment": { "type": "string", "description": "Deployment id, flow 'ns/name', or agent id" }
+                },
+                "required": ["deployment"]
+            }),
+        },
+        Tool {
+            name: "pause_deployment".to_string(),
+            description: "Hard-pause a deployed flow or agent. Every new request — triggers, \
+manual runs, chat, other agents — is refused until it is resumed; webhooks get the runtime's \
+paused response (503 or 404). Runs already in progress finish. Pausing in production needs \
+the user's approval: call it anyway and the platform will ask them."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "deployment": { "type": "string", "description": "Deployment id, flow 'ns/name', or agent id" },
+                    "reason": { "type": "string", "description": "Shown to whoever finds it paused" }
+                },
+                "required": ["deployment"]
+            }),
+        },
+        Tool {
+            name: "resume_deployment".to_string(),
+            description: "Resume a paused deployment so it serves again.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "deployment": { "type": "string" } },
+                "required": ["deployment"]
+            }),
+        },
+        Tool {
+            name: "restart_deployment".to_string(),
+            description: "Re-resolve a deployment's placement from its current canvas — use \
+after editing the canvas. Refused while paused (resume first)."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "deployment": { "type": "string" } },
+                "required": ["deployment"]
+            }),
+        },
+        Tool {
+            name: "undeploy".to_string(),
+            description: "Remove a deployment. The flow and its canvas are kept, so it can \
+be deployed again."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "deployment": { "type": "string" } },
+                "required": ["deployment"]
+            }),
+        },
+        Tool {
+            name: "set_runtime_state".to_string(),
+            description: "Admin: change a runtime's state. 'hibernated' sleeps it — the first \
+request wakes it. 'paused' refuses everything deployed on it until resumed. 'active' resumes. \
+Deployments paused on their own stay paused."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "runtime": { "type": "string" },
+                    "state": { "type": "string", "enum": ["active", "hibernated", "paused"] }
+                },
+                "required": ["runtime", "state"]
+            }),
+        },
+        Tool {
+            name: "set_paused_response".to_string(),
+            description: "Admin: the HTTP status triggers get while a deployment on this \
+runtime is paused — 503 (default) or 404 (hide the endpoint). A canvas can override it with \
+lifecycle.pausedResponse."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "runtime": { "type": "string" },
+                    "status": { "type": "integer", "enum": [503, 404] }
+                },
+                "required": ["runtime", "status"]
+            }),
+        },
+        Tool {
             name: "list_permissions".to_string(),
             description: "List what the user has already allowed or declined in this \
 conversation. Use it ONLY when the user asks what they have granted or denied, or to \
@@ -875,6 +975,9 @@ pub const AGENT_RUNTIME_TOOLS: &[&str] = &[
     // so they route through the agent-runtime interceptor like the agent tools.
     "list_canvas_presets", "get_canvas", "list_runtimes", "preview_placement",
     "clone_canvas", "bind_canvas", "deploy_flow", "update_canvas", "create_runtime",
+    // Runtime operations — the deployment ledger in flowr-ce (`ops`).
+    "list_deployments", "probe_deployment", "pause_deployment", "resume_deployment",
+    "restart_deployment", "undeploy", "set_runtime_state", "set_paused_response",
 ];
 
 pub fn is_agent_runtime_tool(name: &str) -> bool {

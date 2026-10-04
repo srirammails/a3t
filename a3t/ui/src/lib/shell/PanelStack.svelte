@@ -25,6 +25,7 @@
   import SecurityPage from '$lib/components/pages/SecurityPage.svelte';
   import ExecutionsPage from '$lib/components/pages/ExecutionsPage.svelte';
   import LogsPage from '$lib/components/pages/LogsPage.svelte';
+  import RuntimePage from '$lib/components/pages/RuntimePage.svelte';
   import Placeholder from '$lib/components/pages/Placeholder.svelte';
 
   let panels = $derived(getPanels());
@@ -81,6 +82,8 @@
       <SecurityPage />
     {:else if activePanel.type === 'executions'}
       <ExecutionsPage />
+    {:else if activePanel.type === 'runtime' || activePanel.type === 'reconciliation'}
+      <RuntimePage />
     {:else if activePanel.type === 'logs'}
       <LogsPage />
     {:else}

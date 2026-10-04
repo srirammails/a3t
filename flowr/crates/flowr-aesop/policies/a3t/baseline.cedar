@@ -230,3 +230,56 @@ unless {
   principal is User && principal has roles &&
   (principal.roles.contains("Admin") || principal.roles.contains("SuperAdmin"))
 };
+
+// ── Operating deployments ──
+//
+// Pausing, resuming and undeploying are gated exactly like placing: whoever may
+// put work into a pool may also stop it there. Stopping production is as
+// consequential as starting it — a paused prod agent is an outage — so prod is
+// Admin-only in both directions, and an agent acting for an Admin gets an Ask.
+permit(
+  principal,
+  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy"],
+  resource
+) when { resource has label_tier && resource.label_tier != "prod" };
+
+permit(
+  principal,
+  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy"],
+  resource
+) unless { resource has label_tier };
+
+permit(
+  principal,
+  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy"],
+  resource
+) when {
+  principal is User && principal has roles &&
+  (principal.roles.contains("Admin") || principal.roles.contains("SuperAdmin"))
+};
+
+forbid(
+  principal,
+  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy"],
+  resource
+)
+when { resource has label_tier && resource.label_tier == "prod" }
+unless {
+  principal is User && principal has roles &&
+  (principal.roles.contains("Admin") || principal.roles.contains("SuperAdmin"))
+};
+
+// ── Runtime state ──
+//
+// A runtime hosts many teams' deployments, so hibernating, pausing or resuming
+// it is an operator decision whatever its tier. Admins only, and only humans:
+// an agent acting for an Admin gets an Ask, so a model can propose it and a
+// person confirms.
+permit(
+  principal,
+  action in [Action::"runtime:hibernate", Action::"runtime:pause", Action::"runtime:resume"],
+  resource
+) when {
+  principal is User && principal has roles &&
+  (principal.roles.contains("Admin") || principal.roles.contains("SuperAdmin"))
+};

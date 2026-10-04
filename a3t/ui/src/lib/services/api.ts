@@ -262,6 +262,22 @@ export const securityPolicies = {
     request(`/registry/resources/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 };
 
+// ── Runtime console (deployments, pause/resume, runtime state, metrics) ──
+const enc = encodeURIComponent;
+export const opsApi = {
+  /** Every runtime with its deployments, live activity and host metrics. */
+  overview: () => request('/ops/overview', { method: 'GET' }),
+  probe: (id: string) => request(`/ops/deployments/${enc(id)}/probe`, { method: 'GET' }),
+  /** pause | resume | restart | undeploy. `reason` is shown to whoever finds it paused. */
+  deployment: (id: string, action: 'pause' | 'resume' | 'restart' | 'undeploy', reason?: string) =>
+    request(`/ops/deployments/${enc(id)}/${action}`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
+  /** hibernate | pause | resume — admin only. */
+  runtime: (name: string, action: 'hibernate' | 'pause' | 'resume') =>
+    request(`/ops/runtimes/${enc(name)}/${action}`, { method: 'POST' }),
+  pausedResponse: (name: string, status: 503 | 404) =>
+    request(`/ops/runtimes/${enc(name)}/paused-response`, { method: 'PUT', body: JSON.stringify({ status }) }),
+};
+
 // ── Canvas / deployment (flow deployment metadata) ──
 export const canvasApi = {
   /** List registered runtime pools (type_ref=runtime resources, typed). */

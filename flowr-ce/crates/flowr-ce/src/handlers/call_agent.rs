@@ -456,6 +456,17 @@ impl TaskHandler for AgentHandler {
         let storage = get_storage(ctx)?;
         let http_client = reqwest::Client::new();
 
+        // ── Admission: a paused agent does not run, however it was reached ──
+        // Chat, send_message, triggers and other agents all arrive here, which
+        // makes this the one place an agent pause cannot be routed around —
+        // including agents nested inside another flow, which never pass the
+        // worker's own check under their own name.
+        if let Some(agent) = crate::ops::agent_of_session(&config.session_id) {
+            if let Err(b) = crate::ops::admit(storage.as_ref(), None, Some(agent)).await {
+                return Err(RuntimeError::task_failed(&task.name, format!("refused: {b}")));
+            }
+        }
+
         // ── E0.4c: the agent is a first-class principal ──
         // It acts on behalf of whoever started the flow (ctx.principal). Local
         // tool calls are dispatched in-process through the gated choke point
@@ -1586,6 +1597,36 @@ async fn call_mcp_tool(
                     "policies": policy_ids,
                 }));
             }
+        }
+    }
+
+    // ── Operating deployments and runtimes ──
+    //
+    // Same shape as deploy: decided on the Runtime, answered from the session
+    // ledger if the user already answered, otherwise put to them as a ONE-SHOT
+    // approval — approving one pause must not authorize the next.
+    if let Some((req, action, decision_id)) = crate::ops::ops_request(caller, tool_name, arguments) {
+        let decision = flowr_policy::policy_hook().check(&req).await;
+        flowr_policy::audit::record(&req, &decision);
+        let decision = flowr_mcp_core::apply_session_decisions(
+            session_id, decision, action, "Runtime", &decision_id,
+        );
+        let decision = match decision {
+            flowr_policy::PolicyDecision::Ask { reason, .. } => {
+                crate::approval::request_approval(
+                    session_id, caller, Some(&req.resource.id), tool_name, arguments, &reason,
+                    &[flowr_policy::GrantScope::Once],
+                )
+                .await
+            }
+            settled => settled,
+        };
+        if let flowr_policy::PolicyDecision::Deny { reason, policy_ids } = decision {
+            return Ok(json!({
+                "error": format!("{tool_name} was denied: {reason}"),
+                "denied": true,
+                "policies": policy_ids,
+            }));
         }
     }
 

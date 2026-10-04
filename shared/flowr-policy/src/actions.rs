@@ -21,6 +21,18 @@ pub const FLOW_CANCEL: &str = "flow:cancel";
 /// resource is the `Runtime`, carrying its labels. That is what lets a policy say
 /// "prod tier needs Admin" without enumerating flows.
 pub const FLOW_DEPLOY: &str = "flow:deploy";
+/// Operating a deployment: hard-pause it, resume it, or remove it. Gated on the
+/// Runtime it lives in, like `flow:deploy`, so whoever may place work in a pool
+/// may also stop it there — and prod stays Admin-only both ways.
+pub const FLOW_PAUSE: &str = "flow:pause";
+pub const FLOW_RESUME: &str = "flow:resume";
+pub const FLOW_UNDEPLOY: &str = "flow:undeploy";
+
+// Runtime lifecycle. A runtime is shared infrastructure hosting many teams'
+// deployments, so changing ITS state is an operator decision, not a deployer's.
+pub const RUNTIME_HIBERNATE: &str = "runtime:hibernate";
+pub const RUNTIME_PAUSE: &str = "runtime:pause";
+pub const RUNTIME_RESUME: &str = "runtime:resume";
 
 // Agent lifecycle & delegation
 pub const AGENT_SPAWN: &str = "agent:spawn";
@@ -54,6 +66,12 @@ pub const ALL: &[&str] = &[
     FLOW_START,
     FLOW_CANCEL,
     FLOW_DEPLOY,
+    FLOW_PAUSE,
+    FLOW_RESUME,
+    FLOW_UNDEPLOY,
+    RUNTIME_HIBERNATE,
+    RUNTIME_PAUSE,
+    RUNTIME_RESUME,
     AGENT_SPAWN,
     AGENT_STOP,
     MEMORY_READ,
@@ -87,6 +105,24 @@ pub fn flow_cancel() -> Action {
 }
 pub fn flow_deploy() -> Action {
     Action::known(FLOW_DEPLOY)
+}
+pub fn flow_pause() -> Action {
+    Action::known(FLOW_PAUSE)
+}
+pub fn flow_resume() -> Action {
+    Action::known(FLOW_RESUME)
+}
+pub fn flow_undeploy() -> Action {
+    Action::known(FLOW_UNDEPLOY)
+}
+pub fn runtime_hibernate() -> Action {
+    Action::known(RUNTIME_HIBERNATE)
+}
+pub fn runtime_pause() -> Action {
+    Action::known(RUNTIME_PAUSE)
+}
+pub fn runtime_resume() -> Action {
+    Action::known(RUNTIME_RESUME)
 }
 pub fn agent_spawn() -> Action {
     Action::known(AGENT_SPAWN)

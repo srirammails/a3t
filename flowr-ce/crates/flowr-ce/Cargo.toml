@@ -76,3 +76,5 @@ tokio-stream.workspace = true
 
 # Filesystem utilities
 dirs.workspace = true
+# statvfs for the Runtime console's disk figures
+libc = "0.2"

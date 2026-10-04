@@ -989,3 +989,75 @@ async fn a_viewers_agent_is_refused_prod_never_asked() {
         other => panic!("a viewer's agent must be refused prod — got {other:?}"),
     }
 }
+
+// ── Operating deployments and runtimes ───────────────────────────────────────
+//
+// Pause/resume/undeploy follow the deploy rule on the same Runtime: who may place
+// work in a pool may stop it there, and prod is Admin-only both ways. Changing a
+// RUNTIME's state is an operator decision on shared infrastructure — Admin only,
+// whatever the tier.
+
+fn op_req(principal: Principal, action: flowr_policy::Action, tier: Option<&str>) -> ExecutionRequest {
+    ExecutionRequest {
+        principal,
+        action,
+        resource: runtime_res(tier, "shared"),
+        context: Default::default(),
+        attributes: Default::default(),
+        params: serde_json::json!({}),
+    }
+}
+
+#[tokio::test]
+async fn pausing_follows_the_deploy_rule() {
+    let hook = CedarHook::baseline().unwrap();
+    for action in [
+        flowr_policy::actions::flow_pause(),
+        flowr_policy::actions::flow_resume(),
+        flowr_policy::actions::flow_undeploy(),
+    ] {
+        assert!(matches!(
+            hook.check(&op_req(deployer(&["Viewer"]), action.clone(), Some("test"))).await,
+            PolicyDecision::Allow
+        ), "a viewer may operate a test deployment: {action:?}");
+        match hook.check(&op_req(deployer(&["Viewer"]), action.clone(), Some("prod"))).await {
+            PolicyDecision::Deny { .. } => {}
+            other => panic!("a viewer must not operate prod ({action:?}) — got {other:?}"),
+        }
+        assert!(matches!(
+            hook.check(&op_req(deployer(&["Admin"]), action.clone(), Some("prod"))).await,
+            PolicyDecision::Allow
+        ), "an admin may operate prod: {action:?}");
+        match hook.check(&op_req(agent_with_roles(&["Admin"]), action.clone(), Some("prod"))).await {
+            PolicyDecision::Ask { .. } => {}
+            other => panic!("an Admin's agent should be asked ({action:?}) — got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn runtime_state_is_admin_only_on_every_tier() {
+    let hook = CedarHook::baseline().unwrap();
+    for action in [
+        flowr_policy::actions::runtime_hibernate(),
+        flowr_policy::actions::runtime_pause(),
+        flowr_policy::actions::runtime_resume(),
+    ] {
+        match hook.check(&op_req(deployer(&["Viewer"]), action.clone(), Some("test"))).await {
+            PolicyDecision::Deny { .. } => {}
+            other => panic!("a viewer must not change runtime state ({action:?}) — got {other:?}"),
+        }
+        assert!(matches!(
+            hook.check(&op_req(deployer(&["Admin"]), action.clone(), Some("test"))).await,
+            PolicyDecision::Allow
+        ), "an admin may change runtime state: {action:?}");
+        match hook.check(&op_req(agent_with_roles(&["Admin"]), action.clone(), Some("prod"))).await {
+            PolicyDecision::Ask { .. } => {}
+            other => panic!("an Admin's agent should be asked ({action:?}) — got {other:?}"),
+        }
+        match hook.check(&op_req(agent_with_roles(&["Viewer"]), action.clone(), None)).await {
+            PolicyDecision::Deny { .. } => {}
+            other => panic!("a viewer's agent must be refused ({action:?}) — got {other:?}"),
+        }
+    }
+}

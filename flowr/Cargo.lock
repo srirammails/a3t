@@ -2442,6 +2442,7 @@ dependencies = [
  "flowr-types",
  "futures",
  "lancedb",
+ "libc",
  "mlua",
  "rand 0.8.6",
  "reqwest",

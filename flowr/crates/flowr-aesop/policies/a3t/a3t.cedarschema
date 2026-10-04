@@ -75,6 +75,14 @@ action "mcp:call"    appliesTo { principal: [User, Agent, Service], resource: [T
 action "llm:call"    appliesTo { principal: [User, Agent, Service], resource: [Llm] };
 action "flow:start"  appliesTo { principal: [User, Agent, Service], resource: [Flow] };
 action "flow:deploy" appliesTo { principal: [User, Agent, Service], resource: [Runtime] };
+// Operating a deployment, gated on the Runtime it lives in.
+action "flow:pause"    appliesTo { principal: [User, Agent, Service], resource: [Runtime] };
+action "flow:resume"   appliesTo { principal: [User, Agent, Service], resource: [Runtime] };
+action "flow:undeploy" appliesTo { principal: [User, Agent, Service], resource: [Runtime] };
+// Changing a runtime's own state — operator (Admin) territory.
+action "runtime:hibernate" appliesTo { principal: [User, Agent, Service], resource: [Runtime] };
+action "runtime:pause"     appliesTo { principal: [User, Agent, Service], resource: [Runtime] };
+action "runtime:resume"    appliesTo { principal: [User, Agent, Service], resource: [Runtime] };
 
 // Registry resource governance — the separation-of-duties seam (§6.4).
 // Chat transcript access (§ session persistence). Reading somebody's conversation

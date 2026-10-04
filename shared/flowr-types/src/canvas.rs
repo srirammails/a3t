@@ -171,6 +171,9 @@ pub struct Lifecycle {
     pub scaling: Scaling,
     #[serde(default)]
     pub restart: Restart,
+    /// Per-deployment override of the runtime's `pausedResponse` (503 or 404).
+    #[serde(default, rename = "pausedResponse", skip_serializing_if = "Option::is_none")]
+    pub paused_response: Option<u16>,
 }
 impl Default for Lifecycle {
     fn default() -> Self {
@@ -179,6 +182,7 @@ impl Default for Lifecycle {
             session: SessionMode::Ephemeral,
             scaling: Scaling::default(),
             restart: Restart::default(),
+            paused_response: None,
         }
     }
 }
@@ -357,6 +361,38 @@ pub struct RuntimeSpec {
     /// Marks the pool used when a flow declares no selector.
     #[serde(default)]
     pub default: bool,
+    /// Operational state, set from the Runtime console — not authored config.
+    #[serde(default)]
+    pub state: RuntimeState,
+    /// HTTP status a trigger gets while a deployment here is paused: 503 (the
+    /// default — "exists, unavailable") or 404 (do not reveal the endpoint).
+    /// A canvas may override it per deployment (`lifecycle.pausedResponse`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_response: Option<u16>,
+}
+
+/// A runtime's operational state.
+///
+/// `Hibernated` and `Paused` are deliberately different things. A hibernated
+/// runtime is asleep but serves: the first request wakes it. A paused runtime
+/// refuses every request until an admin resumes it — and that refusal applies to
+/// everything deployed on it, without touching each deployment's own state.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeState {
+    #[default]
+    Active,
+    Hibernated,
+    Paused,
+}
+
+/// The paused-response status, normalised: only 503 and 404 are meaningful, so
+/// anything else falls back to 503 rather than sending a caller a 2xx or a 500.
+pub fn paused_status(code: Option<u16>) -> u16 {
+    match code {
+        Some(404) => 404,
+        _ => 503,
+    }
 }
 
 /// Deep-merge a JSON patch into a value. Objects merge key-by-key; every other
@@ -475,6 +511,7 @@ mod tests {
             labels: labels.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             url: None,
             default,
+            ..Default::default()
         }
     }
 
@@ -608,7 +645,7 @@ mod tests {
     fn pool(name: &str, tier: &str) -> RuntimeSpec {
         let mut labels = BTreeMap::new();
         labels.insert("tier".to_string(), tier.to_string());
-        RuntimeSpec { name: name.into(), namespace: "default".into(), labels, url: None, default: false }
+        RuntimeSpec { name: name.into(), namespace: "default".into(), labels, url: None, default: false, ..Default::default() }
     }
 
     #[test]

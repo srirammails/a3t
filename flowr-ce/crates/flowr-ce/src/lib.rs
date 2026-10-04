@@ -9,6 +9,7 @@ pub(crate) mod server;
 pub mod approval;
 pub mod token_stream;
 pub mod canvas;
+pub mod ops;
 pub mod handlers;
 pub mod registry;
 
@@ -122,6 +123,7 @@ pub fn build_ce_router(storage: Arc<dyn StorageBackend>) -> Router {
 
     let registry_routes = registry::registry_router(storage.clone());
     let canvas_routes = canvas::canvas_router(storage.clone());
+    let ops_routes = ops::ops_router(storage.clone());
 
     let (tx, _) = broadcast::channel::<String>(100);
     let state = Arc::new(AppState { storage, tx });
@@ -184,6 +186,8 @@ pub fn build_ce_router(storage: Arc<dyn StorageBackend>) -> Router {
         .merge(Router::new().nest("/registry", registry_routes))
         // Canvas deploy path (own state)
         .merge(Router::new().nest("/canvas", canvas_routes))
+        // Runtime console: deployments, pause/resume, runtime state, metrics
+        .merge(Router::new().nest("/ops", ops_routes))
 }
 
 /// Spawn the background execution worker
@@ -353,6 +357,7 @@ async fn webhook_handler(
     let trigger_adapter = TriggerAgentAdapter;
     let trigger_wf_adapter = TriggerWorkflowAdapter {
         principal: principal.map(|axum::Extension(p)| p),
+        blocked: Default::default(),
     };
     let trigger_results = flowr_ce_agents::trigger_manager().deliver_webhook(
         &trigger_path, body, &trigger_adapter, &trigger_wf_adapter
@@ -363,7 +368,22 @@ async fn webhook_handler(
         total.extend(r.delivered_to.iter().cloned());
     }
 
-    Json(json!({"delivered": total.len(), "targets": total, "path": trigger_path}))
+    // Everything this path feeds is paused: answer with the paused response, so a
+    // caller can tell "paused" from "delivered" (and from "no such trigger").
+    let blocked = trigger_wf_adapter.blocked.into_inner().unwrap_or_default();
+    if total.is_empty() {
+        if let Some(b) = blocked.first() {
+            let status = StatusCode::from_u16(b.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+            let body = if b.status == 404 {
+                json!({"error": "not found", "path": trigger_path})
+            } else {
+                json!({"error": "paused", "message": b.message, "path": trigger_path})
+            };
+            return (status, Json(body)).into_response();
+        }
+    }
+    Json(json!({"delivered": total.len(), "targets": total, "path": trigger_path,
+                "paused": blocked.iter().map(|b| b.deployment.clone()).collect::<Vec<_>>()})).into_response()
 }
 
 // --- Trigger handlers ---
@@ -450,6 +470,9 @@ struct TriggerWorkflowAdapter {
     /// The authenticated caller, when the webhook carried a valid token (e.g. the
     /// console chat). `None` for external, unauthenticated webhooks.
     principal: Option<flowr_policy::Principal>,
+    /// Targets refused because they (or their runtime) are paused. The webhook
+    /// answers with their paused response when nothing else was delivered.
+    blocked: std::sync::Mutex<Vec<ops::Blocked>>,
 }
 
 #[async_trait::async_trait]
@@ -457,6 +480,16 @@ impl flowr_ce_agents::triggers::WorkflowExecutor for TriggerWorkflowAdapter {
     async fn execute_workflow(&self, namespace: &str, name: &str, input: Value) -> anyhow::Result<String> {
         let storage = GLOBAL_STORAGE.get()
             .ok_or_else(|| anyhow::anyhow!("Storage not initialized"))?;
+        // Checked here, before anything is spawned, so the caller gets the paused
+        // response instead of a 200 for a run that would be refused anyway. Cron
+        // ticks land here too: a paused target is skipped, not queued.
+        let flow_ref = format!("{namespace}/{name}");
+        let agent = input.get("session_id").and_then(|v| v.as_str()).and_then(ops::agent_of_session);
+        if let Err(b) = ops::admit(storage.as_ref(), Some(&flow_ref), agent).await {
+            info!(target = %flow_ref, reason = %b, "trigger skipped (paused)");
+            self.blocked.lock().unwrap().push(b.clone());
+            anyhow::bail!("{}", b);
+        }
         let instance_id = Uuid::now_v7();
         let request = flowr_types::ExecutionRequest {
             instance_id,
@@ -1316,6 +1349,31 @@ pub(crate) async fn handle_agent_tool_call(
         }
     }
 
+    // ── Runtime operations (pause/resume/undeploy, runtime state) ──
+    // Gated on the Runtime, like deploy. The agent loop already decided (and may
+    // have asked the user); direct MCP callers are decided here, non-interactively.
+    if crate::ops::OPS_TOOLS.contains(&name) {
+        if !pre_authorized {
+            if let Some((req, ..)) = crate::ops::ops_request(principal, name, &args) {
+                let decision = flowr_policy::policy_hook().check(&req).await;
+                flowr_policy::audit::record(&req, &decision);
+                if let flowr_policy::PolicyDecision::Deny { reason, policy_ids } =
+                    decision.non_interactive()
+                {
+                    return Some(CallToolResult::error(format!(
+                        "denied: {name} — {reason} (policies: {})",
+                        policy_ids.join(",")
+                    )));
+                }
+            }
+        }
+        return match crate::ops::dispatch(storage.as_ref(), principal.id(), name, &args).await {
+            Some(Ok(v)) => Some(CallToolResult::json(v)),
+            Some(Err(e)) => Some(CallToolResult::error(e)),
+            None => None,
+        };
+    }
+
     // E2 #5 Phase C: these agent/flow *authoring* tools are dispatched here and
     // historically bypassed the site-A policy hook entirely. Gate the write
     // operations through the hook so authorization (RBAC — e.g. authoring needs
@@ -1453,7 +1511,7 @@ pub(crate) async fn handle_agent_tool_call(
             // approval the user was asked for. Reaching here means it was allowed.
             return Some(
                 match crate::canvas::op_deploy_flow(
-                    storage.as_ref(), &ns_arg("a3t"), n, args.get("runtime").and_then(|v| v.as_str()),
+                    storage.as_ref(), principal.id(), &ns_arg("a3t"), n, args.get("runtime").and_then(|v| v.as_str()),
                 ).await {
                     Ok(v) => CallToolResult::json(v),
                     Err(e) => CallToolResult::error(e),
@@ -1954,6 +2012,9 @@ async fn write_response<W: AsyncWriteExt + Unpin>(writer: &mut W, response: &Jso
 async fn run_worker(storage: Arc<dyn StorageBackend>) {
     use std::sync::atomic::{AtomicUsize, Ordering};
     info!("Execution worker started");
+    // The deployment ledger must be in memory before the first run is admitted,
+    // or a paused deployment would serve whatever was queued at startup.
+    ops::load(storage.as_ref()).await;
 
     // Executions currently running. Compaction waits for this to reach zero:
     // it rewrites the executions table's files, and a status update committing
@@ -2039,6 +2100,19 @@ pub async fn execute_workflow(
     request: flowr_types::ExecutionRequest,
 ) -> anyhow::Result<ExecutionState> {
     let start = std::time::Instant::now();
+
+    // Admission: the backstop for every path — runs queued before a pause, chat,
+    // execute_flow, send_message. A refused run is recorded as failed with the
+    // reason, so whoever is waiting on it sees why.
+    {
+        let flow_ref = format!("{}/{}", request.namespace, request.name);
+        let agent = request.input.get("session_id").and_then(|v| v.as_str()).and_then(ops::agent_of_session);
+        if let Err(b) = ops::admit(storage.as_ref(), Some(&flow_ref), agent).await {
+            let state = ExecutionState::new(&request, "unknown").fail(format!("refused: {b}"));
+            let _ = storage.executions().save(state).await;
+            return Err(anyhow::anyhow!("refused: {}", b));
+        }
+    }
 
     // Load WorkflowRecord from storage
     let record = match storage.workflows().get(&request.namespace, &request.name).await {

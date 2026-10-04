@@ -22,6 +22,7 @@ export const APP_ICONS: Record<string, string> = {
     test:      '<path d="M6 1v4M10 1v4M4 5h8a1 1 0 011 1v2l-2 2v4H5V10L3 8V6a1 1 0 011-1z"/><path d="M6 10h4"/>',
     console:   '<rect x="1" y="2" width="14" height="12" rx="1.5"/><path d="M4 6l2 2-2 2"/><path d="M7 10h5"/><circle cx="12" cy="5" r="0.8" fill="currentColor"/>',
     database:  '<ellipse cx="8" cy="4" rx="5.5" ry="2.5"/><path d="M2.5 4v4c0 1.38 2.46 2.5 5.5 2.5s5.5-1.12 5.5-2.5V4"/><path d="M2.5 8c0 1.38 2.46 2.5 5.5 2.5s5.5-1.12 5.5-2.5"/><path d="M2.5 8v4c0 1.38 2.46 2.5 5.5 2.5s5.5-1.12 5.5-2.5V8"/>',
+    runtime:   '<rect x="1.5" y="2" width="13" height="5" rx="1"/><rect x="1.5" y="9" width="13" height="5" rx="1"/><circle cx="4.5" cy="4.5" r="0.8" fill="currentColor"/><circle cx="4.5" cy="11.5" r="0.8" fill="currentColor"/><path d="M8 4.5h4M8 11.5h4"/>',
     runs:      '<polygon points="3,2 13,8 3,14"/><path d="M13 2v12"/>',
     trigger:   '<path d="M13 2L5 9l3 1-5 5 8-7-3-1z"/>',
     terminal:  '<rect x="1" y="2" width="14" height="12" rx="1.5"/><path d="M4 6l3 2-3 2M8 10h4"/>',

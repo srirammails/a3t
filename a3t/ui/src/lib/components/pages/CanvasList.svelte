@@ -2,7 +2,7 @@
   // Canvas = per-flow deployment config (Option 1). Agents-style list of
   // canvases (My / Shared / Community); New/Edit opens the drag-drop designer.
   // Runtime pools (placement targets) are managed via the Runtimes popin.
-  import { canvasApi } from '$lib/services/api';
+  import { canvasApi, opsApi } from '$lib/services/api';
   import DesignerPanel from '$lib/components/shared/DesignerPanel.svelte';
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
   import AppHome from '$lib/shell/AppHome.svelte';
@@ -37,14 +37,18 @@
 
   async function load() {
     loading = true; error = '';
-    const [cv, rt, dep] = await Promise.all([canvasApi.list(), canvasApi.runtimes(), canvasApi.deployments()]);
+    // Live state comes from the deployment ledger — the record every deploy
+    // path writes, CE and EE alike — not from the controller, which may not be
+    // running at all.
+    const [cv, rt, ops] = await Promise.all([canvasApi.list(), canvasApi.runtimes(), opsApi.overview()]);
     if (rt.ok) runtimes = rt.data?.runtimes ?? [];
     live = {}; controllerOn = false;
-    if (dep.ok && dep.data?.controller) {
+    if (ops.ok) {
       controllerOn = true;
-      for (const c of (dep.data?.canvases ?? [])) {
-        const fr = c.spec?.flowRef ?? `${c.namespace}/${c.name}`;
-        live[fr] = { phase: c.status?.phase ?? 'Pending', message: c.status?.message ?? '', runtime: c.status?.placedRuntime ?? '' };
+      const rows = [...(ops.data.runtimes ?? []).flatMap((r: any) => r.deployments), ...(ops.data.unplaced ?? [])];
+      const LABEL: Record<string, string> = { serving: 'serving', paused: 'paused', 'runtime-paused': 'runtime paused', hibernated: 'hibernated', unplaced: 'unplaced' };
+      for (const row of rows) {
+        live[row.deployment.flowRef] = { phase: LABEL[row.serving] ?? row.serving, message: row.deployment.pauseReason ?? '', runtime: row.deployment.runtime };
       }
     }
     if (cv.ok) {

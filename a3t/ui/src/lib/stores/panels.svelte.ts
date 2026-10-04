@@ -46,7 +46,7 @@ const PATH_TO_TYPE: Record<string, { type: string; title: string }> = {
   '/resources': { type: 'resources', title: 'Resources' },
   '/knowledge': { type: 'knowledge', title: 'Knowledge' },
   '/memory': { type: 'memory', title: 'Memory' },
-  '/runtime': { type: 'runtime', title: 'Run Time' },
+  '/runtime': { type: 'runtime', title: 'Runtimes' },
   '/controller': { type: 'reconciliation', title: 'Controller' },
   '/executions': { type: 'executions', title: 'Executions' },
   '/logs': { type: 'logs', title: 'Logs' },

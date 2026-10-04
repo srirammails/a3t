@@ -7,6 +7,7 @@
   // see which runtime pool this canvas resolves to before saving.
   import SlideEditor from '$lib/components/shared/SlideEditor.svelte';
   import YamlEditor from '$lib/components/editor/YamlEditor.svelte';
+  import CanvasDiagram from '$lib/components/editor/CanvasDiagram.svelte';
   import { canvasApi, mcpCall } from '$lib/services/api';
   import * as YAML from 'yaml';
 
@@ -301,29 +302,12 @@
         {#if leftMode === 'code'}
           <YamlEditor value={yamlSource} onchange={onCodeChange} readOnly={readonly} />
         {:else}
-          <div class="cd-preview">
-            <div class="cd-sub">Placement</div>
-            <div class="place-card" class:matched={!!placedRuntime} class:nomatch={!placedRuntime}>
-              {#if placedRuntime}
-                <div class="place-line"><span class="pl-k">Flow</span><span class="pl-v mono">{flowRef || '—'}</span></div>
-                <div class="place-line"><span class="pl-k">Mode</span><span class="pl-v">{mode}</span></div>
-                <div class="place-line"><span class="pl-k">Resolves to</span><span class="pl-v ok">{placedRuntime.name}</span></div>
-                <div class="place-line"><span class="pl-k">Namespace</span><span class="pl-v">{placeNamespace || placedRuntime.namespace}</span></div>
-                <div class="place-line"><span class="pl-k">Labels</span><span class="pl-v mono">{Object.entries(placedRuntime.labels ?? {}).map(([k,v]) => `${k}=${v}`).join(' ') || '—'}</span></div>
-              {:else}
-                <div class="place-line"><span class="pl-v warn">No runtime matches this selector</span></div>
-                <div class="sf-note">Available: {runtimes.map((r) => r.name).join(', ') || 'none'}</div>
-              {/if}
-            </div>
-            <div class="place-card">
-              <div class="place-line"><span class="pl-k">Lifecycle</span><span class="pl-v">{lifeState} · {session}</span></div>
-              <div class="place-line"><span class="pl-k">Scale</span><span class="pl-v">{scMin}–{scMax}</span></div>
-              <div class="place-line"><span class="pl-k">Deps</span><span class="pl-v">{dependsOn.length || 'auto'}</span></div>
-            </div>
-            {#if problems.length}
-              <div class="prob-box">{#each problems as p}<div class="prob">⚠ {p}</div>{/each}</div>
-            {/if}
-          </div>
+          <!-- The canvas as a logical system: triggers → runtime → container →
+               flow/agent → what it uses, plus where else it could (not) go. -->
+          <CanvasDiagram
+            {flowRef} {agentRef} {mode} {placeNamespace} {pinRuntime} {runtimes}
+            selector={textToSelector(selectorText)} {lifeState} {session}
+            scMin={Number(scMin)} scMax={Number(scMax)} {dependsOn} {problems} />
         {/if}
       </div>
     </div>

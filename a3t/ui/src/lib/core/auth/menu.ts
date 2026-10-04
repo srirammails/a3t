@@ -49,6 +49,7 @@ export const MENU_CONFIG: MenuGroup[] = [
     label: 'System',
     roles: ALL_ROLES,
     items: [
+      { type: 'runtime',     label: 'Runtimes',    tag: null, icon: 'runtime', roles: ALL_ROLES },
       { type: 'executions',  label: 'Executions',  tag: null, icon: 'runs', roles: ALL_ROLES },
       { type: 'logs',        label: 'Logs',         tag: null, icon: 'logs', roles: ALL_ROLES },
     ],
