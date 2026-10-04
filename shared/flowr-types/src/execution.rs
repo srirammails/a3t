@@ -207,6 +207,15 @@ impl ExecutionState {
         self
     }
 
+    /// Mark as cancelled — stopped from outside before it finished.
+    pub fn cancel(mut self, reason: impl Into<String>, duration_us: u64) -> Self {
+        self.status = ExecutionStatus::Cancelled;
+        self.error = Some(reason.into());
+        self.completed_at = Some(Utc::now());
+        self.duration_us = Some(duration_us);
+        self
+    }
+
     /// Mark as failed
     pub fn fail(mut self, error: impl Into<String>) -> Self {
         self.status = ExecutionStatus::Failed;

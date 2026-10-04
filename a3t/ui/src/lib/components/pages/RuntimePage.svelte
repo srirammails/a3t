@@ -68,6 +68,29 @@
   }
   async function copy(text: string) { try { await navigator.clipboard.writeText(text); flash('ok', 'Copied'); } catch {} }
 
+  // Terminate-runtime dialog: the plan first, then a typed confirmation.
+  let terminating = $state<{ rt: Rt; plan: any | null; error?: string } | null>(null);
+  let terminateConfirm = $state('');
+  async function openTerminate(rt: Rt) {
+    terminating = { rt, plan: null };
+    terminateConfirm = '';
+    const res = await opsApi.terminatePlan(rt.runtime.name);
+    terminating = res.ok ? { rt, plan: res.data.impact } : { rt, plan: null, error: res.error || 'Could not plan the termination' };
+  }
+  async function confirmTerminate() {
+    if (!terminating || terminateConfirm !== terminating.rt.runtime.name) return;
+    const name = terminating.rt.runtime.name;
+    busy = `rt:${name}:terminate`;
+    const res = await opsApi.terminate(name);
+    busy = '';
+    terminating = null;
+    if (res.ok) flash('ok', res.data?.note || `Runtime ${name} terminated`);
+    else flash('err', res.status === 403 ? 'Only an admin can terminate a runtime.' : res.error || 'Failed');
+    bumpContext();
+    if (res.ok && !res.data?.recreated) { navigateTo('runtime', 'Runtimes'); return; }
+    await load();
+  }
+
   // Pause dialog
   let pausing = $state<Row | null>(null);
   let pauseReason = $state('');
@@ -107,7 +130,7 @@
   let timer: ReturnType<typeof setInterval> | undefined;
   onMount(() => {
     load();
-    timer = setInterval(() => { if (!document.hidden && !busy && !pausing) load(); }, 5000);
+    timer = setInterval(() => { if (!document.hidden && !busy && !pausing && !terminating) load(); }, 5000);
   });
   onDestroy(() => clearInterval(timer));
 
@@ -118,15 +141,16 @@
     setTimeout(() => { if (toast?.text === text) toast = null; }, 5000);
   }
 
-  async function act(row: Row, action: 'pause' | 'resume' | 'restart' | 'undeploy', reason?: string) {
-    if (action === 'undeploy' && !confirm(`Undeploy ${row.deployment.target}? The flow and its canvas are kept.`)) return;
+  async function act(row: Row, action: 'pause' | 'resume' | 'restart' | 'undeploy' | 'terminate', reason?: string) {
+    if (action === 'undeploy' && !confirm(`Undeploy ${row.deployment.target}? Runs in progress finish; the flow and its canvas are kept.`)) return;
+    if (action === 'terminate' && !confirm(`Terminate ${row.deployment.target} now? Runs in progress (${row.stats.inFlight}) are cancelled and it is undeployed. The flow and its canvas are kept.`)) return;
     busy = `${row.deployment.id}:${action}`;
     const res = await opsApi.deployment(row.deployment.id, action, reason);
     busy = '';
     if (res.ok) flash('ok', res.data?.note || `${action} done`);
     else flash('err', res.status === 403 ? `Not allowed: ${res.error}` : res.error || 'Failed');
     bumpContext(); // the side tree's status dots
-    if (res.ok && action === 'undeploy' && view === 'deployment') { open(`rt:${row.deployment.runtime}`); return; }
+    if (res.ok && (action === 'undeploy' || action === 'terminate') && view === 'deployment') { open(`rt:${row.deployment.runtime}`); return; }
     await load();
   }
 
@@ -433,6 +457,7 @@
     {#if rt.state !== 'active'}<button class="btn sm runtime" disabled={!!busy} onclick={() => runtimeAct(rt, 'resume')}>Resume runtime</button>{/if}
     {#if rt.state === 'active'}<button class="btn sm" disabled={!!busy} onclick={() => runtimeAct(rt, 'hibernate')}>Hibernate</button>{/if}
     {#if rt.state !== 'paused'}<button class="btn sm outline-danger" disabled={!!busy} onclick={() => runtimeAct(rt, 'pause')}>Pause runtime</button>{/if}
+    <button class="btn sm ghost text-danger" disabled={!!busy} onclick={() => openTerminate(rt)} title="Kill this runtime's container and reschedule what runs on it">Terminate</button>
   {:else}
     <span class="muted small">Runtime state is changed by an admin.</span>
   {/if}
@@ -448,7 +473,8 @@
   <button class="btn sm ghost" disabled={!!busy || d.state === 'paused'} title={d.state === 'paused' ? 'Resume before restarting' : 'Re-place from the current canvas'} onclick={() => act(row, 'restart')}>Restart</button>
   {#if !full}<button class="btn sm ghost" onclick={() => open(`dep:${d.id}`)}>Probe</button>{/if}
   {#if d.canvas}<button class="btn sm ghost" onclick={() => editCanvas(d)}>Edit canvas</button>{/if}
-  <button class="btn sm ghost text-danger" disabled={!!busy} onclick={() => act(row, 'undeploy')}>Undeploy</button>
+  <button class="btn sm ghost" disabled={!!busy} title="Remove the deployment; runs in progress finish" onclick={() => act(row, 'undeploy')}>Undeploy</button>
+  <button class="btn sm ghost text-danger" disabled={!!busy} title="Cancel runs in progress now, then undeploy" onclick={() => act(row, 'terminate')}>Terminate</button>
 {/snippet}
 
 {#snippet table(rows: Row[])}
@@ -495,6 +521,53 @@
     </div>
   {/if}
 {/snippet}
+
+<!-- Terminate runtime: show the reschedule plan, warn on isolated, confirm by name -->
+{#if terminating}
+  {@const pl = terminating.plan}
+  <div class="modal-bg" role="presentation" onclick={() => (terminating = null)}></div>
+  <div class="modal wide" role="dialog" aria-label="Terminate runtime">
+    <h3>Terminate runtime <span class="mono">{terminating.rt.runtime.name}</span></h3>
+    <p>Like killing its container: runs on it are cancelled and the runtime is removed. What is deployed here is <b>rescheduled</b>, not lost.</p>
+    {#if terminating.error}
+      <p class="err">{terminating.error}</p>
+    {:else if !pl}
+      <p class="muted">Working out the plan…</p>
+    {:else}
+      {#if pl.warnings.length}
+        <div class="warn-box">
+          {#each pl.warnings as w}<div>⚠ {w}</div>{/each}
+        </div>
+      {/if}
+      {#if pl.plan.length === 0}
+        <p class="callers">Nothing is deployed here — the runtime is simply removed.</p>
+      {:else}
+        <table class="plan">
+          <thead><tr><th>Deployed</th><th>Mode</th><th>Goes to</th></tr></thead>
+          <tbody>
+            {#each pl.plan as r}
+              <tr class:isolated={r.mode === 'isolated'}>
+                <td><span class="kind {r.kind}">{r.kind}</span> <span class="mono">{r.target}</span>
+                  {#if r.runsInFlight}<div class="small err">{r.runsInFlight} run(s) cancelled</div>{/if}</td>
+                <td>{r.mode} · {r.session}</td>
+                <td>{#if r.action === 'move'}→ <b>{r.to}</b>{:else}↻ fresh <b>{r.to}</b>{/if}
+                  {#if r.note}<div class="small muted">{r.note}</div>{/if}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        {#if pl.recreatesRuntime}<p class="small muted">↻ = the runtime is recreated fresh (same name, labels and namespace) because something can only run there.</p>{/if}
+      {/if}
+      <label>Type <b class="mono">{terminating.rt.runtime.name}</b> to confirm
+        <input bind:value={terminateConfirm} placeholder={terminating.rt.runtime.name} onkeydown={(e) => e.key === 'Enter' && confirmTerminate()} />
+      </label>
+    {/if}
+    <div class="modal-acts">
+      <button class="btn" onclick={() => (terminating = null)}>Cancel</button>
+      <button class="btn danger" disabled={!pl || terminateConfirm !== terminating.rt.runtime.name || !!busy} onclick={confirmTerminate}>Terminate</button>
+    </div>
+  </div>
+{/if}
 
 <!-- Pause dialog: says exactly what callers will get -->
 {#if pausing}
@@ -630,7 +703,13 @@
   .modal h3 { margin: 0 0 8px; font-size: 16px; }
   .modal p { font-size: 13px; color: var(--text-2); margin: 0 0 10px; }
   .modal .callers { padding: 8px 10px; background: var(--bg-subtle); border-radius: var(--r-sm); }
-  .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-2); }
+  .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-2); text-transform: none; letter-spacing: normal; font-weight: 400; }
   .modal input { padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 13px; }
+  .modal.wide { width: min(640px, calc(100vw - 32px)); top: 12vh; }
+  .warn-box { background: var(--warn-bg, #fff8e6); color: var(--warn, #b45309); border: 1px solid var(--warn, #b45309); border-radius: var(--r-sm); padding: 8px 10px; font-size: 12.5px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+  table.plan { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-bottom: 10px; }
+  .plan th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-4); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+  .plan td { padding: 6px; border-bottom: 1px solid var(--divider, var(--border)); vertical-align: top; }
+  .plan tr.isolated td { background: var(--warn-bg, #fff8e6); }
   .modal-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 </style>

@@ -269,11 +269,16 @@ export const opsApi = {
   overview: () => request('/ops/overview', { method: 'GET' }),
   probe: (id: string) => request(`/ops/deployments/${enc(id)}/probe`, { method: 'GET' }),
   /** pause | resume | restart | undeploy. `reason` is shown to whoever finds it paused. */
-  deployment: (id: string, action: 'pause' | 'resume' | 'restart' | 'undeploy', reason?: string) =>
+  deployment: (id: string, action: 'pause' | 'resume' | 'restart' | 'undeploy' | 'terminate', reason?: string) =>
     request(`/ops/deployments/${enc(id)}/${action}`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
   /** hibernate | pause | resume — admin only. */
   runtime: (name: string, action: 'hibernate' | 'pause' | 'resume') =>
     request(`/ops/runtimes/${enc(name)}/${action}`, { method: 'POST' }),
+  /** What terminating a runtime would do (changes nothing). */
+  terminatePlan: (name: string) => request(`/ops/runtimes/${enc(name)}/terminate`, { method: 'GET' }),
+  /** Terminate: cancel its runs, remove it, reschedule what was deployed there. */
+  terminate: (name: string) =>
+    request(`/ops/runtimes/${enc(name)}/terminate`, { method: 'POST', body: JSON.stringify({ confirm: name }) }),
   pausedResponse: (name: string, status: 503 | 404) =>
     request(`/ops/runtimes/${enc(name)}/paused-response`, { method: 'PUT', body: JSON.stringify({ status }) }),
 };

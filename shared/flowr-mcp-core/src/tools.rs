@@ -400,6 +400,36 @@ be deployed again."
             }),
         },
         Tool {
+            name: "terminate_deployment".to_string(),
+            description: "Stop a deployed flow or agent NOW: cancel its runs in progress, then \
+remove the deployment. Use undeploy instead to let running work finish. The flow and canvas \
+are kept."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "deployment": { "type": "string" } },
+                "required": ["deployment"]
+            }),
+        },
+        Tool {
+            name: "terminate_runtime".to_string(),
+            description: "Admin: terminate a runtime — like killing its container. Runs on it \
+are cancelled and the runtime is removed; what was deployed there is RESCHEDULED, not lost: \
+shared deployments move to another matching runtime, and isolated ones (or ones nothing else \
+matches) get a freshly recreated runtime, losing in-memory state. Call WITHOUT confirm first: \
+it changes nothing and returns the plan with warnings. Show it to the user, then call again \
+with confirm set to the runtime's name."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "runtime": { "type": "string" },
+                    "confirm": { "type": "string", "description": "The runtime's name, to confirm" }
+                },
+                "required": ["runtime"]
+            }),
+        },
+        Tool {
             name: "set_runtime_state".to_string(),
             description: "Admin: change a runtime's state. 'hibernated' sleeps it — the first \
 request wakes it. 'paused' refuses everything deployed on it until resumed. 'active' resumes. \
@@ -977,7 +1007,8 @@ pub const AGENT_RUNTIME_TOOLS: &[&str] = &[
     "clone_canvas", "bind_canvas", "deploy_flow", "update_canvas", "create_runtime",
     // Runtime operations — the deployment ledger in flowr-ce (`ops`).
     "list_deployments", "probe_deployment", "pause_deployment", "resume_deployment",
-    "restart_deployment", "undeploy", "set_runtime_state", "set_paused_response",
+    "restart_deployment", "undeploy", "terminate_deployment", "terminate_runtime",
+    "set_runtime_state", "set_paused_response",
 ];
 
 pub fn is_agent_runtime_tool(name: &str) -> bool {

@@ -27,12 +27,18 @@ pub const FLOW_DEPLOY: &str = "flow:deploy";
 pub const FLOW_PAUSE: &str = "flow:pause";
 pub const FLOW_RESUME: &str = "flow:resume";
 pub const FLOW_UNDEPLOY: &str = "flow:undeploy";
+/// Undeploy NOW: cancel the deployment's in-flight runs, then remove it. Kept
+/// apart from `flow:undeploy` (which lets running work finish) so the audit
+/// trail says which one happened.
+pub const FLOW_TERMINATE: &str = "flow:terminate";
 
 // Runtime lifecycle. A runtime is shared infrastructure hosting many teams'
 // deployments, so changing ITS state is an operator decision, not a deployer's.
 pub const RUNTIME_HIBERNATE: &str = "runtime:hibernate";
 pub const RUNTIME_PAUSE: &str = "runtime:pause";
 pub const RUNTIME_RESUME: &str = "runtime:resume";
+/// Removing a runtime outright — and undeploying whatever still runs on it.
+pub const RUNTIME_TERMINATE: &str = "runtime:terminate";
 
 // Agent lifecycle & delegation
 pub const AGENT_SPAWN: &str = "agent:spawn";
@@ -69,9 +75,11 @@ pub const ALL: &[&str] = &[
     FLOW_PAUSE,
     FLOW_RESUME,
     FLOW_UNDEPLOY,
+    FLOW_TERMINATE,
     RUNTIME_HIBERNATE,
     RUNTIME_PAUSE,
     RUNTIME_RESUME,
+    RUNTIME_TERMINATE,
     AGENT_SPAWN,
     AGENT_STOP,
     MEMORY_READ,
@@ -115,6 +123,9 @@ pub fn flow_resume() -> Action {
 pub fn flow_undeploy() -> Action {
     Action::known(FLOW_UNDEPLOY)
 }
+pub fn flow_terminate() -> Action {
+    Action::known(FLOW_TERMINATE)
+}
 pub fn runtime_hibernate() -> Action {
     Action::known(RUNTIME_HIBERNATE)
 }
@@ -123,6 +134,9 @@ pub fn runtime_pause() -> Action {
 }
 pub fn runtime_resume() -> Action {
     Action::known(RUNTIME_RESUME)
+}
+pub fn runtime_terminate() -> Action {
+    Action::known(RUNTIME_TERMINATE)
 }
 pub fn agent_spawn() -> Action {
     Action::known(AGENT_SPAWN)

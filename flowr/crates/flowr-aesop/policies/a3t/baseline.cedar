@@ -239,19 +239,19 @@ unless {
 // Admin-only in both directions, and an agent acting for an Admin gets an Ask.
 permit(
   principal,
-  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy"],
+  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy", Action::"flow:terminate"],
   resource
 ) when { resource has label_tier && resource.label_tier != "prod" };
 
 permit(
   principal,
-  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy"],
+  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy", Action::"flow:terminate"],
   resource
 ) unless { resource has label_tier };
 
 permit(
   principal,
-  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy"],
+  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy", Action::"flow:terminate"],
   resource
 ) when {
   principal is User && principal has roles &&
@@ -260,7 +260,7 @@ permit(
 
 forbid(
   principal,
-  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy"],
+  action in [Action::"flow:pause", Action::"flow:resume", Action::"flow:undeploy", Action::"flow:terminate"],
   resource
 )
 when { resource has label_tier && resource.label_tier == "prod" }
@@ -277,7 +277,7 @@ unless {
 // person confirms.
 permit(
   principal,
-  action in [Action::"runtime:hibernate", Action::"runtime:pause", Action::"runtime:resume"],
+  action in [Action::"runtime:hibernate", Action::"runtime:pause", Action::"runtime:resume", Action::"runtime:terminate"],
   resource
 ) when {
   principal is User && principal has roles &&

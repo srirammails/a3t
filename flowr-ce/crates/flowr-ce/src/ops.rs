@@ -168,6 +168,69 @@ fn cached(id: &str) -> Option<Deployment> {
 }
 
 // ============================================================================
+// Running executions — what Terminate cancels
+// ============================================================================
+
+/// One in-flight execution, registered by `execute_workflow` for as long as it
+/// runs. `stop` is raced against the executor; whoever terminates writes `why`
+/// first so the run records who stopped it.
+struct RunningRun {
+    flow_ref: String,
+    agent: Option<String>,
+    stop: Arc<tokio::sync::Notify>,
+    why: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+fn running() -> &'static std::sync::Mutex<HashMap<uuid::Uuid, RunningRun>> {
+    static R: OnceLock<std::sync::Mutex<HashMap<uuid::Uuid, RunningRun>>> = OnceLock::new();
+    R.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Unregisters on drop, so a run that returns early or panics never lingers as
+/// "in flight" and can never be cancelled twice.
+pub struct RunGuard(uuid::Uuid);
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        running().lock().unwrap().remove(&self.0);
+    }
+}
+
+/// Register a run. Returns the stop signal to race against, the slot holding the
+/// reason, and the guard that unregisters it.
+pub fn register_run(
+    id: uuid::Uuid,
+    flow_ref: &str,
+    agent: Option<&str>,
+) -> (Arc<tokio::sync::Notify>, Arc<std::sync::Mutex<Option<String>>>, RunGuard) {
+    let stop = Arc::new(tokio::sync::Notify::new());
+    let why = Arc::new(std::sync::Mutex::new(None));
+    running().lock().unwrap().insert(
+        id,
+        RunningRun { flow_ref: flow_ref.to_string(), agent: agent.map(str::to_string), stop: stop.clone(), why: why.clone() },
+    );
+    (stop, why, RunGuard(id))
+}
+
+/// Cancel every in-flight run of a deployment. `notify_one` stores a permit, so a
+/// run between registering and awaiting still sees the signal.
+fn cancel_runs(d: &Deployment, reason: &str) -> Vec<String> {
+    let runs = running().lock().unwrap();
+    let mut ids = Vec::new();
+    for (id, r) in runs.iter() {
+        let hit = match d.kind.as_str() {
+            "agent" => r.agent.as_deref() == Some(d.target.as_str()),
+            _ => r.flow_ref == d.target,
+        };
+        if hit {
+            *r.why.lock().unwrap() = Some(reason.to_string());
+            r.stop.notify_one();
+            ids.push(id.to_string());
+        }
+    }
+    ids
+}
+
+// ============================================================================
 // Admission
 // ============================================================================
 
@@ -517,6 +580,215 @@ pub async fn undeploy(storage: &dyn StorageBackend, id: &str, by: &str) -> Resul
     }))
 }
 
+/// Undeploy NOW: cancel the deployment's in-flight runs, then remove it.
+pub async fn terminate(storage: &dyn StorageBackend, id: &str, by: &str) -> Result<Value, String> {
+    let d = resolve(id).ok_or_else(|| not_found(id))?;
+    let cancelled = cancel_runs(&d, &format!("terminated by {by}"));
+    let mut out = undeploy(storage, &d.id, by).await?;
+    info!(deployment = %d.id, by = %by, cancelled = cancelled.len(), "terminated");
+    out["terminated"] = json!(true);
+    out["cancelledRuns"] = json!(cancelled);
+    out["note"] = json!(format!(
+        "Stopped {} run(s) in progress and removed the deployment. The flow and its canvas are kept.",
+        cancelled.len()
+    ));
+    Ok(out)
+}
+
+/// Where a deployment would land among `runtimes` — the same rule as
+/// `canvas::placement_target`, over a list we choose (so the runtime being
+/// terminated can be left out of it).
+async fn place_among(
+    storage: &dyn StorageBackend,
+    d: &Deployment,
+    runtimes: &[RuntimeSpec],
+) -> Option<(RuntimeSpec, String, String)> {
+    let (fns, fname) = d.flow_ref.split_once('/')?;
+    let spec = crate::canvas::resolve_canvas(storage, fns, fname).await.ok()?;
+    let placed = flowr_types::canvas::select_runtime(&spec.placement, runtimes)?.clone();
+    let ns = if spec.placement.namespace.is_empty() { placed.namespace.clone() } else { spec.placement.namespace.clone() };
+    Some((placed, ns, d.mode.clone()))
+}
+
+/// What terminating a runtime does to one deployment on it.
+///
+/// Terminating a runtime is killing its container, not withdrawing what was
+/// deployed: deployments are the desired state, so each is rescheduled the way a
+/// k8s controller replaces a pod. An ISOLATED deployment owned that container, so
+/// it gets a fresh one and loses whatever was only in memory — that is the
+/// warning. A shared one moves to another runtime its canvas matches; if none
+/// does, the runtime is recreated for it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Reschedule {
+    deployment: String,
+    kind: String,
+    target: String,
+    mode: String,
+    session: String,
+    /// "move" (to `to`) or "recreate" (a fresh runtime with the old spec).
+    action: String,
+    to: String,
+    runs_in_flight: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+}
+
+fn in_flight_for(d: &Deployment) -> usize {
+    running()
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|r| match d.kind.as_str() {
+            "agent" => r.agent.as_deref() == Some(d.target.as_str()),
+            _ => r.flow_ref == d.target,
+        })
+        .count()
+}
+
+async fn reschedule_plan(storage: &dyn StorageBackend, name: &str) -> (Vec<(Deployment, Reschedule)>, Vec<String>) {
+    let (deps, others): (Vec<Deployment>, Vec<RuntimeSpec>) = {
+        let l = ledger().read().unwrap();
+        (
+            l.deployments.values().filter(|d| d.runtime == name).cloned().collect(),
+            l.runtimes.values().filter(|r| r.name != name).cloned().collect(),
+        )
+    };
+    let mut plan = Vec::new();
+    for d in deps {
+        let session = match d.flow_ref.split_once('/') {
+            Some((fns, fname)) => crate::canvas::resolve_canvas(storage, fns, fname)
+                .await
+                .map(|s| format!("{:?}", s.lifecycle.session).to_lowercase())
+                .unwrap_or_else(|_| "ephemeral".into()),
+            None => "ephemeral".into(),
+        };
+        let runs = in_flight_for(&d);
+        let isolated = d.mode == "isolated";
+        let elsewhere = if isolated { None } else { place_among(storage, &d, &others).await };
+        let (action, to) = match &elsewhere {
+            Some((rt, ..)) => ("move", rt.name.clone()),
+            None => ("recreate", name.to_string()),
+        };
+        let warning = isolated.then(|| format!(
+            "Isolated — this runtime is its own container. It is replaced by a fresh one; {} in-memory state is lost.",
+            if runs > 0 { format!("{runs} run(s) in progress are cancelled and") } else { "any".to_string() }
+        ));
+        let note = match (isolated, session.as_str(), runs) {
+            (true, ..) => None,
+            (false, "persistent", _) => Some("Persistent sessions resume from their last checkpoint.".to_string()),
+            (false, _, n) if n > 0 => Some(format!("{n} run(s) in progress are cancelled; new requests go to {to}.")),
+            _ => None,
+        };
+        plan.push((d.clone(), Reschedule {
+            deployment: d.id.clone(), kind: d.kind.clone(), target: d.target.clone(), mode: d.mode.clone(), session,
+            action: action.into(), to, runs_in_flight: runs, warning, note,
+        }));
+    }
+    let pinned: Vec<String> = crate::canvas::stored_canvases(storage)
+        .await
+        .into_iter()
+        .filter(|(_, _, s)| s.placement.runtime.as_deref() == Some(name))
+        .map(|(ns, n, _)| format!("{ns}/{n}"))
+        .collect();
+    (plan, pinned)
+}
+
+/// Terminate a runtime: kill its container (cancel everything running on it),
+/// remove it, and reschedule what was deployed there.
+///
+/// Without `confirm` equal to the runtime's name this changes nothing and returns
+/// the plan — where each deployment goes, which are isolated (the warning), and
+/// how many runs would be cancelled.
+pub async fn terminate_runtime(
+    storage: &dyn StorageBackend,
+    name: &str,
+    by: &str,
+    confirm: Option<&str>,
+) -> Result<Value, String> {
+    load(storage).await;
+    let old = runtime_spec(storage, name)
+        .await
+        .ok_or_else(|| format!("runtime '{name}' not found"))?;
+    let (plan, pinned) = reschedule_plan(storage, name).await;
+    let recreate = plan.iter().any(|(_, r)| r.action == "recreate");
+    let warnings: Vec<&String> = plan.iter().filter_map(|(_, r)| r.warning.as_ref()).collect();
+    let summary = json!({
+        "runtime": name,
+        "plan": plan.iter().map(|(_, r)| r).collect::<Vec<_>>(),
+        "recreatesRuntime": recreate,
+        "warnings": warnings,
+        "runsInFlight": plan.iter().map(|(_, r)| r.runs_in_flight).sum::<usize>(),
+        "pinnedCanvases": pinned,
+    });
+    if confirm != Some(name) {
+        return Ok(json!({
+            "terminated": false,
+            "preview": true,
+            "impact": summary,
+            "note": format!("Nothing changed. To terminate, call again with confirm = \"{name}\"."),
+        }));
+    }
+
+    // 1. Kill the container: cancel every run on it.
+    let mut cancelled = 0;
+    for (d, _) in &plan {
+        cancelled += cancel_runs(d, &format!("runtime {name} terminated by {by}")).len();
+    }
+    // 2. Remove the runtime.
+    storage
+        .resources()
+        .delete(&old.namespace, name)
+        .await
+        .map_err(|e| format!("removing runtime '{name}' failed: {e} — nothing was rescheduled"))?;
+    ledger().write().unwrap().runtimes.remove(name);
+    // 3. Recreate it when something can only live there (isolated, or no other
+    //    runtime matches): same name, labels and namespace — so pins still hold —
+    //    as a fresh, active instance.
+    if recreate {
+        let labels: serde_json::Map<String, Value> =
+            old.labels.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
+        crate::canvas::op_create_runtime(storage, &old.namespace, name, &labels, old.url.as_deref())
+            .await
+            .map_err(|e| format!("runtime '{name}' was removed but recreating it failed: {e}"))?;
+        load(storage).await;
+    }
+    // 4. Reschedule each deployment onto its new home. record_deploy keeps a
+    //    pause: a paused agent is still paused after the move.
+    let mut moved = Vec::new();
+    for (d, r) in &plan {
+        let rt = if r.action == "move" { r.to.clone() } else { name.to_string() };
+        let target_ns = match runtime_spec(storage, &rt).await {
+            Some(spec) => place_among(storage, d, std::slice::from_ref(&spec)).await.map(|(_, ns, _)| ns).unwrap_or(d.namespace.clone()),
+            None => d.namespace.clone(),
+        };
+        if let Some((fns, fname)) = d.flow_ref.split_once('/') {
+            match record_deploy(storage, by, fns, fname, &rt, &target_ns, &d.mode).await {
+                Ok(_) => moved.push(json!({ "deployment": d.id, "runtime": rt, "action": r.action })),
+                Err(e) => moved.push(json!({ "deployment": d.id, "error": e })),
+            }
+        }
+    }
+    info!(runtime = %name, by = %by, cancelled, rescheduled = moved.len(), recreated = recreate, "runtime terminated");
+    let n_moved = plan.iter().filter(|(_, r)| r.action == "move").count();
+    let note = match (plan.is_empty(), recreate, n_moved) {
+        (true, ..) => format!("Runtime {name} removed — nothing was deployed on it."),
+        (false, true, 0) => format!("Runtime {name} was terminated and recreated fresh for what can only run there."),
+        (false, true, m) => format!("Runtime {name} was terminated and recreated fresh for what can only run there; {m} deployment(s) moved to other runtimes."),
+        (false, false, _) => format!("Runtime {name} removed; everything on it moved to other runtimes."),
+    };
+    Ok(json!({
+        "terminated": true,
+        "runtime": name,
+        "cancelledRuns": cancelled,
+        "rescheduled": moved,
+        "recreated": recreate,
+        "note": note,
+    }))
+}
+
 pub async fn set_runtime_state(
     storage: &dyn StorageBackend,
     name: &str,
@@ -573,23 +845,27 @@ pub fn ops_request(
     args: &Value,
 ) -> Option<(flowr_policy::ExecutionRequest, &'static str, String)> {
     let (action, act_str, rt_name, ns, mode, did) = match tool {
-        "pause_deployment" | "resume_deployment" | "undeploy" | "restart_deployment" => {
+        "pause_deployment" | "resume_deployment" | "undeploy" | "restart_deployment" | "terminate_deployment" => {
             let id = args.get("deployment").and_then(|v| v.as_str())?;
             let d = resolve(id)?;
             let (a, s) = match tool {
                 "pause_deployment" => (flowr_policy::actions::flow_pause(), flowr_policy::actions::FLOW_PAUSE),
                 "resume_deployment" => (flowr_policy::actions::flow_resume(), flowr_policy::actions::FLOW_RESUME),
                 "undeploy" => (flowr_policy::actions::flow_undeploy(), flowr_policy::actions::FLOW_UNDEPLOY),
+                "terminate_deployment" => (flowr_policy::actions::flow_terminate(), flowr_policy::actions::FLOW_TERMINATE),
                 // A restart re-places the deployment, so it asks the deploy question.
                 _ => (flowr_policy::actions::flow_deploy(), flowr_policy::actions::FLOW_DEPLOY),
             };
             (a, s, d.runtime.clone(), d.namespace.clone(), d.mode.clone(), format!("{}/{}", d.runtime, d.id))
         }
-        "set_runtime_state" | "set_paused_response" => {
+        // A preview (no matching confirm) changes nothing, so it is not a decision.
+        "terminate_runtime" if args.get("confirm").and_then(|v| v.as_str()) != args.get("runtime").and_then(|v| v.as_str()) => return None,
+        "set_runtime_state" | "set_paused_response" | "terminate_runtime" => {
             let name = args.get("runtime").and_then(|v| v.as_str())?;
             let rt = ledger().read().unwrap().runtimes.get(name).cloned();
             let ns = rt.as_ref().map(|r| r.namespace.clone()).unwrap_or_else(|| "default".into());
             let (a, s) = match (tool, args.get("state").and_then(|v| v.as_str())) {
+                ("terminate_runtime", _) => (flowr_policy::actions::runtime_terminate(), flowr_policy::actions::RUNTIME_TERMINATE),
                 ("set_runtime_state", Some("hibernated")) => (flowr_policy::actions::runtime_hibernate(), flowr_policy::actions::RUNTIME_HIBERNATE),
                 ("set_runtime_state", Some("active")) => (flowr_policy::actions::runtime_resume(), flowr_policy::actions::RUNTIME_RESUME),
                 // Pausing, and changing what callers see while paused, are both
@@ -629,6 +905,11 @@ pub async fn dispatch(storage: &dyn StorageBackend, by: &str, tool: &str, args: 
         "resume_deployment" => resume(storage, &s("deployment"), by).await,
         "restart_deployment" => restart(storage, &s("deployment"), by).await,
         "undeploy" => undeploy(storage, &s("deployment"), by).await,
+        "terminate_deployment" => terminate(storage, &s("deployment"), by).await,
+        "terminate_runtime" => {
+            let confirm = args.get("confirm").and_then(|v| v.as_str());
+            terminate_runtime(storage, &s("runtime"), by, confirm).await
+        }
         "set_runtime_state" => {
             let state = match s("state").as_str() {
                 "active" => RuntimeState::Active,
@@ -654,6 +935,8 @@ pub const OPS_TOOLS: &[&str] = &[
     "resume_deployment",
     "restart_deployment",
     "undeploy",
+    "terminate_deployment",
+    "terminate_runtime",
     "set_runtime_state",
     "set_paused_response",
 ];
@@ -1016,7 +1299,7 @@ pub fn ops_router(storage: Arc<dyn StorageBackend>) -> Router {
         .route("/overview", get(http_overview))
         .route("/deployments/:id/probe", get(http_probe))
         .route("/deployments/:id/:action", post(http_deployment_action))
-        .route("/runtimes/:name/:action", post(http_runtime_action))
+        .route("/runtimes/:name/:action", get(http_runtime_preview).post(http_runtime_action))
         .route("/runtimes/:name/paused-response", put(http_paused_response))
         .with_state(Arc::new(OpsState { storage }))
 }
@@ -1072,6 +1355,7 @@ async fn http_deployment_action(
         "resume" => "resume_deployment",
         "restart" => "restart_deployment",
         "undeploy" => "undeploy",
+        "terminate" => "terminate_deployment",
         other => return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("unknown action {other}") }))).into_response(),
     };
     let mut args = body.map(|Json(b)| b).unwrap_or_else(|| json!({}));
@@ -1082,11 +1366,30 @@ async fn http_deployment_action(
     http_run(&s, principal, tool, args).await
 }
 
+/// `GET /ops/runtimes/:name/terminate` — what terminating would remove.
+async fn http_runtime_preview(
+    State(s): State<Arc<OpsState>>,
+    Path((name, action)): Path<(String, String)>,
+) -> axum::response::Response {
+    if action != "terminate" {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("unknown action {action}") }))).into_response();
+    }
+    match terminate_runtime(&*s.storage, &name, "", None).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
 async fn http_runtime_action(
     State(s): State<Arc<OpsState>>,
     principal: Option<axum::Extension<flowr_policy::Principal>>,
     Path((name, action)): Path<(String, String)>,
+    body: Option<Json<Value>>,
 ) -> axum::response::Response {
+    if action == "terminate" {
+        let confirm = body.and_then(|Json(b)| b.get("confirm").cloned()).unwrap_or(Value::Null);
+        return http_run(&s, principal, "terminate_runtime", json!({ "runtime": name, "confirm": confirm })).await;
+    }
     let state = match action.as_str() {
         "hibernate" => "hibernated",
         "pause" => "paused",

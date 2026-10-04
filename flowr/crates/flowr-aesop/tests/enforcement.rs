@@ -1015,6 +1015,7 @@ async fn pausing_follows_the_deploy_rule() {
         flowr_policy::actions::flow_pause(),
         flowr_policy::actions::flow_resume(),
         flowr_policy::actions::flow_undeploy(),
+        flowr_policy::actions::flow_terminate(),
     ] {
         assert!(matches!(
             hook.check(&op_req(deployer(&["Viewer"]), action.clone(), Some("test"))).await,
@@ -1042,6 +1043,7 @@ async fn runtime_state_is_admin_only_on_every_tier() {
         flowr_policy::actions::runtime_hibernate(),
         flowr_policy::actions::runtime_pause(),
         flowr_policy::actions::runtime_resume(),
+        flowr_policy::actions::runtime_terminate(),
     ] {
         match hook.check(&op_req(deployer(&["Viewer"]), action.clone(), Some("test"))).await {
             PolicyDecision::Deny { .. } => {}

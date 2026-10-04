@@ -2104,15 +2104,16 @@ pub async fn execute_workflow(
     // Admission: the backstop for every path — runs queued before a pause, chat,
     // execute_flow, send_message. A refused run is recorded as failed with the
     // reason, so whoever is waiting on it sees why.
-    {
-        let flow_ref = format!("{}/{}", request.namespace, request.name);
-        let agent = request.input.get("session_id").and_then(|v| v.as_str()).and_then(ops::agent_of_session);
-        if let Err(b) = ops::admit(storage.as_ref(), Some(&flow_ref), agent).await {
-            let state = ExecutionState::new(&request, "unknown").fail(format!("refused: {b}"));
-            let _ = storage.executions().save(state).await;
-            return Err(anyhow::anyhow!("refused: {}", b));
-        }
+    let flow_ref = format!("{}/{}", request.namespace, request.name);
+    let agent = request.input.get("session_id").and_then(|v| v.as_str()).and_then(ops::agent_of_session).map(str::to_string);
+    if let Err(b) = ops::admit(storage.as_ref(), Some(&flow_ref), agent.as_deref()).await {
+        let state = ExecutionState::new(&request, "unknown").fail(format!("refused: {b}"));
+        let _ = storage.executions().save(state).await;
+        return Err(anyhow::anyhow!("refused: {}", b));
     }
+    // Registered for as long as it runs, so Terminate can stop it. The guard
+    // unregisters on every exit path.
+    let (stop, stop_reason, _run_guard) = ops::register_run(request.instance_id, &flow_ref, agent.as_deref());
 
     // Load WorkflowRecord from storage
     let record = match storage.workflows().get(&request.namespace, &request.name).await {
@@ -2203,12 +2204,22 @@ pub async fn execute_workflow(
     };
 
     // Execute
-    let result = executor.execute(&swf_workflow, request.input.clone(), &mut exec_ctx).await;
+    // Raced against the stop signal: Terminate drops the executor future at its
+    // next await point, which is what actually stops an LLM call or a wait.
+    let result = tokio::select! {
+        r = executor.execute(&swf_workflow, request.input.clone(), &mut exec_ctx) => Some(r),
+        _ = stop.notified() => None,
+    };
 
     let duration_us = start.elapsed().as_micros() as u64;
     state = match result {
-        Ok(output) => state.complete(output, duration_us),
-        Err(e) => state.fail(e.to_string()),
+        Some(Ok(output)) => state.complete(output, duration_us),
+        Some(Err(e)) => state.fail(e.to_string()),
+        None => {
+            let why = stop_reason.lock().unwrap().clone().unwrap_or_else(|| "terminated".to_string());
+            info!(instance_id = %request.instance_id, reason = %why, "execution cancelled");
+            state.cancel(why, duration_us)
+        }
     };
 
     storage.executions().save(state.clone()).await
