@@ -615,7 +615,7 @@ do:
             <div class="pf"><div class="pf-empty-state">Loading flow definition…</div></div>
           {:else if flowYaml}
             <div class="flow-def-pane">
-              <FlowEditorPane initialYaml={flowYaml} onchange={(y) => { flowYaml = y; flowDirty = true; }} />
+              <FlowEditorPane aiKind="flow" aiName={selected?.name ?? ''} initialYaml={flowYaml} onchange={(y) => { flowYaml = y; flowDirty = true; }} />
             </div>
           {:else}
             <div class="pf"><div class="pf-empty-state">No definition available for this flow.</div></div>

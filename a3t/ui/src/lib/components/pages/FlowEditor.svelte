@@ -145,7 +145,7 @@ steps:
   <div class="editor-content">
     <!-- Editor body -->
     <div class="editor-body">
-      <FlowEditorPane initialYaml={yamlSource} onchange={onYamlChange} />
+      <FlowEditorPane aiKind="flow" aiName={selectedFlowKey} initialYaml={yamlSource} onchange={onYamlChange} />
     </div>
   </div>
 </div>

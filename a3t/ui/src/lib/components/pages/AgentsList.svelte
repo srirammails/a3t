@@ -563,7 +563,7 @@
         {:else if propNode === 'designer'}
           {#if agentTemplate?.spec_yaml}
             <div class="agt-designer">
-              <FlowEditorPane initialYaml={agentTemplate.spec_yaml} readOnly configSeed={agentConfigSeed} />
+              <FlowEditorPane aiKind="agent" aiName={agent?.name ?? ''} initialYaml={agentTemplate.spec_yaml} readOnly configSeed={agentConfigSeed} />
             </div>
           {:else}
             <div class="pf"><p class="pf-hint">No template spec available for this agent.</p></div>

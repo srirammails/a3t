@@ -93,6 +93,23 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "propose_edit".to_string(),
+            description: "Propose a change to the document open in the user's designer (a \
+template, agent, flow, canvas or resource) WITHOUT saving it. Send the COMPLETE updated \
+document, not a fragment or a diff. It is applied to the editor on screen; the user reviews \
+it and presses Save to persist. Use this — never create_*/update_* tools — when the user is \
+editing in a designer."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "yaml": { "type": "string", "description": "The complete updated document (YAML or JSON)" },
+                    "summary": { "type": "string", "description": "One line: what changed" }
+                },
+                "required": ["yaml"]
+            }),
+        },
+        Tool {
             name: "create_flow".to_string(),
             description: "Create a new workflow from YAML or JSON definition.".to_string(),
             input_schema: json!({
@@ -1352,6 +1369,7 @@ pub async fn dispatch_tool_call(
         "list_flows" => list_flows(storage, &args).await,
         "get_flow" => get_flow(storage, &args).await,
         "propose_flow" => propose_flow(&args),
+        "propose_edit" => propose_edit(&args),
         "create_flow" => create_flow(storage, principal, &args).await,
         "update_flow" => update_flow(storage, &args).await,
         "delete_flow" => delete_flow(storage, &args).await,
@@ -1839,6 +1857,25 @@ async fn get_flow(storage: &dyn StorageBackend, args: &Value) -> CallToolResult 
 /// access: proposing is a read-only act, so a user who may not write can still
 /// draft, and nothing reaches the registry until they press Save (which goes
 /// through `create_flow` and its Cedar gate).
+/// A designer edit: checked for syntax only (the designer knows its own schema
+/// and shows problems as the user reviews), never written anywhere.
+fn propose_edit(args: &Value) -> CallToolResult {
+    let Some(doc) = args.get("yaml").and_then(|v| v.as_str()) else {
+        return CallToolResult::error("yaml is required".to_string());
+    };
+    match serde_yaml::from_str::<serde_yaml::Value>(doc) {
+        Ok(_) => CallToolResult::json(json!({
+            "applied_to_editor": true,
+            "saved": false,
+            "note": "Applied to the editor on screen, NOT saved. The user reviews it and presses Save. Do not claim it is saved.",
+        })),
+        Err(e) => CallToolResult::json(json!({
+            "applied_to_editor": false,
+            "error": format!("Not valid YAML/JSON: {e}. Send the complete corrected document."),
+        })),
+    }
+}
+
 fn propose_flow(args: &Value) -> CallToolResult {
     let Some(yaml_str) = args.get("yaml").and_then(|v| v.as_str()) else {
         return CallToolResult::error("yaml is required".to_string());

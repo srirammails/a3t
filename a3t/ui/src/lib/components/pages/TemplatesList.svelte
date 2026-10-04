@@ -503,7 +503,7 @@ do:
 
               {:else if propNode === 'yaml'}
                 {#if template.spec_yaml}
-                  <FlowEditorPane initialYaml={template.spec_yaml} onchange={(yaml) => { if (template) template.spec_yaml = yaml; if (draftTemplate?.isNew && yaml.trim() !== defaultSpecYaml(draftTemplate.name).trim()) specEdited = true; }} onopensub={handleOpenSub} />
+                  <FlowEditorPane aiKind="template" aiName={template.name} initialYaml={template.spec_yaml} onchange={(yaml) => { if (template) template.spec_yaml = yaml; if (draftTemplate?.isNew && yaml.trim() !== defaultSpecYaml(draftTemplate.name).trim()) specEdited = true; }} onopensub={handleOpenSub} />
                 {:else}
                   <div class="sp-empty">No spec defined for this template.</div>
                 {/if}

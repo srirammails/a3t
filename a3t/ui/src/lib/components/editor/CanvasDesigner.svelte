@@ -8,6 +8,7 @@
   import SlideEditor from '$lib/components/shared/SlideEditor.svelte';
   import YamlEditor from '$lib/components/editor/YamlEditor.svelte';
   import CanvasDiagram from '$lib/components/editor/CanvasDiagram.svelte';
+  import DesignerChat from '$lib/components/editor/DesignerChat.svelte';
   import { canvasApi, mcpCall } from '$lib/services/api';
   import * as YAML from 'yaml';
 
@@ -406,17 +407,11 @@
           </div>
           </fieldset>
         {:else}
-          <div class="cd-ai">
-            <div class="cd-ai-messages">
-              <div class="cd-ai-msg assistant">
-                <span class="cd-ai-mark">A3</span>
-                <p>I can help you configure this canvas — placement, hibernation, scaling, and dependencies. Describe what you want and I'll adjust the config.</p>
-              </div>
-            </div>
-            <div class="cd-ai-input">
-              <input type="text" placeholder="e.g. run isolated with persistent sessions, scale 1–3…" disabled />
-            </div>
-          </div>
+          <!-- A chat agent working on this canvas: changes land in the editor
+               (Config and Form update together) and are saved with Save. -->
+          <DesignerChat kind="canvas" name={name ? `${namespace}/${name}` : ''} {readonly}
+            gettext={() => yamlSource}
+            onapply={(t) => onCodeChange(t)} />
         {/if}
       </div>
     </div>

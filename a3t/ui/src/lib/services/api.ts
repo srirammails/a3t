@@ -566,7 +566,9 @@ export type ChatSessionSummary = {
 export async function fetchChatSessions(): Promise<ChatSessionSummary[]> {
   const res = await request<{ sessions: ChatSessionSummary[] }>('/chat/sessions');
   if (!res.ok || !Array.isArray(res.data?.sessions)) return [];
-  return res.data!.sessions;
+  // A designer's AI tab talks through the same /chat, but its exchanges are
+  // about one edit in one editor — not conversations to list in AI Chat.
+  return res.data!.sessions.filter((s) => !s.session_id.includes(':designer-'));
 }
 
 /// One transcript as renderable turns. 404 covers both "no such session" and

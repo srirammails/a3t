@@ -27,6 +27,8 @@
     singleColumn = false,
     showAi = true,
     onsection,
+    aiKind = 'flow',
+    aiName = '',
   }: {
     initialYaml: string;
     onchange?: (val: string) => void;
@@ -43,6 +45,9 @@
     /// Reports the visible section (`graph` | `code` | form sub-tab) so a chat
     /// host can tell the agent what the user is looking at.
     onsection?: (section: string) => void;
+    /// What the AI tab tells the agent it is editing, e.g. "template" and its name.
+    aiKind?: string;
+    aiName?: string;
   } = $props();
 
   const nodeTypes = {
@@ -53,6 +58,7 @@
   };
 
   import { onMount, onDestroy } from 'svelte';
+  import DesignerChat from '$lib/components/editor/DesignerChat.svelte';
 
   // ── Internal state ──
   let leftMode = $state<'graph' | 'code'>('graph');
@@ -347,17 +353,11 @@
         {#if rightMode === 'form'}
           {@render formView()}
         {:else}
-          <div class="fep-ai">
-            <div class="fep-ai-messages">
-              <div class="fep-ai-msg assistant">
-                <span class="fep-ai-mark">A3</span>
-                <p>I can help you edit this workflow. Describe what you want to change.</p>
-              </div>
-            </div>
-            <div class="fep-ai-input">
-              <input type="text" placeholder="Describe a change..." disabled />
-            </div>
-          </div>
+          <!-- The real AI tab: a chat agent working on this document, applying
+               changes to the editor (unsaved) for the user to Save. -->
+          <DesignerChat kind={aiKind} name={aiName} readonly={readOnly}
+            gettext={() => yamlSource}
+            onapply={(t) => onCodeChange(t)} />
         {/if}
       </div>
     </div>

@@ -380,6 +380,31 @@ on the strength of an older message.";
             bits.join(", viewing ")
         );
 
+        // A designer's AI tab: the document on screen IS the subject, and changes
+        // go back to the editor as proposals — the user saves, not the agent.
+        if ui.get("mode").and_then(|v| v.as_str()) == Some("designer") {
+            out.push_str(
+                "\n\n## You are the assistant inside this designer\n\
+                 The user is editing it in a designer and talking to you from its AI tab. \
+                 To change it, call `propose_edit` with the COMPLETE updated document — keep \
+                 everything you were not asked to change exactly as it is, including keys, \
+                 order and comments where you can. The edit is applied to the editor on \
+                 screen and is NOT saved; the user reviews it and presses Save. Never call \
+                 create_*/update_*/delete_* tools or deploy from here, and never say it is \
+                 saved. If the request is a question, answer it without proposing an edit.",
+            );
+            if let Some(txt) = ui.get("draft_text").and_then(|v| v.as_str()) {
+                out.push_str("\n\n### The document in the editor (current, possibly unsaved)\n```\n");
+                out.push_str(txt);
+                if !txt.ends_with('\n') { out.push('\n'); }
+                out.push_str("```");
+                if ui.get("draft_truncated").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    out.push_str("\n\n(Truncated — the beginning of the document only. Do not propose an edit that would drop the rest; say it is too large.)");
+                }
+            }
+            return out;
+        }
+
         // Unsaved editor edits. Without this the agent reads the registry copy
         // and answers about a version the user has already changed underneath
         // it — so say plainly which text wins.
@@ -810,6 +835,19 @@ impl TaskHandler for AgentHandler {
                                         "namespace": tool_input.get("namespace")
                                             .and_then(|v| v.as_str()).unwrap_or(""),
                                         "items": items,
+                                    })))
+                                }
+                            } else if tool_name == "propose_edit" {
+                                // The designer applies the proposed document to its
+                                // editor; nothing is stored until the user saves.
+                                let ok = tool_value.as_ref()
+                                    .and_then(|v| v.get("applied_to_editor"))
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                if !ok { None } else {
+                                    Some(("edit_draft", json!({
+                                        "raw": tool_input.get("yaml").and_then(|v| v.as_str()).unwrap_or(""),
+                                        "summary": tool_input.get("summary").and_then(|v| v.as_str()).unwrap_or(""),
                                     })))
                                 }
                             } else if tool_name == "propose_flow" {
@@ -1940,6 +1978,19 @@ mod tests {
             ui_context: ui,
             config: AgentSettings { system_prompt: "BASE".into(), ..Default::default() },
         }
+    }
+
+    /// A designer's AI tab always gets the document and the propose-don't-save
+    /// rule, whether or not the buffer is dirty.
+    #[test]
+    fn designer_mode_sends_the_document_and_forbids_saving() {
+        let p = AgentState::prompt_with_ui_context(&cfg_with_ui(Some(json!({
+            "kind": "canvas", "name": "a3t/orders", "mode": "designer",
+            "draft_text": "placement:\n  mode: shared\n"
+        }))));
+        assert!(p.contains("propose_edit"), "must name the tool to use");
+        assert!(p.contains("NOT saved"), "must say edits are not persisted");
+        assert!(p.contains("mode: shared"), "must include the document");
     }
 
     /// A clean pane must not claim anything about unsaved edits.
