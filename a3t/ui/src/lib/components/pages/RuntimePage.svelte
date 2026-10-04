@@ -8,7 +8,7 @@
   /// (hibernate / pause / resume) is an admin action because a runtime hosts other
   /// teams' work too.
   import { onMount, onDestroy } from 'svelte';
-  import { opsApi } from '$lib/services/api';
+  import { opsApi, executions } from '$lib/services/api';
   import { hasRole } from '$lib/stores/auth';
   import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { bumpContext } from '$lib/stores/apps.svelte.ts';
@@ -52,6 +52,21 @@
   let toast = $state<{ kind: 'ok' | 'err'; text: string } | null>(null);
   let probe = $state<any>(null);
   const isAdmin = hasRole('admin');
+
+  // Expanded runs (input / output), kept across the 5s refresh by instance id.
+  let openRuns = $state<Record<string, any>>({});
+  async function toggleRun(id: string) {
+    if (openRuns[id]) { const { [id]: _, ...rest } = openRuns; openRuns = rest; return; }
+    openRuns = { ...openRuns, [id]: { loading: true } };
+    const res = await executions.get(id);
+    openRuns = { ...openRuns, [id]: res.ok && typeof res.data === 'object' ? res.data : { error: res.error || 'Could not load this run' } };
+  }
+  function pretty(v: any): string {
+    if (v == null) return '';
+    if (typeof v === 'string') { try { return JSON.stringify(JSON.parse(v), null, 2); } catch { return v; } }
+    try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+  }
+  async function copy(text: string) { try { await navigator.clipboard.writeText(text); flash('ok', 'Copied'); } catch {} }
 
   // Pause dialog
   let pausing = $state<Row | null>(null);
@@ -336,14 +351,35 @@
           {:else}
             <table class="runs">
               <tbody>
-                {#each probe.recentRuns as r}
+                {#each probe.recentRuns as r (r.instanceId)}
                   {@const refused = (r.error ?? '').startsWith('refused: ')}
-                  <tr>
-                    <td><span class="dot {refused ? 'idle' : r.status === 'completed' ? 'ok' : r.status === 'failed' ? 'bad' : 'run'}"></span>{refused ? 'refused' : r.status}</td>
+                  {@const ex = openRuns[r.instanceId]}
+                  <tr class="run-row" class:open={!!ex} onclick={() => toggleRun(r.instanceId)} title="Show input and output">
+                    <td><svg class="twist" class:open={!!ex} width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 3l5 5-5 5" /></svg><span class="dot {refused ? 'idle' : r.status === 'completed' ? 'ok' : r.status === 'failed' ? 'bad' : 'run'}"></span>{refused ? 'refused' : r.status}</td>
                     <td class="muted">{ago(r.startedAt)}</td>
                     <td class="num">{ms(r.durationMs)}</td>
                     <td class="small" class:err={!refused} class:muted={refused}>{refused ? r.error.slice(9) : (r.error ?? '')}</td>
                   </tr>
+                  {#if ex}
+                    <tr class="run-detail"><td colspan="4">
+                      {#if ex.loading}
+                        <p class="muted small">Loading…</p>
+                      {:else}
+                        <div class="io-meta mono muted">{r.instanceId}{#if ex.current_step} · step {ex.current_step}{/if}</div>
+                        {#if ex.error && !refused}<div class="io-err">{ex.error}</div>{/if}
+                        <div class="io">
+                          <div>
+                            <div class="io-h">Input <button class="io-copy" onclick={(e) => { e.stopPropagation(); copy(pretty(ex.input)); }}>copy</button></div>
+                            <pre>{pretty(ex.input) || '—'}</pre>
+                          </div>
+                          <div>
+                            <div class="io-h">Output <button class="io-copy" onclick={(e) => { e.stopPropagation(); copy(pretty(ex.output)); }}>copy</button></div>
+                            <pre>{pretty(ex.output) || (refused ? 'refused — never ran' : '—')}</pre>
+                          </div>
+                        </div>
+                      {/if}
+                    </td></tr>
+                  {/if}
                 {/each}
               </tbody>
             </table>
@@ -573,6 +609,19 @@
   .trig li { display: flex; gap: 8px; align-items: center; }
   table.runs { width: 100%; font-size: 12.5px; border-collapse: collapse; margin-bottom: 6px; }
   .runs td { padding: 5px 6px; border-bottom: 1px solid var(--divider, var(--border)); }
+  .run-row { cursor: pointer; }
+  .run-row:hover td, .run-row.open td { background: var(--bg-subtle); }
+  .twist { margin-right: 6px; color: var(--text-4); transition: transform .12s; vertical-align: middle; }
+  .twist.open { transform: rotate(90deg); }
+  .run-detail td { background: var(--bg-subtle); padding: 4px 10px 12px 24px; }
+  .io-meta { font-size: 11px; margin-bottom: 6px; }
+  .io-err { color: var(--err); font-size: 12.5px; margin-bottom: 8px; white-space: pre-wrap; }
+  .io { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 900px) { .io { grid-template-columns: 1fr; } }
+  .io-h { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-4); margin-bottom: 4px; display: flex; justify-content: space-between; }
+  .io-copy { background: none; border: 0; color: var(--text-4); cursor: pointer; font-size: 11px; text-transform: none; letter-spacing: 0; }
+  .io-copy:hover { color: var(--text-1); }
+  .io pre { margin: 0; padding: 8px 10px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 12px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
 
   .empty { padding: 32px; text-align: center; color: var(--text-3); }
 

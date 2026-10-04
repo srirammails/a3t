@@ -2042,6 +2042,10 @@ async fn get_execution_status(storage: &dyn StorageBackend, args: &Value) -> Cal
                 "started_at": state.started_at,
                 "completed_at": state.completed_at,
                 "current_step": state.current_step,
+                "duration_us": state.duration_us,
+                // The input was stored with every run but never returned, so no
+                // view could show what a run was actually given.
+                "input": state.input,
                 "output": state.output,
                 "error": state.error
             }))
