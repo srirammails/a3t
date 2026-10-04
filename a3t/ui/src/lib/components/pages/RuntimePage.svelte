@@ -1,16 +1,18 @@
 <script lang="ts">
   /// The Runtime console — where live systems are operated.
   ///
-  /// Configuration lives in Canvas; this page is operations: every runtime, what
-  /// is deployed on it, whether each thing is serving, and the controls to pause,
-  /// resume, restart, undeploy or probe it. Runtime state (hibernate / pause /
-  /// resume) is an admin action because a runtime hosts other teams' work too.
+  /// Same shell as Agents and Templates: the side list is the drill-down
+  /// (host → runtime → deployed agents and flows) and this page shows whatever is
+  /// selected there. Configuration lives in Canvas; this is operations — whether
+  /// each thing is serving, and pause / resume / restart / undeploy. Runtime state
+  /// (hibernate / pause / resume) is an admin action because a runtime hosts other
+  /// teams' work too.
   import { onMount, onDestroy } from 'svelte';
   import { opsApi } from '$lib/services/api';
   import { hasRole } from '$lib/stores/auth';
-  import { navigateTo } from '$lib/stores/panels.svelte.ts';
+  import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
+  import { bumpContext } from '$lib/stores/apps.svelte.ts';
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
-  import SlidePanel from '$lib/components/shared/SlidePanel.svelte';
 
   interface Stats {
     runs: number; inFlight: number; failed: number; refused: number; completed: number;
@@ -34,29 +36,40 @@
     state: 'active' | 'hibernated' | 'paused'; pausedResponse: number; deployments: Row[];
   }
 
+  // ── What is selected in the side tree ──
+  const selectedId: string = getActivePanel()?.props?.selectedId ?? '';
+  const view: 'host' | 'runtime' | 'deployment' =
+    selectedId.startsWith('dep:') ? 'deployment' : selectedId.startsWith('rt:') ? 'runtime' : 'host';
+  const selKey = selectedId.replace(/^(host|rt|dep):/, '');
+
   let runtimes = $state<Rt[]>([]);
   let unplaced = $state<Row[]>([]);
   let host = $state<Host | null>(null);
   let controller = $state<'none' | 'reachable' | 'unreachable'>('none');
   let loading = $state(true);
   let error = $state('');
-  let selected = $state<string>('');
   let busy = $state<string>('');
   let toast = $state<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  let probe = $state<any>(null);
   const isAdmin = hasRole('admin');
 
   // Pause dialog
   let pausing = $state<Row | null>(null);
   let pauseReason = $state('');
-  // Probe drawer
-  let probing = $state<any>(null);
-  let probeLoading = $state(false);
 
-  const current = $derived(runtimes.find((r) => r.runtime.name === selected) ?? null);
+  const allRows = $derived([...runtimes.flatMap((r) => r.deployments), ...unplaced]);
+  const currentRt = $derived(
+    view === 'runtime'
+      ? selKey === '__unplaced'
+        ? ({ runtime: { name: 'Unplaced', namespace: '', labels: {} }, state: 'active', pausedResponse: 503, deployments: unplaced } as Rt)
+        : runtimes.find((r) => r.runtime.name === selKey) ?? null
+      : null,
+  );
+  const currentRow = $derived(view === 'deployment' ? allRows.find((r) => r.deployment.id === selKey) ?? null : null);
   const totals = $derived({
-    deployments: runtimes.reduce((n, r) => n + r.deployments.length, 0) + unplaced.length,
-    paused: [...runtimes.flatMap((r) => r.deployments), ...unplaced].filter((d) => d.serving !== 'serving' && d.serving !== 'hibernated').length,
-    inFlight: [...runtimes.flatMap((r) => r.deployments), ...unplaced].reduce((n, d) => n + d.stats.inFlight, 0),
+    deployments: allRows.length,
+    notServing: allRows.filter((d) => d.serving !== 'serving' && d.serving !== 'hibernated').length,
+    inFlight: allRows.reduce((n, d) => n + d.stats.inFlight, 0),
   });
 
   async function load() {
@@ -68,8 +81,9 @@
     unplaced = res.data.unplaced ?? [];
     host = res.data.host ?? null;
     controller = res.data.controller ?? 'none';
-    if (!selected || !runtimes.some((r) => r.runtime.name === selected)) {
-      selected = (runtimes.find((r) => r.deployments.length) ?? runtimes[0])?.runtime.name ?? '';
+    if (view === 'deployment') {
+      const p = await opsApi.probe(selKey);
+      probe = p.ok ? p.data : null;
     }
   }
 
@@ -78,9 +92,11 @@
   let timer: ReturnType<typeof setInterval> | undefined;
   onMount(() => {
     load();
-    timer = setInterval(() => { if (!document.hidden && !busy) load(); }, 5000);
+    timer = setInterval(() => { if (!document.hidden && !busy && !pausing) load(); }, 5000);
   });
   onDestroy(() => clearInterval(timer));
+
+  function open(id: string) { navigateToDetail('runtime', 'Runtimes', id); }
 
   function flash(kind: 'ok' | 'err', text: string) {
     toast = { kind, text };
@@ -92,12 +108,10 @@
     busy = `${row.deployment.id}:${action}`;
     const res = await opsApi.deployment(row.deployment.id, action, reason);
     busy = '';
-    if (res.ok) {
-      flash('ok', res.data?.note || `${action} done`);
-      if (probing?.deployment?.id === row.deployment.id) openProbe(row);
-    } else {
-      flash('err', res.status === 403 ? `Not allowed: ${(res as any).data?.reason || res.error}` : res.error || 'Failed');
-    }
+    if (res.ok) flash('ok', res.data?.note || `${action} done`);
+    else flash('err', res.status === 403 ? `Not allowed: ${res.error}` : res.error || 'Failed');
+    bumpContext(); // the side tree's status dots
+    if (res.ok && action === 'undeploy' && view === 'deployment') { open(`rt:${row.deployment.runtime}`); return; }
     await load();
   }
 
@@ -116,6 +130,7 @@
     busy = '';
     if (res.ok) flash('ok', res.data?.note || 'Done');
     else flash('err', res.status === 403 ? 'Only an admin can change a runtime’s state.' : res.error || 'Failed');
+    bumpContext();
     await load();
   }
 
@@ -123,14 +138,6 @@
     const res = await opsApi.pausedResponse(rt.runtime.name, status);
     if (!res.ok) flash('err', res.error || 'Failed');
     await load();
-  }
-
-  async function openProbe(row: Row) {
-    probeLoading = true;
-    probing = { deployment: row.deployment };
-    const res = await opsApi.probe(row.deployment.id);
-    probeLoading = false;
-    probing = res.ok ? res.data : { deployment: row.deployment, error: res.error };
   }
 
   function editCanvas(d: Deployment) {
@@ -167,68 +174,71 @@
   function ms(v?: number) { return v == null ? '—' : v < 1000 ? `${v} ms` : `${(v / 1000).toFixed(1)} s`; }
 </script>
 
-<div class="rt-page">
-  <PageBanner
-    headline="Operate what is running, where it runs."
-    highlightWord="running"
-    subtitle="Runtimes"
-    description="Every runtime, what is deployed on it and whether it is serving. Pause, resume, restart, undeploy or probe a flow or agent. Changing how something deploys is done in its canvas."
-    accent="runtime"
-  />
-
-  {#if host}
-    {@const mem = pct(host.memory.usedBytes, host.memory.limitBytes)}
-    {@const cpu = pct(host.cpu.coresUsed, host.cpu.limitCores)}
-    {@const disk = host.disk ? pct(host.disk.usedBytes, host.disk.totalBytes) : null}
-    <section class="host" title={host.note}>
-      <div class="host-id">
-        <span class="k">Host</span>
-        <span class="mono">{host.host || 'flowr'}</span>
-        <span class="shared">shared by all runtimes</span>
-      </div>
-      <div class="meter">
-        <span class="k">CPU</span>
-        <div class="bar"><i style="width:{cpu ?? 0}%" class:hot={(cpu ?? 0) > 80}></i></div>
-        <span class="v">{host.cpu.coresUsed != null ? host.cpu.coresUsed.toFixed(2) : '…'} / {host.cpu.limitCores ?? '—'} cores</span>
-      </div>
-      <div class="meter">
-        <span class="k">Memory</span>
-        <div class="bar"><i style="width:{mem ?? 0}%" class:hot={(mem ?? 0) > 80}></i></div>
-        <span class="v">{bytes(host.memory.usedBytes)} / {bytes(host.memory.limitBytes)}</span>
-      </div>
-      {#if host.disk}
-        <div class="meter">
-          <span class="k">Disk</span>
-          <div class="bar"><i style="width:{disk ?? 0}%" class:hot={(disk ?? 0) > 85}></i></div>
-          <span class="v">{bytes(host.disk.usedBytes)} / {bytes(host.disk.totalBytes)} <em>({bytes(host.disk.freeBytes)} free)</em></span>
-        </div>
+<!-- Page Header — same shape as Agents / Templates -->
+<div class="screen-header">
+  <div class="breadcrumb">
+    <button class="crumb" onclick={() => navigateTo('runtime', 'Runtimes')}>Runtimes</button>
+    {#if view !== 'host'}
+      {@const rtName = view === 'runtime' ? selKey : currentRow?.deployment.runtime}
+      <span class="sep">/</span>
+      {#if view === 'deployment' && rtName}
+        <button class="crumb" onclick={() => open(`rt:${rtName}`)}>{rtName}</button>
+        <span class="sep">/</span> {currentRow?.deployment.target ?? selKey}
+      {:else}
+        {rtName === '__unplaced' ? 'Unplaced' : rtName}
       {/if}
-      <div class="totals">
-        <span><b>{totals.deployments}</b> deployed</span>
-        <span><b>{totals.inFlight}</b> in flight</span>
-        <span class:alert={totals.paused > 0}><b>{totals.paused}</b> not serving</span>
-      </div>
-    </section>
-  {/if}
+    {:else}
+      <span class="sep">/</span> {host?.host ?? 'Host'}
+    {/if}
+  </div>
+  <div class="screen-title-row">
+    <div class="title-block">
+      <h1 class="screen-title">
+        {#if view === 'host'}Hosts &amp; Runtimes
+        {:else if view === 'runtime'}{currentRt?.runtime.name ?? selKey}
+          {#if currentRt && selKey !== '__unplaced'}<span class="chip {RT_STATE[currentRt.state]}">{currentRt.state}</span>{/if}
+        {:else}<span class="kind {currentRow?.deployment.kind ?? 'flow'}">{currentRow?.deployment.kind ?? ''}</span> {currentRow?.deployment.target ?? selKey}
+          {#if currentRow}{@const sv = SERVING[currentRow.serving] ?? SERVING.serving}<span class="chip {sv.cls}" title={sv.hint}>{sv.label}</span>{/if}
+        {/if}
+      </h1>
+    </div>
+    <div class="screen-actions">
+      {#if view === 'runtime' && currentRt && selKey !== '__unplaced'}
+        {@render runtimeActions(currentRt)}
+      {:else if view === 'deployment' && currentRow}
+        {@render depActions(currentRow, true)}
+      {/if}
+    </div>
+  </div>
+</div>
 
+<div class="screen-body">
   {#if toast}<div class="toast {toast.kind}">{toast.text}</div>{/if}
 
   {#if loading}
-    <p class="muted pad">Loading runtimes…</p>
+    <p class="muted">Loading…</p>
   {:else if error}
-    <p class="err pad">{error}</p>
-  {:else if runtimes.length === 0}
-    <div class="empty">
-      <p>No runtimes are registered yet.</p>
-      <button class="btn" onclick={() => navigateTo('canvas', 'Canvas')}>Create one in Canvas</button>
-    </div>
-  {:else}
-    <div class="split">
-      <!-- Runtime list -->
-      <aside class="rts">
+    <p class="err">{error}</p>
+
+  <!-- ═══ HOST ═══ -->
+  {:else if view === 'host'}
+    <PageBanner
+      headline="Operate what is running, where it runs."
+      highlightWord="running"
+      subtitle="Hosts → runtimes → the agents and flows deployed on them."
+      description="Pick a runtime or a deployment in the list. Pause, resume, restart, undeploy or probe it here; change how it deploys in its canvas."
+      accent="runtime"
+    />
+    {#if host}{@render hostCard(host)}{/if}
+    <h3 class="sec">Runtimes on this host</h3>
+    {#if runtimes.length === 0}
+      <div class="empty"><p>No runtimes are registered yet.</p>
+        <button class="btn" onclick={() => navigateTo('canvas', 'Canvas')}>Create one in Canvas</button></div>
+    {:else}
+      <div class="rt-grid">
         {#each runtimes as rt (rt.runtime.name)}
           {@const notServing = rt.deployments.filter((d) => d.serving !== 'serving' && d.serving !== 'hibernated').length}
-          <button class="rt" class:active={rt.runtime.name === selected} onclick={() => (selected = rt.runtime.name)}>
+          <button class="rt-card" onclick={() => open(`rt:${rt.runtime.name}`)}>
             <div class="rt-top">
               <span class="dot {RT_STATE[rt.state]}"></span>
               <span class="rt-name">{rt.runtime.name}</span>
@@ -239,121 +249,214 @@
               {#each Object.entries(rt.runtime.labels ?? {}) as [k, v]}<span class="lbl">{k}={v}</span>{/each}
             </div>
             <div class="rt-sub">
-              {rt.deployments.length} deployed{#if notServing} · <span class="alert">{notServing} not serving</span>{/if}
+              {rt.deployments.length} deployed · {rt.deployments.reduce((n, d) => n + d.stats.runsLastHour, 0)} runs/h
+              {#if notServing} · <span class="alert">{notServing} not serving</span>{/if}
             </div>
           </button>
         {/each}
-        {#if unplaced.length}
-          <button class="rt" class:active={selected === '__unplaced'} onclick={() => (selected = '__unplaced')}>
-            <div class="rt-top"><span class="dot warn"></span><span class="rt-name">Unplaced</span></div>
-            <div class="rt-sub">{unplaced.length} whose runtime was removed</div>
-          </button>
-        {/if}
-      </aside>
+      </div>
+    {/if}
 
-      <!-- Selected runtime -->
-      <main class="detail">
-        {#if current}
-          <header class="d-head">
-            <div>
-              <h2>{current.runtime.name} <span class="chip {RT_STATE[current.state]}">{current.state}</span></h2>
-              <p class="muted">
-                {#if current.state === 'hibernated'}Asleep — the first request for anything here wakes it.
-                {:else if current.state === 'paused'}Paused by an admin — everything here refuses requests until the runtime is resumed.
-                {:else}Serving.{/if}
-                {#if controller === 'reachable'}<span class="tag">EE controller connected</span>
-                {:else if controller === 'unreachable'}<span class="tag warn" title="A3T_CONTROLLER_URL is set but the controller does not answer">controller unreachable · logical placement</span>
-                {:else}<span class="tag">CE · logical placement</span>{/if}
-              </p>
-            </div>
-            <div class="rt-actions">
-              <label class="pr" title="What a trigger caller gets while a deployment here is paused. A canvas can override it.">
-                While paused, callers get
-                <select disabled={!isAdmin} value={current.pausedResponse}
-                  onchange={(e) => setPausedResponse(current!, Number((e.target as HTMLSelectElement).value) as 503 | 404)}>
-                  <option value={503}>503 Unavailable</option>
-                  <option value={404}>404 Not found</option>
-                </select>
-              </label>
-              {#if isAdmin}
-                {#if current.state !== 'active'}
-                  <button class="btn sm runtime" disabled={!!busy} onclick={() => runtimeAct(current!, 'resume')}>Resume runtime</button>
-                {/if}
-                {#if current.state === 'active'}
-                  <button class="btn sm" disabled={!!busy} onclick={() => runtimeAct(current!, 'hibernate')}>Hibernate</button>
-                {/if}
-                {#if current.state !== 'paused'}
-                  <button class="btn sm outline-danger" disabled={!!busy} onclick={() => runtimeAct(current!, 'pause')}>Pause runtime</button>
-                {/if}
-              {:else}
-                <span class="muted small">Runtime state is changed by an admin.</span>
-              {/if}
-            </div>
-          </header>
-          {@render table(current.deployments)}
-        {:else if selected === '__unplaced'}
-          <header class="d-head"><div><h2>Unplaced</h2><p class="muted">Deployments whose runtime was removed after they were placed. Restart re-places them from their canvas; undeploy removes them.</p></div></header>
-          {@render table(unplaced)}
+  <!-- ═══ RUNTIME ═══ -->
+  {:else if view === 'runtime'}
+    {#if !currentRt}
+      <p class="muted">Runtime “{selKey}” is not registered any more.</p>
+    {:else}
+      <p class="lede">
+        {#if selKey === '__unplaced'}Deployments whose runtime was removed after they were placed. Restart re-places them from their canvas; undeploy removes them.
+        {:else if currentRt.state === 'hibernated'}Asleep — the first request for anything here wakes it.
+        {:else if currentRt.state === 'paused'}Paused by an admin — everything here refuses requests until the runtime is resumed.
+        {:else}Serving.{/if}
+        {#if selKey !== '__unplaced'}
+          {#if controller === 'reachable'}<span class="tag">EE controller connected</span>
+          {:else if controller === 'unreachable'}<span class="tag warn">controller unreachable · logical placement</span>
+          {:else}<span class="tag">CE · logical placement</span>{/if}
+          <span class="labels inline"><span class="ns">ns {currentRt.runtime.namespace}</span>{#each Object.entries(currentRt.runtime.labels ?? {}) as [k, v]}<span class="lbl">{k}={v}</span>{/each}</span>
         {/if}
-      </main>
-    </div>
+      </p>
+      {@render table(currentRt.deployments)}
+    {/if}
+
+  <!-- ═══ DEPLOYMENT ═══ -->
+  {:else}
+    {#if !currentRow}
+      <p class="muted">“{selKey}” is not deployed any more.</p>
+    {:else}
+      {@const d = currentRow.deployment}
+      <p class="lede">
+        On <button class="link" onclick={() => open(`rt:${d.runtime}`)}>{d.runtime}</button> · {d.mode} · ns {d.namespace}
+        · {d.canvas ? `canvas ${d.canvas}` : 'default canvas'}{#if d.kind === 'agent'} · runs {d.flowRef}{/if}
+        · deployed {ago(d.deployedAt)}
+      </p>
+      {#if d.state === 'paused'}
+        <div class="paused-note">
+          Paused {ago(d.pausedAt)}{d.pauseReason ? ` — “${d.pauseReason}”` : ''}. Trigger callers get <b>HTTP {currentRow.callersGetWhenPaused}</b>; every other request is refused until resumed.
+        </div>
+      {/if}
+
+      <div class="kpis">
+        <div><b>{currentRow.stats.runsLastHour}</b><span>runs / h</span></div>
+        <div><b>{currentRow.stats.inFlight}</b><span>in flight</span></div>
+        <div><b class:alert={currentRow.stats.failed > 0}>{Math.round(currentRow.stats.errorRate * 100)}%</b><span>errors</span></div>
+        <div><b>{ms(currentRow.stats.p50Ms)}</b><span>p50</span></div>
+        <div><b>{ms(currentRow.stats.p95Ms)}</b><span>p95</span></div>
+        <div><b>{currentRow.stats.refused}</b><span>refused</span></div>
+      </div>
+
+      {#if probe}
+        <div class="two">
+          <section class="card">
+            <h4>Health</h4>
+            <ul class="checks">
+              {#each probe.checks as c}
+                <li class:bad={!c.ok}><span class="dot {c.ok ? 'ok' : 'bad'}"></span>{c.check}{#if c.target}<span class="mono muted tgt-ref">{c.target}</span>{/if}{#if c.detail && !c.ok} — {c.detail}{/if}</li>
+              {/each}
+            </ul>
+          </section>
+          <section class="card">
+            <h4>Triggers</h4>
+            {#if probe.triggers.length === 0}
+              <p class="muted small">No triggers feed this deployment — it runs on demand or from chat.</p>
+            {:else}
+              <ul class="trig">
+                {#each probe.triggers as t}
+                  <li><span class="chip {t.enabled ? 'ok' : 'idle'}">{t.config?.type}</span>
+                    <span class="mono">{t.config?.path ?? t.config?.expression ?? t.config?.source ?? ''}</span>
+                    <span class="muted">{t.name}</span></li>
+                {/each}
+              </ul>
+            {/if}
+          </section>
+        </div>
+
+        <section class="card">
+          <h4>Recent runs</h4>
+          {#if probe.recentRuns.length === 0}
+            <p class="muted small">No runs yet.</p>
+          {:else}
+            <table class="runs">
+              <tbody>
+                {#each probe.recentRuns as r}
+                  {@const refused = (r.error ?? '').startsWith('refused: ')}
+                  <tr>
+                    <td><span class="dot {refused ? 'idle' : r.status === 'completed' ? 'ok' : r.status === 'failed' ? 'bad' : 'run'}"></span>{refused ? 'refused' : r.status}</td>
+                    <td class="muted">{ago(r.startedAt)}</td>
+                    <td class="num">{ms(r.durationMs)}</td>
+                    <td class="small" class:err={!refused} class:muted={refused}>{refused ? r.error.slice(9) : (r.error ?? '')}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+            <button class="btn sm ghost" onclick={() => navigateTo('executions', 'Executions')}>All executions →</button>
+          {/if}
+        </section>
+      {/if}
+    {/if}
   {/if}
 </div>
+
+{#snippet hostCard(h: Host)}
+  {@const mem = pct(h.memory.usedBytes, h.memory.limitBytes)}
+  {@const cpu = pct(h.cpu.coresUsed, h.cpu.limitCores)}
+  {@const disk = h.disk ? pct(h.disk.usedBytes, h.disk.totalBytes) : null}
+  <section class="host" title={h.note}>
+    <div class="host-id">
+      <span class="k">Host</span>
+      <span class="mono">{h.host || 'flowr'}</span>
+      <span class="shared">shared by all runtimes</span>
+    </div>
+    <div class="meters">
+      <div class="meter"><span class="k">CPU</span><div class="bar"><i style="width:{cpu ?? 0}%" class:hot={(cpu ?? 0) > 80}></i></div>
+        <span class="v">{h.cpu.coresUsed != null ? h.cpu.coresUsed.toFixed(2) : '…'} / {h.cpu.limitCores ?? '—'} cores</span></div>
+      <div class="meter"><span class="k">Memory</span><div class="bar"><i style="width:{mem ?? 0}%" class:hot={(mem ?? 0) > 80}></i></div>
+        <span class="v">{bytes(h.memory.usedBytes)} / {bytes(h.memory.limitBytes)}</span></div>
+      {#if h.disk}
+        <div class="meter"><span class="k">Disk</span><div class="bar"><i style="width:{disk ?? 0}%" class:hot={(disk ?? 0) > 85}></i></div>
+          <span class="v">{bytes(h.disk.usedBytes)} / {bytes(h.disk.totalBytes)} <em>({bytes(h.disk.freeBytes)} free)</em></span></div>
+      {/if}
+    </div>
+    <div class="totals">
+      <span><b>{runtimes.length}</b> runtimes</span>
+      <span><b>{totals.deployments}</b> deployed</span>
+      <span><b>{totals.inFlight}</b> in flight</span>
+      <span class:alert={totals.notServing > 0}><b>{totals.notServing}</b> not serving</span>
+    </div>
+  </section>
+{/snippet}
+
+{#snippet runtimeActions(rt: Rt)}
+  <label class="pr" title="What a trigger caller gets while a deployment here is paused. A canvas can override it.">
+    While paused, callers get
+    <select disabled={!isAdmin} value={rt.pausedResponse}
+      onchange={(e) => setPausedResponse(rt, Number((e.target as HTMLSelectElement).value) as 503 | 404)}>
+      <option value={503}>503 Unavailable</option>
+      <option value={404}>404 Not found</option>
+    </select>
+  </label>
+  {#if isAdmin}
+    {#if rt.state !== 'active'}<button class="btn sm runtime" disabled={!!busy} onclick={() => runtimeAct(rt, 'resume')}>Resume runtime</button>{/if}
+    {#if rt.state === 'active'}<button class="btn sm" disabled={!!busy} onclick={() => runtimeAct(rt, 'hibernate')}>Hibernate</button>{/if}
+    {#if rt.state !== 'paused'}<button class="btn sm outline-danger" disabled={!!busy} onclick={() => runtimeAct(rt, 'pause')}>Pause runtime</button>{/if}
+  {:else}
+    <span class="muted small">Runtime state is changed by an admin.</span>
+  {/if}
+{/snippet}
+
+{#snippet depActions(row: Row, full: boolean)}
+  {@const d = row.deployment}
+  {#if d.state === 'paused'}
+    <button class="btn sm runtime" disabled={!!busy} onclick={() => act(row, 'resume')}>Resume</button>
+  {:else}
+    <button class="btn sm" disabled={!!busy} onclick={() => { pausing = row; pauseReason = ''; }}>Pause</button>
+  {/if}
+  <button class="btn sm ghost" disabled={!!busy || d.state === 'paused'} title={d.state === 'paused' ? 'Resume before restarting' : 'Re-place from the current canvas'} onclick={() => act(row, 'restart')}>Restart</button>
+  {#if !full}<button class="btn sm ghost" onclick={() => open(`dep:${d.id}`)}>Probe</button>{/if}
+  {#if d.canvas}<button class="btn sm ghost" onclick={() => editCanvas(d)}>Edit canvas</button>{/if}
+  <button class="btn sm ghost text-danger" disabled={!!busy} onclick={() => act(row, 'undeploy')}>Undeploy</button>
+{/snippet}
 
 {#snippet table(rows: Row[])}
   {#if rows.length === 0}
     <div class="empty">
       <p>Nothing is deployed on this runtime.</p>
-      <p class="muted small">Deploy from a canvas, or ask in AI Chat: “deploy my flow to {selected}”.</p>
+      <p class="muted small">Deploy from a canvas, or ask in AI Chat: “deploy my flow to {selKey}”.</p>
     </div>
   {:else}
-    <table class="deps">
-      <thead>
-        <tr><th>Deployed</th><th>State</th><th class="num">Runs/h</th><th class="num">In flight</th><th class="num">Errors</th><th class="num">p50 / p95</th><th>Last run</th><th></th></tr>
-      </thead>
-      <tbody>
-        {#each rows as row (row.deployment.id)}
-          {@const d = row.deployment}
-          {@const sv = SERVING[row.serving] ?? SERVING.serving}
-          <tr class:dim={row.serving !== 'serving' && row.serving !== 'hibernated'}>
-            <td>
-              <div class="tgt">
-                <span class="kind {d.kind}">{d.kind}</span>
-                <button class="link mono" onclick={() => openProbe(row)}>{d.target}</button>
-              </div>
-              <div class="muted small">
-                {d.canvas ? `canvas ${d.canvas}` : 'default canvas'} · {d.mode} · ns {d.namespace}
-              </div>
-            </td>
-            <td>
-              <span class="chip {sv.cls}" title={sv.hint}>{sv.label}</span>
-              {#if d.state === 'paused'}
-                <div class="muted small" title={d.pausedBy}>{d.pauseReason ? `“${d.pauseReason}” · ` : ''}{ago(d.pausedAt)} · callers get {row.callersGetWhenPaused}</div>
-              {/if}
-            </td>
-            <td class="num">{row.stats.runsLastHour}</td>
-            <td class="num">{row.stats.inFlight || '—'}</td>
-            <td class="num" title={row.stats.lastError ?? ''}>
-              {#if row.stats.failed}<span class="alert">{Math.round(row.stats.errorRate * 100)}%</span>{:else}—{/if}
-              {#if row.stats.refused}<div class="muted small">{row.stats.refused} refused</div>{/if}
-            </td>
-            <td class="num">{ms(row.stats.p50Ms)} / {ms(row.stats.p95Ms)}</td>
-            <td>{ago(row.stats.lastRunAt)}</td>
-            <td class="acts">
-              {#if d.state === 'paused'}
-                <button class="btn sm runtime" disabled={!!busy} onclick={() => act(row, 'resume')}>Resume</button>
-              {:else}
-                <button class="btn sm" disabled={!!busy} onclick={() => { pausing = row; pauseReason = ''; }}>Pause</button>
-              {/if}
-              <button class="btn sm ghost" disabled={!!busy || d.state === 'paused'} title={d.state === 'paused' ? 'Resume before restarting' : 'Re-place from the current canvas'} onclick={() => act(row, 'restart')}>Restart</button>
-              <button class="btn sm ghost" onclick={() => openProbe(row)}>Probe</button>
-              {#if d.canvas}<button class="btn sm ghost" onclick={() => editCanvas(d)}>Edit canvas</button>{/if}
-              <button class="btn sm ghost text-danger" disabled={!!busy} onclick={() => act(row, 'undeploy')}>Undeploy</button>
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+    <div class="card flush">
+      <table class="deps">
+        <thead>
+          <tr><th>Deployed</th><th>State</th><th class="num">Runs/h</th><th class="num">In flight</th><th class="num">Errors</th><th class="num">p50 / p95</th><th>Last run</th><th></th></tr>
+        </thead>
+        <tbody>
+          {#each rows as row (row.deployment.id)}
+            {@const d = row.deployment}
+            {@const sv = SERVING[row.serving] ?? SERVING.serving}
+            <tr class:dim={row.serving !== 'serving' && row.serving !== 'hibernated'}>
+              <td>
+                <div class="tgt">
+                  <span class="kind {d.kind}">{d.kind}</span>
+                  <button class="link mono" onclick={() => open(`dep:${d.id}`)}>{d.target}</button>
+                </div>
+                <div class="muted small">{d.canvas ? `canvas ${d.canvas}` : 'default canvas'} · {d.mode}</div>
+              </td>
+              <td>
+                <span class="chip {sv.cls}" title={sv.hint}>{sv.label}</span>
+                {#if d.state === 'paused'}<div class="muted small">{d.pauseReason ? `“${d.pauseReason}” · ` : ''}{ago(d.pausedAt)}</div>{/if}
+              </td>
+              <td class="num">{row.stats.runsLastHour}</td>
+              <td class="num">{row.stats.inFlight || '—'}</td>
+              <td class="num" title={row.stats.lastError ?? ''}>
+                {#if row.stats.failed}<span class="alert">{Math.round(row.stats.errorRate * 100)}%</span>{:else}—{/if}
+                {#if row.stats.refused}<div class="muted small">{row.stats.refused} refused</div>{/if}
+              </td>
+              <td class="num">{ms(row.stats.p50Ms)} / {ms(row.stats.p95Ms)}</td>
+              <td>{ago(row.stats.lastRunAt)}</td>
+              <td class="acts">{@render depActions(row, false)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
   {/if}
 {/snippet}
 
@@ -375,160 +478,104 @@
   </div>
 {/if}
 
-<!-- Probe drawer -->
-<SlidePanel open={!!probing} onclose={() => (probing = null)}>
-  {#if probing}
-    {@const d = probing.deployment}
-    <div class="probe">
-      <h2><span class="kind {d.kind}">{d.kind}</span> <span class="mono">{d.target}</span></h2>
-      {#if probeLoading}
-        <p class="muted">Probing…</p>
-      {:else if probing.error}
-        <p class="err">{probing.error}</p>
-      {:else}
-        {@const sv = SERVING[probing.serving] ?? SERVING.serving}
-        <p><span class="chip {sv.cls}">{sv.label}</span> on <b>{d.runtime}</b> · {d.mode} · ns {d.namespace} · deployed {ago(d.deployedAt)}</p>
-
-        <h4>Health</h4>
-        <ul class="checks">
-          {#each probing.checks as c}
-            <li class:bad={!c.ok}><span class="dot {c.ok ? 'ok' : 'bad'}"></span>{c.check}{#if c.target}<span class="mono muted tgt-ref">{c.target}</span>{/if}{#if c.detail && !c.ok} — {c.detail}{/if}</li>
-          {/each}
-        </ul>
-
-        <h4>Activity <span class="muted small">(last {probing.stats.runs} runs)</span></h4>
-        <div class="kpis">
-          <div><b>{probing.stats.runsLastHour}</b><span>runs / h</span></div>
-          <div><b>{probing.stats.inFlight}</b><span>in flight</span></div>
-          <div><b>{Math.round(probing.stats.errorRate * 100)}%</b><span>errors</span></div>
-          <div><b>{ms(probing.stats.p50Ms)}</b><span>p50</span></div>
-          <div><b>{ms(probing.stats.p95Ms)}</b><span>p95</span></div>
-          <div><b>{probing.stats.refused}</b><span>refused</span></div>
-        </div>
-
-        <h4>Triggers</h4>
-        {#if probing.triggers.length === 0}
-          <p class="muted small">No triggers feed this deployment.</p>
-        {:else}
-          <ul class="trig">
-            {#each probing.triggers as t}
-              <li>
-                <span class="chip {t.enabled ? 'ok' : 'idle'}">{t.config?.type}</span>
-                <span class="mono">{t.config?.path ?? t.config?.expression ?? t.config?.source ?? ''}</span>
-                <span class="muted">{t.name}</span>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-
-        <h4>Recent runs</h4>
-        {#if probing.recentRuns.length === 0}
-          <p class="muted small">No runs yet.</p>
-        {:else}
-          <table class="runs">
-            <tbody>
-              {#each probing.recentRuns as r}
-                {@const refused = (r.error ?? '').startsWith('refused: ')}
-                <tr>
-                  <td><span class="dot {refused ? 'idle' : r.status === 'completed' ? 'ok' : r.status === 'failed' ? 'bad' : 'run'}"></span>{refused ? 'refused' : r.status}</td>
-                  <td class="muted">{ago(r.startedAt)}</td>
-                  <td class="num">{ms(r.durationMs)}</td>
-                  <td class="small" class:err={!refused} class:muted={refused}>{refused ? r.error.slice(9) : (r.error ?? '')}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-          <button class="btn sm ghost" onclick={() => navigateTo('executions', 'Executions')}>All executions →</button>
-        {/if}
-      {/if}
-    </div>
-  {/if}
-</SlidePanel>
-
 <style>
-  .rt-page { display: flex; flex-direction: column; height: 100%; overflow: auto; background: var(--bg-page); }
-  .pad { padding: 24px; }
   .muted { color: var(--text-4); }
   .small { font-size: 12px; }
   .err { color: var(--err); }
   .alert { color: var(--err); }
   .mono { font-family: var(--font-mono); font-size: 12.5px; }
-  .tag { margin-left: 8px; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--bg-subtle); color: var(--text-3); border: 1px solid var(--border); }
+  /* Header / body — the same shape as Agents and Templates. */
+  .screen-header { padding: 18px 32px 12px; border-bottom: 1px solid var(--border); background: var(--bg-page); }
+  .breadcrumb { font-size: 12px; color: var(--text-3); margin-bottom: 8px; font-family: var(--font-mono); }
+  .breadcrumb .sep { color: var(--text-5); margin: 0 2px; }
+  .screen-title-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .title-block { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .screen-body { flex: 1; overflow-y: auto; padding: 20px 32px 40px; }
+  .crumb { background: none; border: 0; padding: 0; color: inherit; cursor: pointer; font: inherit; }
+  .crumb:hover { text-decoration: underline; }
+  .screen-title { font-family: var(--font-serif); font-size: 24px; font-weight: 500; letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; margin: 0; }
+  .screen-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .lede { font-size: 13px; color: var(--text-3); margin: 0 0 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .sec { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-4); font-weight: 500; margin: 20px 0 8px; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--bg-subtle); color: var(--text-3); border: 1px solid var(--border); }
+  .tag.warn { color: var(--warn); border-color: var(--warn); }
+  .card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r); padding: 14px 16px; margin-bottom: 14px; }
+  .card.flush { padding: 4px 8px; overflow-x: auto; }
+  .card h4 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-4); font-weight: 500; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+  .paused-note { padding: 10px 12px; border-radius: var(--r-sm); background: var(--err-bg); color: var(--err); font-size: 13px; margin-bottom: 14px; }
 
-  /* Host strip */
-  .host { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; margin: 0 24px 12px; padding: 12px 16px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r); }
+  /* Host */
+  .host { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r); }
   .host-id { display: flex; align-items: baseline; gap: 8px; }
-  .host .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-4); }
+  .host .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-4); min-width: 52px; }
   .shared { font-size: 11px; color: var(--text-4); font-style: italic; }
-  .meter { display: flex; align-items: center; gap: 8px; min-width: 220px; }
-  .bar { width: 90px; height: 6px; background: var(--bg-subtle); border-radius: 3px; overflow: hidden; }
+  .meters { display: flex; flex-wrap: wrap; gap: 10px 32px; }
+  .meter { display: flex; align-items: center; gap: 8px; }
+  .bar { width: 120px; height: 6px; background: var(--bg-subtle); border-radius: 3px; overflow: hidden; }
   .bar i { display: block; height: 100%; background: var(--runtime, #0f766e); transition: width .4s; }
   .bar i.hot { background: var(--err); }
   .meter .v { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
   .meter em { color: var(--text-4); font-style: normal; }
-  .totals { display: flex; gap: 16px; margin-left: auto; font-size: 12.5px; color: var(--text-3); }
+  .totals { display: flex; gap: 18px; font-size: 12.5px; color: var(--text-3); }
   .totals b { color: var(--text-1); font-variant-numeric: tabular-nums; }
 
-  .toast { margin: 0 24px 12px; padding: 8px 12px; border-radius: var(--r-sm); font-size: 13px; }
-  .toast.ok { background: var(--ok-bg, #e7f6ec); color: var(--ok); }
-  .toast.err { background: var(--err-bg); color: var(--err); }
-
-  /* Layout */
-  .split { display: grid; grid-template-columns: 260px 1fr; gap: 16px; padding: 0 24px 24px; min-height: 0; }
-  @media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
-  .rts { display: flex; flex-direction: column; gap: 8px; }
-  .rt { text-align: left; padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r); cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
-  .rt:hover { border-color: var(--border-strong); }
-  .rt.active { border-color: var(--runtime, #0f766e); box-shadow: inset 3px 0 0 var(--runtime, #0f766e); }
+  .rt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+  .rt-card { text-align: left; padding: 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r); cursor: pointer; display: flex; flex-direction: column; gap: 8px; }
+  .rt-card:hover { border-color: var(--runtime, #0f766e); }
   .rt-top { display: flex; align-items: center; gap: 8px; }
   .rt-name { font-weight: 600; color: var(--text-1); font-size: 13.5px; flex: 1; }
   .rt-sub { font-size: 12px; color: var(--text-3); }
   .labels { display: flex; flex-wrap: wrap; gap: 4px; }
+  .labels.inline { display: inline-flex; }
   .lbl, .ns { font-family: var(--font-mono); font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: var(--bg-subtle); color: var(--text-3); }
   .ns { background: var(--runtime-bg, #e6f4f1); color: var(--runtime, #0f766e); }
 
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; margin-right: 6px; background: var(--text-5); }
-  .dot.ok { background: var(--ok); }
-  .dot.bad { background: var(--err); }
-  .dot.warn { background: var(--warn); }
-  .dot.run { background: var(--signal, #2563eb); }
-  .dot.idle { background: var(--text-5, #bbb); }
-  .chip { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
-  .chip.ok { color: var(--ok); }
-  .chip.bad { color: var(--err); }
-  .chip.warn { color: var(--warn); }
-  .chip.idle { color: var(--text-4); }
+  .toast { margin: 0 0 12px; padding: 8px 12px; border-radius: var(--r-sm); font-size: 13px; }
+  .toast.ok { background: var(--ok-bg, #e7f6ec); color: var(--ok); }
+  .toast.err { background: var(--err-bg); color: var(--err); }
 
-  .detail { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r); padding: 16px; min-width: 0; overflow-x: auto; }
-  .d-head { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
-  .d-head h2 { font-family: var(--font-serif); font-size: 20px; font-weight: 500; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
-  .d-head p { margin: 0; font-size: 13px; }
-  .rt-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; margin-right: 6px; background: var(--text-5); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--err); } .dot.warn { background: var(--warn); }
+  .dot.run { background: var(--signal, #2563eb); } .dot.idle { background: var(--text-5, #bbb); }
+  .chip { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; font-family: var(--font-sans); font-weight: 400; }
+  .chip.ok { color: var(--ok); } .chip.bad { color: var(--err); } .chip.warn { color: var(--warn); } .chip.idle { color: var(--text-4); }
+  .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 4px; background: var(--spec-bg); color: var(--spec); font-family: var(--font-sans); font-weight: 500; }
+  .kind.agent { background: var(--ephemeral-bg, #fff4e5); color: var(--ephemeral, #b45309); }
+
   .pr { font-size: 12px; color: var(--text-3); display: flex; align-items: center; gap: 6px; }
   .pr select { font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-surface); }
+  .btn.runtime { background: var(--runtime, #0f766e); color: white; border-color: var(--runtime, #0f766e); }
   .btn.outline-danger { color: var(--err); border-color: var(--err); background: var(--bg-surface); }
   .btn.outline-danger:hover { background: var(--err-bg); }
   .btn.text-danger { color: var(--err); background: transparent; border-color: transparent; box-shadow: none; }
   .btn.text-danger:hover { background: var(--err-bg); }
-  .tag.warn { color: var(--warn); border-color: var(--warn); }
-  .tgt-ref { margin-left: 6px; }
-  .btn.runtime { background: var(--runtime, #0f766e); color: white; border-color: var(--runtime, #0f766e); }
 
   table.deps { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .deps th { text-align: left; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .05em; color: var(--text-4); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .deps th { text-align: left; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .05em; color: var(--text-4); padding: 8px; border-bottom: 1px solid var(--border); }
   .deps td { padding: 10px 8px; border-bottom: 1px solid var(--divider, var(--border)); vertical-align: top; }
+  .deps tr:last-child td { border-bottom: 0; }
   .deps tr.dim td:not(.acts) { opacity: .75; }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .tgt { display: flex; align-items: center; gap: 6px; }
-  .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 4px; background: var(--spec-bg); color: var(--spec); }
-  .kind.agent { background: var(--ephemeral-bg, #fff4e5); color: var(--ephemeral, #b45309); }
-  .link { background: none; border: 0; padding: 0; color: var(--text-1); cursor: pointer; text-decoration: underline dotted; }
+  .link { background: none; border: 0; padding: 0; color: var(--text-1); cursor: pointer; text-decoration: underline dotted; font: inherit; }
   .acts { white-space: nowrap; text-align: right; }
-  .acts .btn { margin-left: 2px; }
+
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 14px; }
+  @media (max-width: 700px) { .kpis { grid-template-columns: repeat(3, 1fr); } }
+  .kpis div { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px; display: flex; flex-direction: column; align-items: center; }
+  .kpis b { font-size: 16px; font-variant-numeric: tabular-nums; }
+  .kpis span { font-size: 10.5px; color: var(--text-4); }
+  .checks, .trig { list-style: none; padding: 0; margin: 0; font-size: 13px; display: flex; flex-direction: column; gap: 5px; }
+  .checks li.bad { color: var(--err); }
+  .tgt-ref { margin-left: 6px; }
+  .trig li { display: flex; gap: 8px; align-items: center; }
+  table.runs { width: 100%; font-size: 12.5px; border-collapse: collapse; margin-bottom: 6px; }
+  .runs td { padding: 5px 6px; border-bottom: 1px solid var(--divider, var(--border)); }
 
   .empty { padding: 32px; text-align: center; color: var(--text-3); }
 
-  /* Modal */
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.25); z-index: 50; }
   .modal { position: fixed; z-index: 51; top: 20vh; left: 50%; transform: translateX(-50%); width: min(480px, calc(100vw - 32px)); background: var(--bg-surface); border-radius: var(--r); box-shadow: var(--shadow-lg); padding: 20px; }
   .modal h3 { margin: 0 0 8px; font-size: 16px; }
@@ -537,19 +584,4 @@
   .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-2); }
   .modal input { padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 13px; }
   .modal-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-
-  /* Probe */
-  .probe { padding: 20px; display: flex; flex-direction: column; gap: 6px; }
-  .probe h2 { font-size: 17px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
-  .probe h4 { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-4); font-weight: 500; }
-  .probe p { margin: 0; font-size: 13px; }
-  .checks, .trig { list-style: none; padding: 0; margin: 0; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
-  .checks li.bad { color: var(--err); }
-  .trig li { display: flex; gap: 8px; align-items: center; }
-  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
-  .kpis div { background: var(--bg-subtle); border-radius: var(--r-sm); padding: 8px; display: flex; flex-direction: column; align-items: center; }
-  .kpis b { font-size: 15px; font-variant-numeric: tabular-nums; }
-  .kpis span { font-size: 10.5px; color: var(--text-4); }
-  table.runs { width: 100%; font-size: 12.5px; border-collapse: collapse; }
-  .runs td { padding: 4px 6px; border-bottom: 1px solid var(--divider, var(--border)); }
 </style>

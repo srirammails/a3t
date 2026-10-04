@@ -37,8 +37,35 @@
     return [unsent, ...items];
   });
 
+  /// A hierarchical list (items carry `depth`) renders as a tree instead of
+  /// namespace groups.
+  const isTree = $derived(listed.some((i) => i.depth != null));
+
+  /// Each tree row's ancestors, from the depth-first order.
+  const ancestors = $derived.by(() => {
+    const m = new Map<string, string[]>();
+    const stack: Item[] = [];
+    for (const it of listed) {
+      const d = it.depth ?? 0;
+      while (stack.length && (stack[stack.length - 1].depth ?? 0) >= d) stack.pop();
+      m.set(it.id, stack.map((s) => s.id));
+      stack.push(it);
+    }
+    return m;
+  });
+  const hasChildren = (i: number) => (listed[i + 1]?.depth ?? -1) > (listed[i]?.depth ?? 0);
+
   const shown = $derived.by<Item[]>(() => {
     const q = filter.trim().toLowerCase();
+    if (isTree) {
+      if (!q) return listed.filter((i) => !(ancestors.get(i.id) ?? []).some((a) => collapsed.has(a)));
+      // A match keeps its ancestors, so it is still shown where it lives.
+      const keep = new Set<string>();
+      for (const i of listed) {
+        if (i.label.toLowerCase().includes(q)) { keep.add(i.id); for (const a of ancestors.get(i.id) ?? []) keep.add(a); }
+      }
+      return listed.filter((i) => keep.has(i.id));
+    }
     if (!q) return listed;
     // Namespace is matched too, so typing "a3t" narrows to that group.
     return listed.filter((i) =>
@@ -77,7 +104,9 @@
     const v = s.toLowerCase();
     if (['completed', 'active', 'running', 'enabled', 'healthy', 'synced'].includes(v)) return v === 'running' ? 'run' : 'ok';
     if (['failed', 'error', 'cancelled', 'degraded'].includes(v)) return 'bad';
-    if (['draft', 'paused', 'disabled', 'queued', 'pending'].includes(v)) return 'idle';
+    if (['draft', 'disabled', 'queued', 'pending', 'hibernated'].includes(v)) return 'idle';
+    // Paused is deliberate but not serving — it must stand out from "asleep".
+    if (v === 'paused') return 'bad';
     return null;
   }
 
@@ -154,7 +183,18 @@
 </script>
 
 {#snippet row(item: Item)}
-  <div class="ctx-row" class:active={item.id === activeId} class:pending={item.pending}>
+  {@const idx = listed.indexOf(item)}
+  <div class="ctx-row" class:active={item.id === activeId} class:pending={item.pending}
+       style={item.depth != null ? `padding-left:${item.depth * 14}px` : ''}>
+    {#if isTree}
+      {#if hasChildren(idx)}
+        <button class="ctx-twist" onclick={() => toggleGroup(item.id)} aria-expanded={isOpen(item.id)} aria-label="Expand">
+          <svg class="ctx-chev" class:open={isOpen(item.id)} width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 3l5 5-5 5" /></svg>
+        </button>
+      {:else}
+        <span class="ctx-twist"></span>
+      {/if}
+    {/if}
     <button class="ctx-pick" onclick={() => select(item)} title={item.namespace ? `${item.namespace}/${item.label}` : item.label}>
       {#if item.badge}
         <span class="ctx-badge" style={item.badgeStyle}>{item.badge}</span>
@@ -233,6 +273,8 @@
       <div class="ctx-note err">{error}</div>
     {:else if shown.length === 0}
       <div class="ctx-note">{filter ? 'Nothing matches.' : 'Nothing here yet.'}</div>
+    {:else if isTree}
+      {#each shown as item (item.id)}{@render row(item)}{/each}
     {:else if groups}
       {#each groups as g (g.ns)}
         <section class="ctx-group">
@@ -345,6 +387,10 @@
   .ctx-gitems { display: flex; flex-direction: column; gap: 1px; }
 
   /* ── Rows ── */
+  .ctx-twist {
+    flex: none; width: 16px; height: 22px; display: grid; place-items: center;
+    background: none; border: 0; padding: 0; color: var(--text-4); cursor: pointer;
+  }
   .ctx-row {
     position: relative;
     display: flex; align-items: center;

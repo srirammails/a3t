@@ -5,7 +5,7 @@
 // a second copy would drift — which is the failure mode that already produced two
 // disagreeing resource-category counts.
 
-import { mcpCall, fetchChatSessions } from '$lib/services/api';
+import { mcpCall, fetchChatSessions, opsApi } from '$lib/services/api';
 import { RESOURCE_CATEGORIES, categorize } from '$lib/core/resources/categories';
 
 export type AppItem = {
@@ -27,6 +27,10 @@ export type AppItem = {
   namespace?: string;
   /// Short state shown as a coloured dot (execution status, agent status).
   status?: string;
+  /// Tree position for hierarchical lists (host → runtime → deployment). Items
+  /// arrive in depth-first order; a row's children are the following rows with a
+  /// greater depth. Absent for flat lists.
+  depth?: number;
 };
 
 /// The page merges these namespaces, so anything counting or listing across the
@@ -186,6 +190,9 @@ export async function loadAppItems(source: string): Promise<AppItem[]> {
         .filter(Boolean).join(' · '),
     }));
   }
+  if (source === 'runtimes') {
+    return runtimeTree();
+  }
   if (source === 'triggers') {
     const res = await mcpCall('list_triggers', {});
     if (!res.ok) throw new Error(res.error ?? 'list_triggers failed');
@@ -205,4 +212,53 @@ export async function loadAppItems(source: string): Promise<AppItem[]> {
     }));
   }
   return [];
+}
+
+/// The Runtime console's drill-down: host → runtime → deployed agents and flows.
+///
+/// Ids are typed (`host:` / `rt:` / `dep:`) because the page shows a different
+/// view for each level. In CE every runtime lives in the one flowr pod, so there is
+/// a single host; with the EE controller each runtime gets its own pods, and the
+/// same tree will show them under their own hosts.
+const DEP_STATUS: Record<string, string> = {
+  serving: 'active', paused: 'paused', 'runtime-paused': 'paused', hibernated: 'hibernated', unplaced: 'degraded',
+};
+const BADGE = {
+  host: 'background:#e8eef6;color:#3a5a85',
+  runtime: 'background:var(--runtime-bg,#e6f4f1);color:var(--runtime,#0f766e)',
+  flow: 'background:var(--spec-bg,#ede7ff);color:var(--spec,#5530a8)',
+  agent: 'background:var(--ephemeral-bg,#fff4e5);color:var(--ephemeral,#b45309)',
+};
+async function runtimeTree(): Promise<AppItem[]> {
+  const res = await opsApi.overview();
+  if (!res.ok) throw new Error(res.error || 'Could not load runtimes');
+  const d = res.data;
+  const host = d.host?.host || 'flowr';
+  const out: AppItem[] = [{
+    id: `host:${host}`, label: host, badge: 'H', badgeStyle: BADGE.host, depth: 0,
+    sub: `shared host · ${(d.runtimes ?? []).length} runtimes`,
+  }];
+  const dep = (row: any, depth: number): AppItem => ({
+    id: `dep:${row.deployment.id}`,
+    label: row.deployment.target,
+    badge: row.deployment.kind === 'agent' ? 'A' : 'F',
+    badgeStyle: row.deployment.kind === 'agent' ? BADGE.agent : BADGE.flow,
+    sub: `${row.deployment.kind} · ${row.serving.replace('-', ' ')}`,
+    status: DEP_STATUS[row.serving],
+    depth,
+  });
+  for (const r of d.runtimes ?? []) {
+    const labels = Object.entries(r.runtime.labels ?? {}).map(([k, v]) => `${k}=${v}`).join(' ');
+    out.push({
+      id: `rt:${r.runtime.name}`, label: r.runtime.name, badge: 'R', badgeStyle: BADGE.runtime, depth: 1,
+      sub: [`${r.deployments.length} deployed`, labels].filter(Boolean).join(' · '),
+      status: r.state,
+    });
+    for (const row of r.deployments) out.push(dep(row, 2));
+  }
+  if ((d.unplaced ?? []).length) {
+    out.push({ id: 'rt:__unplaced', label: 'Unplaced', badge: '?', badgeStyle: BADGE.host, depth: 1, sub: 'runtime was removed', status: 'degraded' });
+    for (const row of d.unplaced) out.push(dep(row, 2));
+  }
+  return out;
 }
