@@ -1,5 +1,6 @@
 <script lang="ts">
   import NewButton from '$lib/components/shared/NewButton.svelte';
+  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   // EE Policies — a first-class surface for Cedar authorization policies:
   // list / author / hot-reload (no restart) / dry-run test before you commit.
   // Backed by flowr-server /security/policies* + the SoD-gated registry CRUD.
@@ -156,15 +157,15 @@
 </script>
 
 <div class="policies">
-  <header class="head">
-    <div>
-      <h1>Policies</h1>
-      <p class="sub">Cedar authorization policies. Edit, then <strong>Reload</strong> to apply live — no restart.</p>
-    </div>
-    <div class="head-actions">
-      {#if reloadMsg}<span class="reload-msg">{reloadMsg}</span>{/if}
-      <button class="btn" onclick={reload} disabled={reloading}>{reloading ? 'Reloading…' : '↻ Reload'}</button>
-      <NewButton label="New policy" accent="spec" onclick={openCreate} />
+  <header class="screen-header">
+    <div class="breadcrumb">Security <span class="sep">/</span> Policies</div>
+    <div class="screen-title-row">
+      <div class="title-block"><SubmenuToggle appType="security" /><h1 class="screen-title">Policies</h1></div>
+      <div class="screen-actions">
+        {#if reloadMsg}<span class="reload-msg">{reloadMsg}</span>{/if}
+        <button class="btn" onclick={reload} disabled={reloading} title="Cedar authorization policies: edit, then Reload to apply live — no restart.">{reloading ? 'Reloading…' : '↻ Reload'}</button>
+        <NewButton label="New policy" accent="spec" onclick={openCreate} />
+      </div>
     </div>
   </header>
 
@@ -317,14 +318,16 @@
 
 <style>
   .policies { display: flex; flex-direction: column; height: 100%; overflow: hidden; color: var(--text-1); }
-  .head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 24px 16px; border-bottom: 1px solid var(--border); }
-  .head h1 { font-family: var(--font-serif, serif); font-size: 24px; font-weight: 500; color: var(--text-1); }
+  /* Page header — the same shape as every other section. */
+  .screen-header { padding: 18px 32px 12px; border-bottom: 1px solid var(--border); background: var(--bg-page); flex: none; }
+  .breadcrumb { font-size: 12px; color: var(--text-3); margin-bottom: 8px; font-family: var(--font-mono); }
+  .breadcrumb .sep { color: var(--text-5); margin: 0 2px; }
+  .screen-title-row { display: flex; align-items: center; gap: 18px; }
+  .title-block { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .screen-title { font-family: var(--font-serif); font-size: 24px; font-weight: 500; letter-spacing: -0.02em; margin: 0; }
+  .screen-actions { display: flex; align-items: center; gap: 8px; }
   .sub { font-size: 13px; color: var(--text-3); margin-top: 4px; }
-  .head-actions { display: flex; align-items: center; gap: 10px; }
   .reload-msg { font-size: 12px; color: var(--text-3); }
-  .btn { padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-surface); color: var(--text-2); font-size: 13px; cursor: pointer; }
-  .btn:hover { background: var(--bg-subtle); }
-  .btn.spec { background: var(--spec-bg, #2b2f45); color: var(--spec-ink, #cdd3ff); border-color: transparent; }
   .btn.danger { color: var(--warn, #d66); border-color: var(--warn, #d66); }
   .btn:disabled { opacity: 0.5; cursor: default; }
   /* Create popin content (inside the shared SlidePanel) */

@@ -190,6 +190,14 @@ export async function loadAppItems(source: string): Promise<AppItem[]> {
         .filter(Boolean).join(' · '),
     }));
   }
+  if (source === 'security-sections') {
+    // Fixed sections, like Resources' categories.
+    const badge = 'background:var(--spec-bg,#ede7ff);color:var(--spec,#5530a8)';
+    return [
+      { id: 'identity', label: 'Identity', sub: 'SSO connection & users', badge: 'I', badgeStyle: badge },
+      { id: 'policies', label: 'Policies', sub: 'Cedar authorization', badge: 'P', badgeStyle: badge },
+    ];
+  }
   if (source === 'canvases') {
     const res = await canvasApi.list();
     if (!res.ok) throw new Error(res.error || 'Could not load canvases');

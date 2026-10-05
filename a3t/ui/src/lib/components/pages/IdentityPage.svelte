@@ -1,5 +1,7 @@
 <script lang="ts">
   import NewButton from '$lib/components/shared/NewButton.svelte';
+  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
+  import PageBanner from '$lib/components/shared/PageBanner.svelte';
   // EE Identity — connect to the SSO IdP (Keycloak) and provision users from
   // A3T. Backed by flowr-server /security/idp/* (Keycloak Admin API). Roles map
   // to A3T canonical roles at login via realm_access.roles → roles::canonicalize.
@@ -114,18 +116,27 @@
 </script>
 
 <div class="identity">
-  <header class="head">
-    <div>
-      <h1>Identity</h1>
-      <p class="sub">Connect to your SSO provider and provision users. Realm roles map to A3T roles at login.</p>
-    </div>
-    <div class="head-actions">
-      <button class="btn" onclick={refresh} disabled={loading}>↻ Refresh</button>
-      {#if edition === 'ee' && status?.connected}
-        <NewButton label="New user" accent="spec" onclick={openCreate} />
-      {/if}
+  <header class="screen-header">
+    <div class="breadcrumb">Security <span class="sep">/</span> Identity</div>
+    <div class="screen-title-row">
+      <div class="title-block"><SubmenuToggle appType="security" /><h1 class="screen-title">Identity</h1></div>
+      <div class="screen-actions">
+        <button class="btn" onclick={refresh} disabled={loading}>↻ Refresh</button>
+        {#if edition === 'ee' && status?.connected}
+          <NewButton label="New user" accent="spec" onclick={openCreate} />
+        {/if}
+      </div>
     </div>
   </header>
+  <div class="banner-wrap">
+    <PageBanner
+      headline="Decide who gets in."
+      highlightWord="who"
+      subtitle="Connect your SSO provider and provision users."
+      description="Realm roles map to A3T roles at login, and those roles are what the Cedar policies decide on. Manage the rules themselves under Policies."
+      accent="spec"
+    />
+  </div>
 
   {#if loading}
     <div class="state">Loading…</div>
@@ -227,22 +238,25 @@
 </DesignerPanel>
 
 <style>
-  .head-actions { display: flex; align-items: center; gap: 10px; }
+  /* Page header — the same shape as every other section. */
+  .screen-header { padding: 18px 32px 12px; border-bottom: 1px solid var(--border); background: var(--bg-page); flex: none; }
+  .breadcrumb { font-size: 12px; color: var(--text-3); margin-bottom: 8px; font-family: var(--font-mono); }
+  .breadcrumb .sep { color: var(--text-5); margin: 0 2px; }
+  .screen-title-row { display: flex; align-items: center; gap: 18px; }
+  .title-block { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .screen-title { font-family: var(--font-serif); font-size: 24px; font-weight: 500; letter-spacing: -0.02em; margin: 0; }
+  .screen-actions { display: flex; align-items: center; gap: 8px; }
+  .banner-wrap { padding: 20px 32px 0; flex: none; }
   .act-col { text-align: right; white-space: nowrap; }
   .row-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-surface); color: var(--text-2); font-size: 12px; cursor: pointer; margin-left: 6px; }
   .row-btn:hover { background: var(--bg-subtle); }
   .row-btn.danger { color: var(--warn, #d66); border-color: var(--warn, #d66); }
   .identity { display: flex; flex-direction: column; height: 100%; overflow: hidden; color: var(--text-1); }
-  .head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 24px 16px; border-bottom: 1px solid var(--border); }
-  .head h1 { font-family: var(--font-serif, serif); font-size: 24px; font-weight: 500; }
   .sub { font-size: 13px; color: var(--text-3); margin-top: 4px; }
-  .btn { padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-surface); color: var(--text-2); font-size: 13px; cursor: pointer; }
-  .btn:hover { background: var(--bg-subtle); }
-  .btn.spec { background: var(--spec-bg, #2b2f45); color: var(--spec-ink, #cdd3ff); border-color: transparent; }
   .btn:disabled { opacity: 0.5; cursor: default; }
   .state { padding: 40px; text-align: center; color: var(--text-4); }
   .state.err { color: var(--warn, #d66); }
-  .body { overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 18px; max-width: 780px; }
+  .body { overflow-y: auto; padding: 20px 32px; display: flex; flex-direction: column; gap: 18px; max-width: 780px; }
   .card { border: 1px solid var(--border); border-radius: 8px; padding: 18px; background: var(--bg-surface); }
   .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
   .count { font-size: 12px; color: var(--text-4); font-weight: 400; }
