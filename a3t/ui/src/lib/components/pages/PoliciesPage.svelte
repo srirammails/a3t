@@ -1,4 +1,5 @@
 <script lang="ts">
+  import NewButton from '$lib/components/shared/NewButton.svelte';
   // EE Policies — a first-class surface for Cedar authorization policies:
   // list / author / hot-reload (no restart) / dry-run test before you commit.
   // Backed by flowr-server /security/policies* + the SoD-gated registry CRUD.
@@ -163,7 +164,7 @@
     <div class="head-actions">
       {#if reloadMsg}<span class="reload-msg">{reloadMsg}</span>{/if}
       <button class="btn" onclick={reload} disabled={reloading}>{reloading ? 'Reloading…' : '↻ Reload'}</button>
-      <button class="btn spec" onclick={openCreate}>+ New Policy</button>
+      <NewButton label="New policy" accent="spec" onclick={openCreate} />
     </div>
   </header>
 

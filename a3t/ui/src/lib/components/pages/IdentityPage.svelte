@@ -1,4 +1,5 @@
 <script lang="ts">
+  import NewButton from '$lib/components/shared/NewButton.svelte';
   // EE Identity — connect to the SSO IdP (Keycloak) and provision users from
   // A3T. Backed by flowr-server /security/idp/* (Keycloak Admin API). Roles map
   // to A3T canonical roles at login via realm_access.roles → roles::canonicalize.
@@ -121,7 +122,7 @@
     <div class="head-actions">
       <button class="btn" onclick={refresh} disabled={loading}>↻ Refresh</button>
       {#if edition === 'ee' && status?.connected}
-        <button class="btn spec" onclick={openCreate}>+ New user</button>
+        <NewButton label="New user" accent="spec" onclick={openCreate} />
       {/if}
     </div>
   </header>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import NewButton from '$lib/components/shared/NewButton.svelte';
   import { API_BASE } from '$lib/config';
   import { mcpCall } from '$lib/services/api';
   import { SvelteFlow, Background, Controls, type Node, type Edge, type Connection, Position } from '@xyflow/svelte';
@@ -311,6 +312,14 @@
 
 {#if view === 'list'}
 <!-- ═══════════ LIST VIEW ═══════════ -->
+<!-- Page Header — same shape as Templates / Agents -->
+<div class="screen-header">
+  <div class="breadcrumb">Triggers <span class="sep">/</span> All</div>
+  <div class="screen-title-row">
+    <div class="title-block"><h1 class="screen-title">Triggers</h1></div>
+    <div class="screen-actions"><NewButton label="New trigger" accent="runtime" onclick={openCreate} /></div>
+  </div>
+</div>
 <div class="trg-page">
   <PageBanner headline="Route inputs to flows." highlightWord="inputs"
     subtitle="HTTP endpoints, cron schedules, and event listeners that trigger workflows and agents."
@@ -324,11 +333,6 @@
   <div class="trg-toolbar">
     <h3 class="trg-title">Triggers</h3>
     <span class="trg-count">{triggers.length}</span>
-    <span style="flex:1"></span>
-    <button class="trg-create-btn" onclick={openCreate}>
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v10M3 8h10"/></svg>
-      New Trigger
-    </button>
   </div>
 
   {#if loading}
@@ -552,14 +556,21 @@
   </div>
 </SlidePanel>
 
-{#if deleteTarget}
-  <DeleteConfirm name={deleteTarget.name} type="trigger"
-    onconfirm={() => deleteTrigger(deleteTarget!)} oncancel={() => deleteTarget = null} />
-{/if}
+<!-- Was passed `name`/`type` and no `open`, so the dialog never appeared and a
+     trigger could not be deleted from here. -->
+<DeleteConfirm open={!!deleteTarget} entityType="Trigger" entityName={deleteTarget?.name ?? ''}
+  onconfirm={() => deleteTrigger(deleteTarget!)} oncancel={() => deleteTarget = null} />
 
 <style>
   /* ═══ LIST VIEW ═══ */
-  .trg-page { height: 100%; overflow-y: auto; padding: 20px 24px; }
+  .screen-header { padding: 18px 32px 12px; border-bottom: 1px solid var(--border); background: var(--bg-page); }
+  .breadcrumb { font-size: 12px; color: var(--text-3); margin-bottom: 8px; font-family: var(--font-mono); }
+  .breadcrumb .sep { color: var(--text-5); }
+  .screen-title-row { display: flex; align-items: center; gap: 18px; }
+  .title-block { flex: 1; display: flex; align-items: center; gap: 10px; }
+  .screen-title { font-family: var(--font-serif); font-size: 24px; font-weight: 500; letter-spacing: -0.02em; }
+  .screen-actions { display: flex; gap: 8px; }
+  .trg-page { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 32px 40px; }
   .trg-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
   .trg-title { font-family: var(--font-serif); font-size: 18px; font-weight: 500; color: var(--text-1); }
   .trg-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); background: var(--bg-subtle); padding: 1px 6px; border-radius: 3px; }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import NewButton from '$lib/components/shared/NewButton.svelte';
   import { messages } from '$lib/core/status/messages';
   import {
     RESOURCE_CATEGORIES as CATEGORIES, CAT_COLORS, categorize, catMeta,
@@ -994,7 +995,7 @@ do:
       </button>
     </div>
     <div class="screen-actions">
-      {#if $canCreate}<button class="btn spec" onclick={() => openCreate(activeCategory === 'all' ? 'database' : activeCategory)}>+ New resource</button>{/if}
+      {#if $canCreate}<NewButton label="New resource" accent="ephemeral" onclick={() => openCreate(activeCategory === 'all' ? 'database' : activeCategory)} />{/if}
     </div>
   </div>
 </div>

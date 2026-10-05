@@ -1,4 +1,5 @@
 <script lang="ts">
+  import NewButton from '$lib/components/shared/NewButton.svelte';
   import { execFlow, mcpCall, canvasApi } from '$lib/services/api';
   import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { can } from '$lib/stores/auth';
@@ -700,7 +701,7 @@
       <h1 class="screen-title">Agents</h1>
     </div>
     <div class="screen-actions">
-      {#if $canCreate}<button class="btn runtime" onclick={newAgentPanel}>+ New agent</button>{/if}
+      {#if $canCreate}<NewButton label="New agent" accent="runtime" onclick={newAgentPanel} />{/if}
     </div>
   </div>
 </div>

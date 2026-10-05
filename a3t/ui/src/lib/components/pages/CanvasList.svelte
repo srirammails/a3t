@@ -1,4 +1,5 @@
 <script lang="ts">
+  import NewButton from '$lib/components/shared/NewButton.svelte';
   // Canvas = per-flow deployment config (Option 1). Agents-style list of
   // canvases (My / Shared / Community); New/Edit opens the drag-drop designer.
   // Runtime pools (placement targets) are managed via the Runtimes popin.
@@ -138,7 +139,7 @@
     <div class="title-block"><h1 class="screen-title">Canvas</h1></div>
     <div class="screen-actions">
       <button class="btn" onclick={openRuntimes}>Runtimes <span class="rt-count">{runtimes.length}</span></button>
-      <button class="btn runtime" onclick={newCanvas}>+ New canvas</button>
+      <NewButton label="New canvas" accent="control" onclick={newCanvas} />
     </div>
   </div>
 </div>

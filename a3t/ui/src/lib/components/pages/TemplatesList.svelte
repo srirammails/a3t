@@ -1,4 +1,5 @@
 <script lang="ts">
+  import NewButton from '$lib/components/shared/NewButton.svelte';
   import { execFlow, mcpCall } from '$lib/services/api';
   import DocsPanel from '$lib/shell/DocsPanel.svelte';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
@@ -395,7 +396,7 @@ do:
         </button>
       </div>
       <div class="screen-actions">
-        {#if $canCreate}<button class="btn spec" onclick={newTemplate}>+ New template</button>{/if}
+        {#if $canCreate}<NewButton label="New template" accent="spec" onclick={newTemplate} />{/if}
       </div>
     </div>
   </div>

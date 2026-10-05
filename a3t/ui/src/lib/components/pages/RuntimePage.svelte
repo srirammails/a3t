@@ -8,7 +8,8 @@
   /// (hibernate / pause / resume) is an admin action because a runtime hosts other
   /// teams' work too.
   import { onMount, onDestroy } from 'svelte';
-  import { opsApi, executions } from '$lib/services/api';
+  import { opsApi, executions, canvasApi } from '$lib/services/api';
+  import NewButton from '$lib/components/shared/NewButton.svelte';
   import { hasRole } from '$lib/stores/auth';
   import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { bumpContext } from '$lib/stores/apps.svelte.ts';
@@ -91,6 +92,29 @@
     await load();
   }
 
+  // New runtime dialog
+  let newRt = $state<{ name: string; namespace: string; labels: string } | null>(null);
+  let newRtErr = $state('');
+  async function createRuntime() {
+    if (!newRt) return;
+    const name = newRt.name.trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) { newRtErr = "Name: letters, digits, '-' or '_'"; return; }
+    const labels: Record<string, string> = {};
+    for (const part of newRt.labels.split(',').map((x) => x.trim()).filter(Boolean)) {
+      const [k, v] = part.split('=').map((x) => x?.trim());
+      if (!k || !v) { newRtErr = `Label "${part}" must be key=value`; return; }
+      labels[k] = v;
+    }
+    busy = 'rt:create';
+    const res = await canvasApi.createRuntime(newRt.namespace.trim() || 'default', name, { labels });
+    busy = '';
+    if (!res.ok) { newRtErr = res.error || 'Could not create the runtime'; return; }
+    newRt = null;
+    flash('ok', `Runtime ${name} created`);
+    bumpContext();
+    await load();
+  }
+
   // Pause dialog
   let pausing = $state<Row | null>(null);
   let pauseReason = $state('');
@@ -130,7 +154,7 @@
   let timer: ReturnType<typeof setInterval> | undefined;
   onMount(() => {
     load();
-    timer = setInterval(() => { if (!document.hidden && !busy && !pausing && !terminating) load(); }, 5000);
+    timer = setInterval(() => { if (!document.hidden && !busy && !pausing && !terminating && !newRt) load(); }, 5000);
   });
   onDestroy(() => clearInterval(timer));
 
@@ -242,7 +266,9 @@
       </h1>
     </div>
     <div class="screen-actions">
-      {#if view === 'runtime' && currentRt && selKey !== '__unplaced'}
+      {#if view === 'host' && isAdmin}
+        <NewButton label="New runtime" accent="runtime" onclick={() => { newRt = { name: '', namespace: 'default', labels: '' }; newRtErr = ''; }} />
+      {:else if view === 'runtime' && currentRt && selKey !== '__unplaced'}
         {@render runtimeActions(currentRt)}
       {:else if view === 'deployment' && currentRow}
         {@render depActions(currentRow, true)}
@@ -569,6 +595,23 @@
   </div>
 {/if}
 
+<!-- New runtime -->
+{#if newRt}
+  <div class="modal-bg" role="presentation" onclick={() => (newRt = null)}></div>
+  <div class="modal" role="dialog" aria-label="New runtime">
+    <h3>New runtime</h3>
+    <p>A pool canvases place work into. Its labels are what placement selects on.</p>
+    <label>Name <input bind:value={newRt.name} placeholder="rt-staging" /></label>
+    <label>Namespace <input bind:value={newRt.namespace} placeholder="default" /></label>
+    <label>Labels <input bind:value={newRt.labels} placeholder="tier=test, class=cpu" onkeydown={(e) => e.key === 'Enter' && createRuntime()} /></label>
+    {#if newRtErr}<p class="err">{newRtErr}</p>{/if}
+    <div class="modal-acts">
+      <button class="btn" onclick={() => (newRt = null)}>Cancel</button>
+      <button class="btn runtime" disabled={!!busy || !newRt.name.trim()} onclick={createRuntime}>Create runtime</button>
+    </div>
+  </div>
+{/if}
+
 <!-- Pause dialog: says exactly what callers will get -->
 {#if pausing}
   <div class="modal-bg" role="presentation" onclick={() => (pausing = null)}></div>
@@ -703,6 +746,7 @@
   .modal h3 { margin: 0 0 8px; font-size: 16px; }
   .modal p { font-size: 13px; color: var(--text-2); margin: 0 0 10px; }
   .modal .callers { padding: 8px 10px; background: var(--bg-subtle); border-radius: var(--r-sm); }
+  .modal label + label { margin-top: 10px; }
   .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-2); text-transform: none; letter-spacing: normal; font-weight: 400; }
   .modal input { padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 13px; }
   .modal.wide { width: min(640px, calc(100vw - 32px)); top: 12vh; }

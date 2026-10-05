@@ -1,4 +1,5 @@
 <script lang="ts">
+  import NewButton from '$lib/components/shared/NewButton.svelte';
   import * as YAML from 'yaml';
   import { flows as flowsMcp } from '$lib/services/api';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
@@ -128,9 +129,9 @@ steps:
          is a label rather than a menu button. -->
     <span class="file-menu-btn as-label">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 2h6l4 4v8a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M9 2v4h4"/></svg>
-      <span class="file-menu-label">{selectedFlowKey || 'New flow'}</span>
+      <span class="file-menu-label">{selectedFlowKey || 'Untitled flow'}</span>
     </span>
-    <button class="btn ghost sm" onclick={newFlow} title="Start a new flow">New</button>
+    <NewButton label="New flow" accent="spec" size="sm" onclick={newFlow} title="Start a new flow" />
 
     <span style="flex: 1;"></span>
 
