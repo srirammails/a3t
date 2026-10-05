@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { execFlow, mcpCall, canvasApi } from '$lib/services/api';
   import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
@@ -698,6 +699,7 @@
   <div class="breadcrumb">Agents <span class="sep">/</span> All</div>
   <div class="screen-title-row">
     <div class="title-block">
+      <SubmenuToggle appType="agents" />
       <h1 class="screen-title">Agents</h1>
     </div>
     <div class="screen-actions">

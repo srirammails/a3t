@@ -5,7 +5,7 @@
 // a second copy would drift — which is the failure mode that already produced two
 // disagreeing resource-category counts.
 
-import { mcpCall, fetchChatSessions, opsApi } from '$lib/services/api';
+import { mcpCall, fetchChatSessions, opsApi, canvasApi } from '$lib/services/api';
 import { RESOURCE_CATEGORIES, categorize } from '$lib/core/resources/categories';
 
 export type AppItem = {
@@ -189,6 +189,18 @@ export async function loadAppItems(source: string): Promise<AppItem[]> {
       sub: [r.version ? `v${r.version}` : '', r.source === 'system' ? 'built-in' : r.source === 'my' ? 'yours' : r.source ?? '']
         .filter(Boolean).join(' · '),
     }));
+  }
+  if (source === 'canvases') {
+    const res = await canvasApi.list();
+    if (!res.ok) throw new Error(res.error || 'Could not load canvases');
+    return rows(res.data, 'resources').map((r: any) => {
+      const c = r.config ?? {};
+      return {
+        id: r.name, label: r.name, namespace: r.namespace || undefined,
+        sub: c.flowRef ? `deploys ${c.flowRef}` : (c.shared === false ? 'your copy · unbound' : 'preset'),
+        status: c.flowRef ? 'active' : undefined,
+      };
+    });
   }
   if (source === 'runtimes') {
     return runtimeTree();

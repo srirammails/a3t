@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { execFlow, mcpCall } from '$lib/services/api';
   import DocsPanel from '$lib/shell/DocsPanel.svelte';
@@ -390,6 +391,7 @@ do:
     <div class="breadcrumb">Templates <span class="sep">/</span> Browse library</div>
     <div class="screen-title-row">
       <div class="title-block">
+        <SubmenuToggle appType="templates" />
         <h1 class="screen-title">Templates</h1>
         <button class="help-btn" onclick={() => docsOpen = true} title="Learn more">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="7"/><path d="M6 6a2 2 0 114 0c0 1-1.5 1.5-2 2M8 11.5v.5"/></svg>

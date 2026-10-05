@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import * as YAML from 'yaml';
   import { flows as flowsMcp } from '$lib/services/api';
@@ -125,6 +126,7 @@ steps:
 <div class="flow-editor">
   <!-- Toolbar -->
   <div class="editor-toolbar">
+    <SubmenuToggle appType="flow-editor" />
     <!-- Which flow is open. Choosing one is the context pane's job now, so this
          is a label rather than a menu button. -->
     <span class="file-menu-btn as-label">

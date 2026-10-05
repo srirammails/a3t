@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   /// The Runtime console — where live systems are operated.
   ///
   /// Same shell as Agents and Templates: the side list is the drill-down
@@ -256,6 +257,7 @@
   </div>
   <div class="screen-title-row">
     <div class="title-block">
+      <SubmenuToggle appType="runtime" />
       <h1 class="screen-title">
         {#if view === 'host'}Hosts &amp; Runtimes
         {:else if view === 'runtime'}{currentRt?.runtime.name ?? selKey}

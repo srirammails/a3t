@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   // Canvas = per-flow deployment config (Option 1). Agents-style list of
   // canvases (My / Shared / Community); New/Edit opens the drag-drop designer.
@@ -78,8 +79,10 @@
     await load();
     // Deep-link from an agent's "Edit canvas" → open the designer on that canvas.
     const p = getActivePanel();
-    if (p?.props?.editCanvas) {
-      const c = canvases.find((x) => x.name === p.props.editCanvas);
+    // Also from the submenu, which addresses a canvas by `selectedId`.
+    const want = p?.props?.editCanvas ?? p?.props?.selectedId;
+    if (want) {
+      const c = canvases.find((x) => x.name === want);
       if (c) editCanvas(c);
     }
   });
@@ -136,7 +139,7 @@
 <div class="screen-header">
   <div class="breadcrumb">Canvas <span class="sep">/</span> All</div>
   <div class="screen-title-row">
-    <div class="title-block"><h1 class="screen-title">Canvas</h1></div>
+    <div class="title-block"><SubmenuToggle appType="canvas" /><h1 class="screen-title">Canvas</h1></div>
     <div class="screen-actions">
       <button class="btn" onclick={openRuntimes}>Runtimes <span class="rt-count">{runtimes.length}</span></button>
       <NewButton label="New canvas" accent="control" onclick={newCanvas} />

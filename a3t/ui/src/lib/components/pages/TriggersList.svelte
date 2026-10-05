@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { API_BASE } from '$lib/config';
   import { mcpCall } from '$lib/services/api';
@@ -316,7 +317,7 @@
 <div class="screen-header">
   <div class="breadcrumb">Triggers <span class="sep">/</span> All</div>
   <div class="screen-title-row">
-    <div class="title-block"><h1 class="screen-title">Triggers</h1></div>
+    <div class="title-block"><SubmenuToggle appType="triggers" /><h1 class="screen-title">Triggers</h1></div>
     <div class="screen-actions"><NewButton label="New trigger" accent="runtime" onclick={openCreate} /></div>
   </div>
 </div>

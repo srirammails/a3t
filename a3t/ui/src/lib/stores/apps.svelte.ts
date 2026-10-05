@@ -64,6 +64,7 @@ export const APP_CONTEXT: Record<string, { label: string; source: string; focuse
   triggers: { label: 'Triggers', source: 'triggers', focuses: false },
   executions: { label: 'Executions', source: 'executions', focuses: false },
   runtime: { label: 'Hosts & Runtimes', source: 'runtimes', focuses: true },
+  canvas: { label: 'Canvases', source: 'canvases', focuses: true },
 };
 
 export function hasContext(type: string | undefined | null): boolean {

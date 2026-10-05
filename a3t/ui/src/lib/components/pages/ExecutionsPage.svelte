@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   // Executions — the run history persisted in the storage backend. Lists recent
   // workflow instances (list_executions), with a detail drawer per run
   // (get_execution_status: input / output / error / timing).
@@ -108,9 +109,12 @@
 
 <div class="execs">
   <header class="head">
-    <div>
+    <div class="head-title">
+      <SubmenuToggle appType="executions" />
+      <div>
       <h1>Executions</h1>
       <p class="sub">Recent workflow runs from the storage backend. Click a run for its input, output, and errors.</p>
+      </div>
     </div>
     <div class="head-actions">
       <label class="auto"><input type="checkbox" checked={auto} onchange={toggleAuto} /> Auto-refresh</label>
@@ -186,6 +190,7 @@
 <style>
   .execs { display: flex; flex-direction: column; height: 100%; overflow: hidden; color: var(--text-1); }
   .head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 24px 14px; border-bottom: 1px solid var(--border); }
+  .head-title { display: flex; align-items: flex-start; gap: 10px; }
   .head h1 { font-family: var(--font-serif, serif); font-size: 24px; font-weight: 500; }
   .sub { font-size: 13px; color: var(--text-3); margin-top: 4px; }
   .head-actions { display: flex; align-items: center; gap: 12px; }

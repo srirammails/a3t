@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import { setActiveSelection, getActivePanel, navigateToDetail } from '$lib/stores/panels.svelte.ts';
   // Same layout as the original chat (conversation sidebar + main pane); the
   // message engine underneath is @ai-sdk/svelte's `Chat` talking to POST /chat,
@@ -761,6 +762,7 @@
   <!-- Chat body. The conversation list is the shell's context pane now, so this
        owns only the agent selection and the transcript. -->
   <div class="chat-main" class:landing={landing}>
+    <SubmenuToggle appType="chat" floating />
     {#if landing}
       <!-- Chat's title bar: the section pages lead with a PageBanner, this leads
            with its own line of text. No session yet — the composer sits in the
@@ -1058,6 +1060,7 @@
   /* Main chat */
 
   .chat-main {
+    position: relative;
     display: flex;
     flex-direction: column;
     background: var(--bg-page);
