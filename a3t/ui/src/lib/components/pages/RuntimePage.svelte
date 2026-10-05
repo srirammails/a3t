@@ -94,7 +94,7 @@
   }
 
   // New runtime dialog
-  let newRt = $state<{ name: string; namespace: string; labels: string } | null>(null);
+  let newRt = $state<{ name: string; namespace: string; labels: string; url: string; isDefault: boolean } | null>(null);
   let newRtErr = $state('');
   async function createRuntime() {
     if (!newRt) return;
@@ -107,7 +107,7 @@
       labels[k] = v;
     }
     busy = 'rt:create';
-    const res = await canvasApi.createRuntime(newRt.namespace.trim() || 'default', name, { labels });
+    const res = await canvasApi.createRuntime(newRt.namespace.trim() || 'default', name, { labels, url: newRt.url.trim() || undefined, default: newRt.isDefault });
     busy = '';
     if (!res.ok) { newRtErr = res.error || 'Could not create the runtime'; return; }
     newRt = null;
@@ -269,7 +269,7 @@
     </div>
     <div class="screen-actions">
       {#if view === 'host' && isAdmin}
-        <NewButton label="New runtime" accent="runtime" onclick={() => { newRt = { name: '', namespace: 'default', labels: '' }; newRtErr = ''; }} />
+        <NewButton label="New runtime" accent="runtime" onclick={() => { newRt = { name: '', namespace: 'default', labels: '', url: '', isDefault: false }; newRtErr = ''; }} />
       {:else if view === 'runtime' && currentRt && selKey !== '__unplaced'}
         {@render runtimeActions(currentRt)}
       {:else if view === 'deployment' && currentRow}
@@ -606,6 +606,8 @@
     <label>Name <input bind:value={newRt.name} placeholder="rt-staging" /></label>
     <label>Namespace <input bind:value={newRt.namespace} placeholder="default" /></label>
     <label>Labels <input bind:value={newRt.labels} placeholder="tier=test, class=cpu" onkeydown={(e) => e.key === 'Enter' && createRuntime()} /></label>
+    <label><span>URL <span class="muted">(optional)</span></span> <input bind:value={newRt.url} placeholder="http://runtime-gpu.a3t.svc:3002" /></label>
+    <label class="chk"><input type="checkbox" bind:checked={newRt.isDefault} /> Default pool <span class="muted">— used when a canvas selects no labels</span></label>
     {#if newRtErr}<p class="err">{newRtErr}</p>{/if}
     <div class="modal-acts">
       <button class="btn" onclick={() => (newRt = null)}>Cancel</button>
@@ -749,6 +751,8 @@
   .modal p { font-size: 13px; color: var(--text-2); margin: 0 0 10px; }
   .modal .callers { padding: 8px 10px; background: var(--bg-subtle); border-radius: var(--r-sm); }
   .modal label + label { margin-top: 10px; }
+  .modal label.chk { flex-direction: row; align-items: center; gap: 8px; }
+  .modal label.chk input { width: auto; }
   .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-2); text-transform: none; letter-spacing: normal; font-weight: 400; }
   .modal input { padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 13px; }
   .modal.wide { width: min(640px, calc(100vw - 32px)); top: 12vh; }

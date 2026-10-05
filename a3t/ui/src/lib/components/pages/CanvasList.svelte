@@ -5,7 +5,6 @@
   // canvases (My / Shared / Community); New/Edit opens the drag-drop designer.
   // Runtime pools (placement targets) are managed via the Runtimes popin.
   import { canvasApi, opsApi } from '$lib/services/api';
-  import DesignerPanel from '$lib/components/shared/DesignerPanel.svelte';
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
   import AppHome from '$lib/shell/AppHome.svelte';
   import EntityCard from '$lib/components/shared/EntityCard.svelte';
@@ -26,16 +25,6 @@
   let designerOpen = $state(false);
   let editing = $state<any>(null);
 
-  // Runtimes popin (DesignerPanel).
-  const RT_NODES = [
-    { id: 'details', label: 'Details', icon: '<rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 9h4"/>' },
-    { id: 'labels', label: 'Labels & Placement', icon: '<path d="M8 1v4M8 11v4M1 8h4M11 8h4"/><circle cx="8" cy="8" r="3"/>' },
-    { id: 'review', label: 'Review & Create', icon: '<path d="M4 8l3 3 5-6"/><circle cx="8" cy="8" r="7"/>' },
-  ];
-  let showRuntimes = $state(false);
-  let rtTab = $state('details');
-  let rtForm = $state({ name: '', namespace: 'default', labelsText: '', url: '', default: false });
-  let rtBusy = $state('');
 
   async function load() {
     loading = true; error = '';
@@ -123,17 +112,6 @@
     }
   }
 
-  function openRuntimes() { rtForm = { name: '', namespace: 'default', labelsText: '', url: '', default: false }; rtBusy = ''; rtTab = 'details'; showRuntimes = true; }
-  async function createRuntime() {
-    if (!rtForm.name.trim()) { rtBusy = 'Name required'; return; }
-    const labels: Record<string, string> = {};
-    for (const p of rtForm.labelsText.split(',').map((s) => s.trim()).filter(Boolean)) {
-      const [k, v] = p.split('=').map((s) => s.trim()); if (k && v) labels[k] = v;
-    }
-    rtBusy = 'saving';
-    const res = await canvasApi.createRuntime(rtForm.namespace, rtForm.name.trim(), { labels, namespace: rtForm.namespace, url: rtForm.url || undefined, default: rtForm.default });
-    if (res.ok) { showRuntimes = false; await load(); } else rtBusy = res.error || `Create failed (HTTP ${res.status})`;
-  }
 </script>
 
 <div class="screen-header">
@@ -141,7 +119,6 @@
   <div class="screen-title-row">
     <div class="title-block"><SubmenuToggle appType="canvas" /><h1 class="screen-title">Canvas</h1></div>
     <div class="screen-actions">
-      <button class="btn" onclick={openRuntimes}>Runtimes <span class="rt-count">{runtimes.length}</span></button>
       <NewButton label="New canvas" accent="control" onclick={newCanvas} />
     </div>
   </div>
@@ -216,36 +193,6 @@
 <!-- Drag-drop designer popin -->
 <CanvasDesigner open={designerOpen} canvas={editing} onclose={() => (designerOpen = false)} onsaved={load} />
 
-<!-- Runtime pool popin (canonical designer form) -->
-<DesignerPanel open={showRuntimes} onclose={() => (showRuntimes = false)} icon="R" name={rtForm.name || 'New Runtime'} meta="runtime pool" nodes={RT_NODES} activeNode={rtTab} onselect={(id) => (rtTab = id)}>
-  {#if rtTab === 'details'}
-    <div class="pf"><h3>Details</h3>
-      <div class="cf-grid">
-        <label class="cf-field"><span>Name</span><input bind:value={rtForm.name} placeholder="rt-gpu-prod" /></label>
-        <label class="cf-field"><span>Namespace</span><input bind:value={rtForm.namespace} /></label>
-      </div>
-      <label class="cf-field"><span>URL (optional)</span><input bind:value={rtForm.url} placeholder="http://runtime-gpu.a3t.svc:3002" /></label>
-      <label class="cf-field cf-check"><input type="checkbox" bind:checked={rtForm.default} /> <span>Default pool</span></label>
-    </div>
-  {:else if rtTab === 'labels'}
-    <div class="pf"><h3>Labels &amp; placement</h3>
-      <p class="pf-hint">A canvas's placement selector matches these labels.</p>
-      <label class="cf-field"><span>Labels (key=value, comma-separated)</span><input bind:value={rtForm.labelsText} placeholder="class=gpu, tier=prod" /></label>
-    </div>
-  {:else}
-    <div class="pf"><h3>Review &amp; create</h3>
-      <div class="pf-row"><span class="pf-k">Name</span><span class="pf-v">{rtForm.name || '—'}</span></div>
-      <div class="pf-row"><span class="pf-k">Namespace</span><span class="pf-v">{rtForm.namespace}</span></div>
-      <div class="pf-row"><span class="pf-k">Labels</span><span class="pf-v">{rtForm.labelsText || '(none)'}</span></div>
-      <div class="pf-row"><span class="pf-k">Default</span><span class="pf-v">{rtForm.default ? 'yes' : 'no'}</span></div>
-      <div class="create-actions">
-        <button class="btn" onclick={() => (showRuntimes = false)}>Cancel</button>
-        <button class="btn spec" onclick={createRuntime} disabled={rtBusy === 'saving' || !rtForm.name.trim()}>{rtBusy === 'saving' ? 'Saving…' : 'Create Runtime'}</button>
-        {#if rtBusy && rtBusy !== 'saving'}<span class="cf-msg err">{rtBusy}</span>{/if}
-      </div>
-    </div>
-  {/if}
-</DesignerPanel>
 
 <style>
   .screen-header { padding: 18px 32px 12px; border-bottom: 1px solid var(--border); background: var(--bg-page); }
@@ -258,7 +205,6 @@
   .btn { padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-surface); color: var(--text-2); font-size: 13px; cursor: pointer; }
   .btn:hover { background: var(--bg-subtle); }
   .btn.runtime { background: var(--runtime-bg, #eaf3ee); color: var(--runtime, #1a7158); border-color: transparent; }
-  .rt-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); }
   .screen-body { flex: 1; overflow-y: auto; padding: 20px 32px 40px; }
   .deploy-banner { margin-bottom: 14px; font-size: 13px; color: var(--text-2); background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; }
   .status-msg { padding: 20px; text-align: center; color: var(--text-4); font-size: 14px; }
