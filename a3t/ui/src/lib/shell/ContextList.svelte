@@ -151,6 +151,22 @@
     if (!isContextPinned()) closeContextPane();
   }
 
+  // An unpinned submenu is transient: a click anywhere on the page hides it.
+  // Pinning is how you keep it. The ≡ toggle is excluded so it can still toggle,
+  // and clicks inside the list (picking, filtering) leave it open.
+  let asideEl: HTMLElement | undefined = $state();
+  $effect(() => {
+    if (isContextPinned() || !isContextOpen()) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (!t || asideEl?.contains(t) || t.closest('.smt')) return;
+      closeContextPane();
+    };
+    // Next tick: the click that opened the pane must not also close it.
+    const id = setTimeout(() => window.addEventListener('pointerdown', onDown, true));
+    return () => { clearTimeout(id); window.removeEventListener('pointerdown', onDown, true); };
+  });
+
   function newChat() {
     trackOpen('chat', 'AI Chat');
     // A fresh client id; the transcript row appears once the first turn completes.
@@ -217,7 +233,7 @@
   </div>
 {/snippet}
 
-<aside class="ctx" class:floating={!isContextPinned() && isContextOpen()}>
+<aside class="ctx" bind:this={asideEl} class:floating={!isContextPinned() && isContextOpen()}>
   <div class="ctx-head">
     <span class="ctx-title">{contextLabel(appType)}</span>
     <div class="ctx-actions">
