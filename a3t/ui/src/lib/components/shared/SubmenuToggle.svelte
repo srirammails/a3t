@@ -1,28 +1,26 @@
 <script lang="ts">
   /// The ≡ in a page heading: opens the page's submenu (its context list).
   ///
-  /// Click reveals the list over the page; click again hides it. The pin in the
-  /// list's own header docks it so it stays — and while it is pinned, this
-  /// button unpins it. Renders nothing for pages that have no submenu.
-  import {
-    hasContext, contextLabel, isContextPinned, isContextOpen,
-    openContextPane, closeContextPane, toggleContextPinned,
-  } from '$lib/stores/apps.svelte.ts';
+  /// It only ever OPENS. If the submenu is already there — pinned, already open,
+  /// or docked beside an open item — clicking does nothing. A floating submenu
+  /// is hidden by clicking the page; a pinned one stays until it is unpinned
+  /// from its own header. Renders nothing for pages that have no submenu.
+  import { hasContext, contextLabel, contextVisible, openContextPane } from '$lib/stores/apps.svelte.ts';
+  import { getActivePanel } from '$lib/stores/panels.svelte.ts';
 
   let { appType, floating = false }: { appType: string; floating?: boolean } = $props();
 
-  const shown = $derived(isContextPinned() || isContextOpen());
+  const shown = $derived(contextVisible(appType, !!getActivePanel()?.props?.selectedId));
 
-  function toggle() {
-    if (isContextPinned()) { toggleContextPinned(); closeContextPane(); return; }
-    if (isContextOpen()) closeContextPane(); else openContextPane();
+  function open() {
+    if (!shown) openContextPane();
   }
 </script>
 
 {#if hasContext(appType)}
-  <button class="smt" class:on={shown} class:floating onclick={toggle}
-    title={shown ? `Hide ${contextLabel(appType).toLowerCase()}` : `Show ${contextLabel(appType).toLowerCase()}`}
-    aria-label="Toggle submenu" aria-expanded={shown}>
+  <button class="smt" class:on={shown} class:floating onclick={open}
+    title={shown ? `${contextLabel(appType)} is open` : `Show ${contextLabel(appType).toLowerCase()}`}
+    aria-label="Open submenu" aria-expanded={shown}>
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
       <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
     </svg>

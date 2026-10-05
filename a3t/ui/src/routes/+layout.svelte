@@ -8,7 +8,7 @@
   import StatusBar from '$lib/shell/StatusBar.svelte';
   import PanelStack from '$lib/shell/PanelStack.svelte';
   import ContextList from '$lib/shell/ContextList.svelte';
-  import {
+  import { isContextDismissed,
     isRailPinned, isContextPinned, isContextOpen, hasContext,
     getContextW, setContextW, trackOpen, setPins, markPinsLoaded, RAIL_W,
   } from '$lib/stores/apps.svelte.ts';
@@ -32,7 +32,8 @@
   const selectedId = $derived(getActivePanel()?.props?.selectedId ?? '');
   // Follows the selection: no item open → the app shows its home and the bar is
   // hidden. Pinning keeps it on the home page too.
-  const ctxDocked = $derived(hasContext(activeType) && (!!selectedId || isContextPinned()));
+  // Docked when pinned, or beside a selected item unless the user closed it (×).
+  const ctxDocked = $derived(hasContext(activeType) && (isContextPinned() || (!!selectedId && !isContextDismissed())));
   const ctxW = $derived(ctxDocked ? getContextW() : 0);
   /// Unpinned but revealed from the Active Apps menu: drawn over the main view so
   /// it does not resize the app behind it.

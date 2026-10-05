@@ -147,7 +147,15 @@ export function toggleContextPinned() {
   contextPinned = !contextPinned;
   save(LS_CTX, contextPinned);
   // Pinning absorbs any transient reveal, so the pane does not end up drawn twice.
-  if (contextPinned) contextOpen = false;
+  if (contextPinned) { contextOpen = false; contextDismissed = false; }
+}
+
+/// Closed with × (or by clicking the page). This overrides "show beside the
+/// selected item": without it, × on a page with an item open did nothing,
+/// because the selection alone kept the submenu docked. ≡ or pinning clears it.
+let contextDismissed = $state<boolean>(false);
+export function isContextDismissed(): boolean {
+  return contextDismissed;
 }
 
 export function isContextOpen(): boolean {
@@ -157,9 +165,17 @@ export function isContextOpen(): boolean {
 /// Reveal the context list without pinning it — the Active Apps "list pane" path.
 export function openContextPane() {
   contextOpen = true;
+  contextDismissed = false;
 }
 
 export function closeContextPane() {
+  contextOpen = false;
+  contextDismissed = true;
+}
+
+/// End the floating reveal WITHOUT dismissing — picking an item from the
+/// submenu: it then stays docked beside the selection, as before.
+export function settleContextPane() {
   contextOpen = false;
 }
 
@@ -172,7 +188,7 @@ export function closeContextPane() {
 /// The layout derives the docked/floating split itself (it also needs the width),
 /// so this is the single definition of the rule for anything else that asks.
 export function contextVisible(type: string | undefined | null, hasSelection: boolean): boolean {
-  return hasContext(type) && (hasSelection || contextPinned || contextOpen);
+  return hasContext(type) && (contextPinned || contextOpen || (hasSelection && !contextDismissed));
 }
 
 // ── Pins ──

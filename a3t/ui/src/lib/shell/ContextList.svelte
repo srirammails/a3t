@@ -6,7 +6,7 @@
   import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
   import {
     APP_CONTEXT, contextLabel, isContextPinned, toggleContextPinned,
-    isContextOpen, closeContextPane, trackOpen, contextRev_,
+    isContextOpen, closeContextPane, settleContextPane, trackOpen, contextRev_,
   } from '$lib/stores/apps.svelte.ts';
   import { deleteChatSession } from '$lib/services/api';
   import { loadAppItems, groupByNamespace, type AppItem } from './appItems';
@@ -148,7 +148,7 @@
     if (spec?.focuses) navigateToDetail(appType, title, item.id);
     else navigateTo(appType, title);
     // A transient pane has done its job once something is chosen.
-    if (!isContextPinned()) closeContextPane();
+    if (!isContextPinned()) settleContextPane();
   }
 
   // An unpinned submenu is transient: a click anywhere on the page hides it.
@@ -172,7 +172,7 @@
     // A fresh client id; the transcript row appears once the first turn completes.
     const id = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     navigateToDetail('chat', 'AI Chat', id);
-    if (!isContextPinned()) closeContextPane();
+    if (!isContextPinned()) settleContextPane();
   }
 
   /// A blank editor: navigating with no selection is what FlowEditor treats as a
@@ -180,7 +180,7 @@
   function newFlow() {
     trackOpen('flow-editor', 'Flow Editor');
     navigateTo('flow-editor', 'Flow Editor');
-    if (!isContextPinned()) closeContextPane();
+    if (!isContextPinned()) settleContextPane();
   }
 
   async function removeItem(e: MouseEvent, item: Item) {
