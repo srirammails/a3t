@@ -578,6 +578,20 @@ conversation, because the request the user would approve is never raised."
             }),
         },
         Tool {
+            name: "query_resource".to_string(),
+            description: "Run a query against a resource with its driver and return rows. Supports ADB (AQL), e.g. RECALL FROM WORKING WHERE name = \"alice\".".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "resource": { "type": "string", "description": "Resource name" },
+                    "namespace": { "type": "string", "default": "default" },
+                    "query": { "type": "string", "description": "Query in the resource's language (AQL for ADB)" },
+                    "variables": { "type": "object", "description": "Optional query variables" }
+                },
+                "required": ["resource", "query"]
+            }),
+        },
+        Tool {
             name: "get_resource".to_string(),
             description: "Get details of a specific resource configuration.".to_string(),
             input_schema: json!({
@@ -1026,6 +1040,8 @@ pub const AGENT_RUNTIME_TOOLS: &[&str] = &[
     "list_deployments", "probe_deployment", "pause_deployment", "resume_deployment",
     "restart_deployment", "undeploy", "terminate_deployment", "terminate_runtime",
     "set_runtime_state", "set_paused_response",
+    // DB console — resource drivers (ADB over HTTP) live in flowr-ce.
+    "query_resource",
 ];
 
 pub fn is_agent_runtime_tool(name: &str) -> bool {
@@ -1457,7 +1473,7 @@ async fn list_task_types(args: &Value) -> CallToolResult {
         ("call:sql", "integration", "SQL database query"),
         ("call:lancedb", "integration", "LanceDB vector database operations"),
         ("call:qdrant", "integration", "Vector database operations"),
-        ("call:clawdb", "integration", "Agent memory (AQL)"),
+        ("call:adb", "integration", "Agent memory on ADB (AQL)"),
         ("call:mcp", "integration", "Call MCP server tool"),
     ];
 
@@ -1578,47 +1594,33 @@ async fn get_task_type(args: &Value) -> CallToolResult {
                 ]
             }
         }),
-        "call:clawdb" => json!({
-            "name": "call:clawdb",
-            "description": "Execute AQL queries against ClawDB agent memory",
+        "call:adb" | "call:clawdb" => json!({
+            "name": "call:adb",
+            "description": "Execute AQL against ADB (Agent Database) agent memory. call:clawdb is an alias.",
             "resource_config": {
-                "protocol": "Connection protocol: 'ipc' (embedded, ~10-50μs) or 'http' (remote, ~100-500μs)",
-                "db_path": "Path to LanceDB database (required for IPC mode)",
-                "url": "ClawDB server URL (required for HTTP mode)",
+                "url": "ADB server URL, e.g. http://adb:3000 (required)",
                 "namespace": "Optional namespace for scoping data",
                 "scope": "Optional scope: 'private' or 'shared'"
             },
             "config": {
-                "query": "AQL query string (STORE, RECALL, FORGET)",
-                "variables": "Optional query variables object for parameterized queries"
+                "query": "AQL statement (STORE, RECALL, LOOKUP, FORGET, UPDATE, LINK, …)",
+                "variables": "Optional query variables object for parameterized queries",
+                "_resource": "ADB resource as namespace/name"
             },
             "memory_types": ["WORKING", "EPISODIC", "PROCEDURAL", "SEMANTIC", "TOOLS"],
             "examples": {
-                "ipc_mode": {
-                    "resource": {
-                        "name": "agent-memory",
-                        "type": "clawdb",
-                        "config": {
-                            "protocol": "ipc",
-                            "db_path": "./clawdb.lance"
-                        }
-                    },
-                    "step": {
-                        "name": "recall-history",
-                        "type": "call:clawdb",
-                        "resource": "agent-memory",
-                        "config": {
-                            "query": "RECALL FROM EPISODIC WHERE user = ${ .user } LIMIT 10"
-                        }
-                    }
+                "resource": {
+                    "name": "agent-memory",
+                    "type": "adb",
+                    "config": { "url": "http://adb:3000" }
                 },
-                "http_mode": {
-                    "resource": {
-                        "name": "remote-memory",
-                        "type": "clawdb",
-                        "config": {
-                            "protocol": "http",
-                            "url": "http://clawdb.example.com:3000"
+                "step": {
+                    "recall-history": {
+                        "call": "adb",
+                        "with": {
+                            "_resource": "a3t/agent-memory",
+                            "query": "RECALL FROM EPISODIC WHERE user = {user} LIMIT 10",
+                            "variables": { "user": "${ .user }" }
                         }
                     }
                 }
@@ -2451,6 +2453,7 @@ async fn list_resource_types(storage: &dyn StorageBackend, args: &Value) -> Call
                     ("mysql", "database", "MySQL database"),
                     ("redis", "key_value", "Redis key-value store"),
                     ("qdrant", "vector", "Qdrant vector database"),
+                    ("adb", "memory", "ADB agent memory (AQL)"),
                     ("mcp", "mcp", "MCP server connection"),
                     ("http", "api", "HTTP/REST API endpoint"),
                 ];

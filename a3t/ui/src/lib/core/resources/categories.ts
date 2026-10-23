@@ -6,7 +6,8 @@
 
 export const TYPE_CATEGORY: Record<string, string> = {
     postgres: 'database', mysql: 'database', lancedb: 'database',
-    redis: 'database', qdrant: 'database', clawdb: 'database',
+    redis: 'database', qdrant: 'database', adb: 'database',
+    clawdb: 'database', // legacy: resources created before the adb type
     mcp: 'mcp',
     llm: 'llm', openai: 'llm', anthropic: 'llm', ollama: 'llm', groq: 'llm',
     http: 'other',

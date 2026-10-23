@@ -142,7 +142,7 @@ fn get_builtin_manifests() -> Vec<Value> {
                                 "description": "MCP server resource names for tool dispatch",
                                 "items": { "type": "string" }
                             },
-                            "memory_resource": { "type": "string", "description": "ClawDB resource name for agent memory" },
+                            "memory_resource": { "type": "string", "description": "ADB resource name for agent memory" },
                             "memory_namespace": { "type": "string", "description": "Memory namespace for isolation", "default": "default" },
                             "memory_config": {
                                 "type": "object",
@@ -252,14 +252,15 @@ fn get_builtin_manifests() -> Vec<Value> {
             }
         }),
         json!({
-            "name": "clawdb",
+            "name": "adb",
             "version": "1.0.0",
-            "description": "ClawDB AQL query — agent memory operations",
+            "description": "ADB AQL query — agent memory operations",
             "with_schema": {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "AQL query string" },
-                    "_resource": { "type": "string", "description": "ClawDB resource name" }
+                    "variables": { "type": "object", "description": "Optional query variables" },
+                    "_resource": { "type": "string", "description": "ADB resource name (namespace/name)" }
                 },
                 "required": ["query"]
             }
@@ -627,7 +628,7 @@ async fn get_template(
             if key.ends_with("_resource") || key == "_resource" ||
                desc_lower.contains("resource name") || desc_lower.contains("resource ref") {
                 let resource_type = if key.contains("llm") { "llm" }
-                    else if key.contains("memory") { "clawdb" }
+                    else if key.contains("memory") { "adb" }
                     else { "unknown" };
                 resource_slots[key] = json!({
                     "required": false,

@@ -13,6 +13,9 @@ do:
         when: ${ .input.test_type == "db" }
         then: test-db
     - case:
+        when: ${ .input.test_type == "adb" }
+        then: test-adb
+    - case:
         when: ${ .input.test_type == "mcp" }
         then: test-mcp
     - case:
@@ -43,6 +46,14 @@ do:
       table: ${ .input.table // "" }
       filter: ${ .input.filter // "" }
       limit: ${ .input.limit // 10 }
+      _resource: ${ .input.resource }
+    then: end
+
+# ── ADB test: run one AQL statement with the ADB driver ──
+- test-adb:
+    call: adb
+    with:
+      query: ${ .input.query // "RECALL FROM WORKING LIMIT 5" }
       _resource: ${ .input.resource }
     then: end
 

@@ -17,6 +17,7 @@
     'call:redis':    { icon: '⬤',  accent: '#dc2626' },
     'call:qdrant':   { icon: '△',  accent: '#7c3aed' },
     'call:lancedb':  { icon: '▽',  accent: '#0369a1' },
+    'call:adb':      { icon: '⊛',  accent: '#0369a1' },
     'call:clawdb':   { icon: '⊛',  accent: '#0369a1' },
     'call:human':    { icon: '☻',  accent: '#ca8a04' },
     'set':           { icon: '≔',  accent: '#64748b' },

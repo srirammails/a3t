@@ -2,7 +2,7 @@
 # ClawdFlow Test Runner
 # Runs all test workflows against the MCP server
 
-SERVER="http://37.27.195.4:3002"
+SERVER="${SERVER:-http://localhost:3002}"   # e.g. SERVER=https://console.dev.a3t.io
 TESTS_DIR="$(dirname "$0")/flows"
 RESULTS=()
 

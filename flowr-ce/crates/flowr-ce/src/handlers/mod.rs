@@ -3,11 +3,12 @@
 //! These handle task types that aren't in the CNCF spec but are
 //! supported by ClawdFlow as function-call extensions:
 //! - call:llm — LLM provider calls (OpenAI, Anthropic, Ollama)
-//! - call:clawdb — AQL agent memory
+//! - call:adb — AQL agent memory on ADB (`call:clawdb` is an alias)
 //! - call:mcp — MCP server tool calls
 //! - call:state:get/set/delete — state store operations
 //! - run:script — inline script execution (Lua, JS, Python)
 
+pub mod call_adb;
 pub mod call_agent;
 pub mod call_lancedb;
 pub mod call_llm;
@@ -32,6 +33,8 @@ pub fn register_clawdflow_handlers(executor: &mut WorkflowExecutor) {
     executor.register_handler(Arc::new(state::StateSetHandler));
     executor.register_handler(Arc::new(state::StateDeleteHandler));
     executor.register_handler(Arc::new(call_lancedb::LanceDbHandler));
+    executor.register_handler(Arc::new(call_adb::AdbHandler::new("call:adb")));
+    executor.register_handler(Arc::new(call_adb::AdbHandler::new("call:clawdb")));
     executor.register_handler(Arc::new(call_rotate::RotateHandler));
     executor.register_handler(Arc::new(call_agent::AgentHandler));
 }

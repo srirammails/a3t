@@ -393,7 +393,7 @@
             </div>
 
             <div class="cd-sub">Health — dependent resources to watch</div>
-            <p class="sf-note">Auto-derived from the flow's tasks (call:llm/mcp/clawdb) when empty. Override here.</p>
+            <p class="sf-note">Auto-derived from the flow's tasks (call:llm/mcp/adb) when empty. Override here.</p>
             <div class="dep-add">
               <input bind:value={depInput} placeholder="namespace/resource-name" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addDep(); } }} />
               <button class="btn sm" onclick={addDep}>Add</button>

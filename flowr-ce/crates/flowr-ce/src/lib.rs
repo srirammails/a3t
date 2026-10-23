@@ -1548,7 +1548,38 @@ pub(crate) async fn handle_agent_tool_call(
         "get_agent" => Some(mcp_get_agent(storage, &args).await),
         "delete_agent" => Some(mcp_delete_agent(storage, &args).await),
         "send_message" => Some(mcp_send_message(storage, principal, &args).await),
+        "query_resource" => Some(mcp_query_resource(storage, &args).await),
         _ => None,
+    }
+}
+
+/// `query_resource` — run a query against a resource from the DB console:
+/// `{query, resource, namespace?}`. ADB (`adb`, legacy `clawdb`) resources run AQL
+/// over HTTP; records come back as flat rows for the console's table view.
+async fn mcp_query_resource(storage: &Arc<dyn StorageBackend>, args: &Value) -> CallToolResult {
+    let Some(query) = args.get("query").and_then(|v| v.as_str()).map(str::trim).filter(|q| !q.is_empty()) else {
+        return CallToolResult::error("query is required".to_string());
+    };
+    let Some(name) = args.get("resource").and_then(|v| v.as_str()) else {
+        return CallToolResult::error("resource is required".to_string());
+    };
+    let namespace = args.get("namespace").and_then(|v| v.as_str()).unwrap_or("default");
+    let resource = match storage.resources().get(namespace, name).await {
+        Ok(r) => r,
+        Err(e) => return CallToolResult::error(format!("resource {namespace}/{name} not found: {e}")),
+    };
+    match resource.type_ref.as_str() {
+        "adb" | "clawdb" => {
+            let url = match handlers::call_adb::resolve_adb_url(storage.as_ref(), &format!("{namespace}/{name}")).await {
+                Ok(u) => u,
+                Err(e) => return CallToolResult::error(e),
+            };
+            match handlers::call_adb::adb_query(&reqwest::Client::new(), &url, query, args.get("variables")).await {
+                Ok(result) => CallToolResult::json(handlers::call_adb::result_rows(&result)),
+                Err(e) => CallToolResult::error(e),
+            }
+        }
+        other => CallToolResult::error(format!("query_resource does not support '{other}' resources yet")),
     }
 }
 

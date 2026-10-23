@@ -28,7 +28,7 @@
     groq: '{\n  "provider": "groq",\n  "model": "llama-3.3-70b-versatile",\n  "api_key": "",\n  "api_url": "https://api.groq.com/openai/v1"\n}',
     ollama: '{\n  "provider": "ollama",\n  "model": "llama3",\n  "api_url": "http://localhost:11434/v1"\n}',
     mcp: '{\n  "transport": "sse",\n  "url": "http://localhost:3001/mcp"\n}',
-    clawdb: '{\n  "mode": "embedded"\n}',
+    adb: '{\n  "url": "http://adb:3000"\n}',
   };
 
   function handleOpenSub(type: string, data?: any) {
@@ -692,7 +692,7 @@ do:
                 <option value="groq">Groq</option>
                 <option value="ollama">Ollama</option>
                 <option value="mcp">MCP Server</option>
-                <option value="clawdb">ClawDB (Memory)</option>
+                <option value="adb">ADB (Agent Memory)</option>
                 <option value="lancedb">LanceDB</option>
                 <option value="http">HTTP API</option>
                 <option value="redis">Redis</option>

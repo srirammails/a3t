@@ -113,6 +113,40 @@
     }
   }
 
+  // ── Generic config editing (every resource without its own form) ──
+  type CfgField = { key: string; value: string; kind: 'string' | 'number' | 'boolean' | 'json' };
+  let cfgEditing = $state(false);
+  let cfgDraft = $state<CfgField[]>([]);
+
+  function startEdit() {
+    cfgDraft = Object.entries(selected?.config ?? {}).map(([key, v]) => ({
+      key,
+      kind: typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'boolean' : v !== null && typeof v === 'object' ? 'json' : 'string',
+      value: v !== null && typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v ?? ''),
+    }));
+    cfgMsg = '';
+    cfgEditing = true;
+  }
+
+  async function saveEdit() {
+    const cfg: Record<string, any> = {};
+    for (const f of cfgDraft) {
+      const k = f.key.trim();
+      if (!k) continue;
+      if (f.kind === 'number') {
+        const n = Number(f.value);
+        if (f.value.trim() === '' || Number.isNaN(n)) { cfgMsg = `${k}: not a number`; return; }
+        cfg[k] = n;
+      } else if (f.kind === 'boolean') cfg[k] = f.value === 'true';
+      else if (f.kind === 'json') {
+        try { cfg[k] = JSON.parse(f.value); } catch { cfgMsg = `${k}: invalid JSON`; return; }
+      } else cfg[k] = f.value;
+    }
+    llmCfg = cfg;
+    await saveConfig();
+    if (cfgMsg === 'Saved') cfgEditing = false;
+  }
+
   async function saveConfig() {
     if (!selected) return;
     cfgSaving = true; cfgMsg = '';
@@ -132,6 +166,10 @@
 
   // ── DB test state ──
   let dbQuery = $state('');
+  // ADB resources (type adb, legacy clawdb) are tested with AQL through the ADB driver.
+  const ADB_SAMPLE_QUERY = 'RECALL FROM WORKING LIMIT 5';
+  let adbQuery = $state(ADB_SAMPLE_QUERY);
+  const isAdb = (r: { type: string } | null) => r?.type === 'adb' || r?.type === 'clawdb';
   let dbOperation = $state('list_tables');
 
   // ── MCP test state ──
@@ -374,6 +412,7 @@ do:
     isNewFlow = false;
     panelTab = 'overview';
     resetTestState();
+    cfgEditing = false;
     if (r.category === 'flows') loadFlowDefinition(r);
     else loadConfig(r);
   }
@@ -415,6 +454,7 @@ do:
     llmMessages = [];
     dbQuery = '';
     dbOperation = 'list_tables';
+    adbQuery = ADB_SAMPLE_QUERY;
     mcpTools = [];
     mcpSelectedTool = '';
     mcpToolArgs = '{}';
@@ -439,6 +479,22 @@ do:
       llmMessages = [...llmMessages, { role: 'assistant', content }];
     } catch (e: any) {
       llmMessages = [...llmMessages, { role: 'assistant', content: `Error: ${e.message ?? e}` }];
+    } finally {
+      testing = false;
+    }
+  }
+
+  // ── ADB: one AQL statement via the a3t-test-resource flow's call:adb branch ──
+  async function testAdb() {
+    if (!selected || !adbQuery.trim()) return;
+    testing = true;
+    testResult = '';
+    try {
+      const input = { test_type: 'adb', resource: `${selected.namespace}/${selected.name}`, query: adbQuery.trim() };
+      const res = await execFlow('a3t-test-resource', 'a3t', { input });
+      testResult = !res.ok ? `Error: ${res.error ?? 'failed'}` : typeof res.data === 'string' ? res.data : JSON.stringify(res.data, null, 2);
+    } catch (e: any) {
+      testResult = `Error: ${e.message ?? e}`;
     } finally {
       testing = false;
     }
@@ -583,7 +639,7 @@ do:
 
   // Types available for create form dropdown
   const TYPES_BY_CATEGORY: Record<string, { value: string; label: string }[]> = {
-    database:    [{ value: 'postgres', label: 'PostgreSQL' }, { value: 'mysql', label: 'MySQL' }, { value: 'lancedb', label: 'LanceDB' }, { value: 'redis', label: 'Redis / Dragonfly' }, { value: 'qdrant', label: 'Qdrant' }, { value: 'clawdb', label: 'ClawDB' }],
+    database:    [{ value: 'postgres', label: 'PostgreSQL' }, { value: 'mysql', label: 'MySQL' }, { value: 'lancedb', label: 'LanceDB' }, { value: 'redis', label: 'Redis / Dragonfly' }, { value: 'qdrant', label: 'Qdrant' }, { value: 'adb', label: 'ADB (Agent Memory)' }],
     llm:         [{ value: 'openai', label: 'OpenAI' }, { value: 'anthropic', label: 'Anthropic' }, { value: 'groq', label: 'Groq' }, { value: 'ollama', label: 'Ollama' }],
     mcp:         [{ value: 'mcp', label: 'MCP Server' }],
     functions:   [{ value: 'function', label: 'Function' }],
@@ -709,16 +765,45 @@ do:
                 </div>
               {/if}
               <details class="cfg-raw"><summary>Raw config JSON</summary><pre class="pf-code">{JSON.stringify(llmCfg, null, 2)}</pre></details>
+            {:else if cfgEditing}
+              <p class="pf-hint">Edit the configuration of <span class="mono">{selected.type}</span> resource {selected.namespace}/{selected.name}.</p>
+              <div class="cfg-edit">
+                {#each cfgDraft as f, i}
+                  <div class="cfg-edit-row">
+                    <input class="cfg-key mono" type="text" bind:value={f.key} placeholder="key" />
+                    {#if f.kind === 'boolean'}
+                      <select bind:value={f.value}><option value="true">true</option><option value="false">false</option></select>
+                    {:else if f.kind === 'json'}
+                      <textarea class="cfg-val mono" rows="4" bind:value={f.value}></textarea>
+                    {:else}
+                      <input class="cfg-val mono" type={selected.category === 'credentials' ? 'password' : 'text'} bind:value={f.value} placeholder="value" />
+                    {/if}
+                    <button class="btn ghost sm" title="Remove field" onclick={() => (cfgDraft = cfgDraft.filter((_, j) => j !== i))}>×</button>
+                  </div>
+                {/each}
+                <button class="btn ghost sm cfg-add" onclick={() => (cfgDraft = [...cfgDraft, { key: '', value: '', kind: 'string' }])}>+ Add field</button>
+              </div>
+              <div class="cfg-actions">
+                <button class="btn spec sm" disabled={cfgSaving} onclick={saveEdit}>{cfgSaving ? 'Saving…' : 'Save'}</button>
+                <button class="btn sm" disabled={cfgSaving} onclick={() => { cfgEditing = false; cfgMsg = ''; }}>Cancel</button>
+                {#if cfgMsg}<span class="cfg-msg" class:ok={cfgMsg === 'Saved'}>{cfgMsg}</span>{/if}
+              </div>
             {:else}
               <p class="pf-hint">Resource configuration.</p>
               <div class="pf-kv">
                 <div class="pf-row"><span class="pf-k">Type Ref</span><span class="pf-v mono">{selected.type}</span></div>
                 <div class="pf-row"><span class="pf-k">Namespace</span><span class="pf-v mono">{selected.namespace}</span></div>
                 {#each Object.entries(selected.config ?? {}) as [k, v]}
-                  <div class="pf-row"><span class="pf-k">{k}</span><span class="pf-v mono">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span></div>
+                  <div class="pf-row"><span class="pf-k">{k}</span><span class="pf-v mono">{selected.category === 'credentials' ? '••••••' : typeof v === 'object' ? JSON.stringify(v) : String(v)}</span></div>
                 {/each}
               </div>
               {#if !selected.config || Object.keys(selected.config).length === 0}<p class="pf-hint" style="margin-top:10px;">No config values.</p>{/if}
+              {#if $canUpdate}
+                <div class="cfg-actions">
+                  <button class="btn spec sm" onclick={startEdit}>Edit</button>
+                  {#if cfgMsg}<span class="cfg-msg" class:ok={cfgMsg === 'Saved'}>{cfgMsg}</span>{/if}
+                </div>
+              {/if}
             {/if}
           </div>
 
@@ -749,6 +834,24 @@ do:
                   <button class="btn spec sm" disabled={testing || !llmInput.trim()} onclick={testLlm}>Send</button>
                 </div>
               </div>
+
+            {:else if isAdb(selected)}
+              <!-- ── ADB: AQL through the ADB driver ── -->
+              <h3>ADB Test</h3>
+              <p class="pf-hint">Run one AQL statement against this ADB server.</p>
+              <div class="test-db">
+                <label class="cf-field full">
+                  <span>AQL</span>
+                  <textarea class="mono" rows="3" bind:value={adbQuery}
+                    onkeydown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !testing) testAdb(); }}></textarea>
+                </label>
+                <button class="btn spec sm" disabled={testing || !adbQuery.trim()} onclick={testAdb}>
+                  {testing ? 'Running...' : 'Execute'}
+                </button>
+              </div>
+              {#if testResult}
+                <pre class="pf-code" style="margin-top: 12px;">{testResult}</pre>
+              {/if}
 
             {:else if selected.category === 'database'}
               <!-- ── Database: Connection + Query ── -->
@@ -1202,6 +1305,10 @@ do:
   .cfg-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
   .cfg-msg { font-size: 12px; color: var(--text-4); }
   .cfg-msg.ok { color: var(--ok, #23987f); }
+  .cfg-edit { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
+  .cfg-edit-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 8px; align-items: start; }
+  .cfg-edit-row input, .cfg-edit-row select, .cfg-edit-row textarea { width: 100%; font-size: 12px; }
+  .cfg-add { align-self: flex-start; }
   .cfg-raw { margin-top: 16px; }
   .cfg-raw summary { font-size: 12px; color: var(--text-4); cursor: pointer; }
   .cfg-raw pre { margin-top: 8px; }

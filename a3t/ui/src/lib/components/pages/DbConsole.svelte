@@ -39,7 +39,8 @@
     mysql:     { label: 'MySQL',      color: '#00758f', lang: 'SQL' },
     lancedb:   { label: 'LanceDB',    color: '#e97319', lang: 'SQL' },
     redis:     { label: 'Dragonfly',  color: '#dc2626', lang: 'Redis' },
-    clawdb:    { label: 'ClawDB',     color: '#7c3aed', lang: 'AQL' },
+    adb:       { label: 'ADB',        color: '#7c3aed', lang: 'AQL' },
+    clawdb:    { label: 'ADB',        color: '#7c3aed', lang: 'AQL' }, // legacy type
     qdrant:    { label: 'Qdrant',     color: '#c4243b', lang: 'AQL' },
   };
 

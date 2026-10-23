@@ -15,6 +15,7 @@
     'call:agent':      { icon: '⬢',  accent: '#5530a8' },
     'call:mcp':        { icon: '⊙',  accent: '#6d28d9' },
     'call:lancedb':    { icon: '▽',  accent: '#0369a1' },
+    'call:adb':        { icon: '⊛',  accent: '#0369a1' },
     'call:clawdb':     { icon: '⊛',  accent: '#0369a1' },
     'set':             { icon: '≔',  accent: '#64748b' },
     'wait':            { icon: '◷',  accent: '#d97706' },

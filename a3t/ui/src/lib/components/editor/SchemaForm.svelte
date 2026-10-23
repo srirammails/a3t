@@ -251,7 +251,7 @@
 
   const TASK_TYPES = [
     'set', 'call:http', 'call:lancedb', 'call:llm', 'call:agent', 'call:sql',
-    'call:qdrant', 'call:clawdb', 'call:mcp', 'call:human',
+    'call:qdrant', 'call:adb', 'call:mcp', 'call:human',
     'call:redis',
     'run:workflow', 'run:shell', 'run:script',
     'inline:lua', 'inline:js',
@@ -261,7 +261,7 @@
 
   const NEEDS_RESOURCE = new Set([
     'call:http', 'call:lancedb', 'call:llm', 'call:agent', 'call:sql',
-    'call:qdrant', 'call:clawdb', 'call:mcp', 'call:human', 'call:redis',
+    'call:qdrant', 'call:adb', 'call:mcp', 'call:human', 'call:redis',
   ]);
 
   const TYPE_SCHEMAS: Record<string, FieldDef[]> = {
@@ -306,7 +306,7 @@
       { key: 'query', label: 'SQL Query', type: 'textarea', required: true, placeholder: 'SELECT * FROM ...' },
       { key: 'params', label: 'Parameters', type: 'object' },
     ],
-    'call:clawdb': [
+    'call:adb': [
       { key: 'query', label: 'AQL Query', type: 'textarea', required: true, placeholder: 'RECALL FROM WORKING WHERE ...' },
       { key: 'variables', label: 'Variables', type: 'object' },
     ],

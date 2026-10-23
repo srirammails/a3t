@@ -955,11 +955,11 @@
       <select value={String(cfgGet('memory_resource') ?? '')}
         onchange={(e) => cfgSet('memory_resource', e.currentTarget.value || undefined)}>
         <option value="">-- none --</option>
-        {#each availableResources.filter(r => r.type === 'clawdb') as r}
+        {#each availableResources.filter(r => r.type === 'adb' || r.type === 'clawdb') as r}
           <option value={r.name}>{r.name}</option>
         {/each}
       </select>
-      <button class="new-res-btn" onclick={() => onopensub?.('resource-new', { type: 'clawdb', label: 'Memory DB' })}>+ New</button>
+      <button class="new-res-btn" onclick={() => onopensub?.('resource-new', { type: 'adb', label: 'Memory DB' })}>+ New</button>
     </div>
 
     <div class="sub-label">NAMESPACE & SESSION</div>

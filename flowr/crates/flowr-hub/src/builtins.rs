@@ -21,7 +21,6 @@ pub fn builtin_types() -> Vec<ResourceType> {
         mcp_server(),
         llm(),
         adb(),
-        clawdb(),
         input_channel(),
         output_channel(),
         agent(),
@@ -543,28 +542,23 @@ pub fn llm() -> ResourceType {
         .as_builtin()
 }
 
-/// ADB (Agent Database) memory resource type
+/// ADB (Agent Database) — agent memory over AQL
 ///
-/// Unified in-memory multimodal database for agent memory.
-/// Supports WORKING, SEMANTIC, PROCEDURAL, EPISODIC, and TOOLS memory types.
-/// See: AQL specification for query language.
+/// Memory types WORKING, EPISODIC, PROCEDURAL, SEMANTIC and TOOLS. FlowR's
+/// `call:adb` task and the DB console send AQL to `POST {url}/query`; agents can
+/// also use ADB's MCP server at `{url}/mcp/sse` through an `mcp` resource.
+/// Replaces the `clawdb` type (still accepted by `call:clawdb`).
 pub fn adb() -> ResourceType {
-    ResourceType::new("adb", "Agent Database (Memory)")
+    ResourceType::new("adb", "ADB (Agent Memory)")
         .with_category(ResourceCategory::Memory)
         .with_connection_kind(ConnectionKind::Persistent)
         .with_icon("memory")
         .with_schema(json!({
             "type": "object",
             "properties": {
-                "mode": {
+                "url": {
                     "type": "string",
-                    "enum": ["sidecar", "remote"],
-                    "default": "sidecar",
-                    "description": "Sidecar (same container) or remote ADB instance"
-                },
-                "endpoint": {
-                    "type": "string",
-                    "description": "ADB endpoint (for remote mode)",
+                    "description": "ADB server URL, e.g. http://adb:3000",
                     "format": "uri"
                 },
                 "namespace": {
@@ -577,113 +571,12 @@ pub fn adb() -> ResourceType {
                     "default": "private",
                     "description": "Memory isolation scope"
                 },
-                "working": {
-                    "type": "object",
-                    "properties": {
-                        "default_ttl": {
-                            "type": "string",
-                            "default": "500ms",
-                            "description": "Default TTL for working memory items"
-                        }
-                    }
-                },
-                "semantic": {
-                    "type": "object",
-                    "properties": {
-                        "embedding_model": {
-                            "type": "string",
-                            "description": "Embedding model for vector storage"
-                        },
-                        "dimensions": {
-                            "type": "integer",
-                            "description": "Vector dimensions"
-                        }
-                    }
-                },
-                "episodic": {
-                    "type": "object",
-                    "properties": {
-                        "retention": {
-                            "type": "string",
-                            "default": "30d",
-                            "description": "Episode retention period"
-                        }
-                    }
-                },
-                "procedural": {
-                    "type": "object",
-                    "properties": {
-                        "auto_tune": {
-                            "type": "boolean",
-                            "default": true,
-                            "description": "Auto-tune procedural variables based on outcomes"
-                        }
-                    }
-                },
-                "tools": {
-                    "type": "object",
-                    "properties": {
-                        "ranking_model": {
-                            "type": "string",
-                            "default": "task_relevance",
-                            "description": "Tool ranking model"
-                        }
-                    }
-                }
-            }
-        }))
-        .as_builtin()
-}
-
-/// ClawDB - Persistent Agent Memory Database (LanceDB backend)
-///
-/// Persistent multimodal database for agent memory using LanceDB.
-/// Supports WORKING, SEMANTIC, PROCEDURAL, EPISODIC, and TOOLS memory types.
-/// Designed for low-latency in-container usage with ClawdFlow.
-/// Uses AQL (Agent Query Language) for queries.
-pub fn clawdb() -> ResourceType {
-    ResourceType::new("clawdb", "ClawDB (Persistent Memory)")
-        .with_category(ResourceCategory::Memory)
-        .with_connection_kind(ConnectionKind::Persistent)
-        .with_icon("memory")
-        .with_schema(json!({
-            "type": "object",
-            "properties": {
-                "mode": {
-                    "type": "string",
-                    "enum": ["embedded", "http"],
-                    "default": "embedded",
-                    "description": "Embedded (direct library) or HTTP (remote server)"
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Database directory path (for embedded mode)",
-                    "default": "./clawdb_data"
-                },
-                "url": {
-                    "type": "string",
-                    "description": "ClawDB server URL (for http mode)",
-                    "format": "uri"
-                },
-                "namespace": {
-                    "type": "string",
-                    "description": "Agent namespace for multi-agent isolation"
-                },
-                "scope": {
-                    "type": "string",
-                    "enum": ["private", "shared"],
-                    "default": "private",
-                    "description": "Memory isolation scope"
-                },
                 "default_ttl": {
                     "type": "string",
-                    "description": "Default TTL for WORKING memory (e.g., '500ms', '30s')"
+                    "description": "Default TTL for WORKING memory (e.g. '30s')"
                 }
             },
-            "oneOf": [
-                { "required": ["path"] },
-                { "required": ["url"] }
-            ]
+            "required": ["url"]
         }))
         .as_builtin()
 }
