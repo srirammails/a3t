@@ -2295,6 +2295,54 @@ async fn get_resource(storage: &dyn StorageBackend, args: &Value) -> CallToolRes
 /// List the tool names an MCP server resource exposes, so the UI can offer a
 /// capability ceiling scoped to that server (not a static catalog). FlowR's own
 /// MCP surface (loopback URL) is resolved in-process via `get_tools()`.
+/// Where an MCP server takes JSON-RPC POSTs. Resources often store the SSE URL
+/// (`…/sse`, as A3T's defaults do); its POST endpoint is the sibling `…/message`.
+/// Any other URL gets `/message` appended unless it already ends with it — the rule
+/// `call:mcp` has always used, now shared by the agent runtime and discovery.
+pub fn mcp_message_url(url: &str) -> String {
+    let u = url.trim_end_matches('/');
+    if let Some(base) = u.strip_suffix("/sse") {
+        format!("{base}/message")
+    } else if u.ends_with("/message") {
+        u.to_string()
+    } else {
+        format!("{u}/message")
+    }
+}
+
+/// `tools/list` on a remote MCP server: the tool names, or why they couldn't be read.
+async fn remote_tool_names(url: &str) -> Result<Vec<String>, String> {
+    let endpoint = mcp_message_url(url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(&endpoint)
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+        .send()
+        .await
+        .map_err(|e| format!("{endpoint}: {e}"))?;
+    let status = resp.status();
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("{endpoint}: HTTP {status}, not a JSON-RPC response ({e})"))?;
+    if let Some(err) = body.get("error") {
+        return Err(format!("{endpoint}: {err}"));
+    }
+    Ok(body
+        .pointer("/result/tools")
+        .and_then(|t| t.as_array())
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|t| t.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 async fn list_mcp_tools(storage: &dyn StorageBackend, args: &Value) -> CallToolResult {
     let namespace = args.get("namespace").and_then(|v| v.as_str()).unwrap_or("a3t");
     // Discovering what exists is far more useful than an error telling the caller
@@ -2353,14 +2401,25 @@ async fn list_mcp_tools(storage: &dyn StorageBackend, args: &Value) -> CallToolR
             "tools": names,
         }))
     } else {
-        // Remote MCP servers (SSE/HTTP, possibly OAuth-protected) are discovered by
-        // the agent runtime at execution time, not from this endpoint.
-        CallToolResult::json(json!({
-            "server": format!("{}/{}", namespace, name),
-            "transport": resource.config.get("transport").and_then(|v| v.as_str()).unwrap_or("remote"),
-            "tools": [],
-            "note": "remote MCP tool discovery is performed by the agent runtime",
-        }))
+        // Remote MCP servers: ask the server itself (tools/list over JSON-RPC POST).
+        // An OAuth-protected or unreachable server reports why, instead of an empty
+        // list that reads as "this server has no tools".
+        let server = format!("{}/{}", namespace, name);
+        let transport = resource.config.get("transport").and_then(|v| v.as_str()).unwrap_or("remote");
+        match remote_tool_names(url).await {
+            Ok(names) => CallToolResult::json(json!({
+                "server": server,
+                "transport": transport,
+                "endpoint": mcp_message_url(url),
+                "tools": names,
+            })),
+            Err(e) => CallToolResult::json(json!({
+                "server": server,
+                "transport": transport,
+                "tools": [],
+                "error": format!("could not list tools: {e}"),
+            })),
+        }
     }
 }
 
@@ -2729,5 +2788,21 @@ fn mask_sensitive_fields(config: &mut Value) {
                 mask_sensitive_fields(value);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod mcp_url_tests {
+    use super::mcp_message_url;
+
+    #[test]
+    fn sse_urls_map_to_their_message_endpoint() {
+        assert_eq!(mcp_message_url("http://adb:3000/mcp/sse"), "http://adb:3000/mcp/message");
+        assert_eq!(mcp_message_url("http://adb:3000/mcp/sse/"), "http://adb:3000/mcp/message");
+        assert_eq!(mcp_message_url("http://adb:3000/mcp/message"), "http://adb:3000/mcp/message");
+        assert_eq!(mcp_message_url("http://adb:3000/mcp"), "http://adb:3000/mcp/message");
+        assert_eq!(mcp_message_url("http://localhost:3002"), "http://localhost:3002/message");
+        // Only a trailing /sse is rewritten.
+        assert_eq!(mcp_message_url("http://sse.example/x"), "http://sse.example/x/message");
     }
 }

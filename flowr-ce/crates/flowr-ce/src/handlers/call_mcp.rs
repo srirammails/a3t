@@ -77,13 +77,7 @@ impl TaskHandler for McpHandler {
         };
 
         // Ensure URL ends with /message for JSON-RPC
-        let server_url = if server_url.ends_with("/sse") || server_url.ends_with("/sse/") {
-            server_url.replace("/sse", "/message")
-        } else if !server_url.ends_with("/message") {
-            format!("{}/message", server_url.trim_end_matches('/'))
-        } else {
-            server_url
-        };
+        let server_url = flowr_mcp_core::mcp_message_url(&server_url);
 
         info!(task = %task.name, method = %method, tool = %tool_name, server = %server_url, "calling MCP");
 

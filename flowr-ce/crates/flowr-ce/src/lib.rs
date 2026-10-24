@@ -979,7 +979,7 @@ async fn chat_ui_stream_handler(
     let replay: Vec<crate::token_stream::StreamChunk> = Vec::new();
 
     let mut input = json!({ "message": message, "session_id": session_id });
-    for k in ["llm_resource", "enabled_tools", "context", "ui_context"] {
+    for k in ["llm_resource", "enabled_tools", "mcp_servers", "context", "ui_context"] {
         if let Some(v) = body.get(k) { input[k] = v.clone(); }
     }
     let request = flowr_types::ExecutionRequest::new(&namespace, &name)

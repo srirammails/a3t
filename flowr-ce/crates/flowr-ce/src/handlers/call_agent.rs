@@ -1488,6 +1488,35 @@ async fn read_stream(
 
 /// True when an MCP resource URL points back at this same server (loopback),
 /// so the tool call can be dispatched in-process instead of over HTTP.
+/// Resolve an agent's MCP server reference to the URL its JSON-RPC requests are POSTed to.
+///
+/// `ns/name` names a resource directly. A bare `name` (how the A3T UI saves an agent's
+/// servers) is looked up in `default`, then in the A3T platform namespace `a3t`. A
+/// missing resource is an error: this used to fall back silently to this FlowR's own
+/// `/message`, so an agent configured with an external server quietly got FlowR's tools
+/// instead. A resource without a URL still means this FlowR (as `list_mcp_tools` treats
+/// it). `…/sse` URLs map to their `…/message` endpoint, as in `call:mcp`.
+async fn resolve_agent_mcp_url(
+    storage: &Arc<dyn StorageBackend>,
+    resource_name: &str,
+) -> std::result::Result<String, String> {
+    let candidates: Vec<(&str, &str)> = match resource_name.split_once('/') {
+        Some((ns, name)) => vec![(ns, name)],
+        None => vec![("default", resource_name), ("a3t", resource_name)],
+    };
+    for (ns, name) in &candidates {
+        if let Ok(r) = storage.resources().get(ns, name).await {
+            let url = r.config.get("url").or_else(|| r.config.get("endpoint")).and_then(|v| v.as_str());
+            return Ok(match url {
+                Some(u) if !u.is_empty() => flowr_mcp_core::mcp_message_url(u),
+                _ => "http://localhost:3002/message".to_string(),
+            });
+        }
+    }
+    let tried: Vec<String> = candidates.iter().map(|(ns, n)| format!("{ns}/{n}")).collect();
+    Err(format!("MCP server resource not found: {}", tried.join(" or ")))
+}
+
 fn is_local_mcp_url(url: &str) -> bool {
     url.contains("localhost") || url.contains("127.0.0.1") || url.contains("0.0.0.0")
 }
@@ -1742,17 +1771,7 @@ async fn call_mcp_tool(
     }
 
     // Resolve MCP server URL from resource
-    let (ns, name) = if resource_name.contains('/') {
-        let parts: Vec<&str> = resource_name.splitn(2, '/').collect();
-        (parts[0], parts[1])
-    } else {
-        ("default", resource_name)
-    };
-
-    let server_url = storage.resources().get(ns, name).await
-        .map(|r| r.config.get("url").or_else(|| r.config.get("endpoint"))
-            .and_then(|v| v.as_str()).unwrap_or("http://localhost:3002/message").to_string())
-        .unwrap_or_else(|_| "http://localhost:3002/message".to_string());
+    let server_url = resolve_agent_mcp_url(storage, resource_name).await?;
 
     // E0.4c: local tools → in-process, authorized as the agent principal.
     // E2 #3: pass the template ceiling attributes so the hook can gate here.
@@ -1830,17 +1849,7 @@ async fn list_mcp_tools(
     _caller: &flowr_mcp_core::Principal,
     resource_name: &str,
 ) -> std::result::Result<Vec<Value>, String> {
-    let (ns, name) = if resource_name.contains('/') {
-        let parts: Vec<&str> = resource_name.splitn(2, '/').collect();
-        (parts[0], parts[1])
-    } else {
-        ("default", resource_name)
-    };
-
-    let server_url = storage.resources().get(ns, name).await
-        .map(|r| r.config.get("url").or_else(|| r.config.get("endpoint"))
-            .and_then(|v| v.as_str()).unwrap_or("http://localhost:3002/message").to_string())
-        .unwrap_or_else(|_| "http://localhost:3002/message".to_string());
+    let server_url = resolve_agent_mcp_url(storage, resource_name).await?;
 
     // E0.4c: local tool discovery is in-process (no loopback HTTP / re-auth).
     if is_local_mcp_url(&server_url) {

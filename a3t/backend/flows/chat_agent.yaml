@@ -55,8 +55,8 @@ do:
             max_iterations: 10
             max_tokens: 4096
             temperature: 0.7
-            mcp_servers:
-            - a3t/agent-flows
+            # The agent's own MCP servers when the chat sends them, else the platform tools.
+            mcp_servers: "${ .mcp_servers // [\"a3t/agent-flows\"] }"
             ttl: 1800
     export:
       as: .

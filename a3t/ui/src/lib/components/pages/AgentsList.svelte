@@ -513,11 +513,16 @@
               <label class="cf-field"><span>Endpoint</span>
                 <ResourceSelect value={newAgent.ep_path} options={triggerOptions} placeholder="+ New endpoint (auto-created)" allowNew={false} onchange={(v) => newAgent.ep_path = v} />
               </label>
-              <label class="cf-field full"><span>MCP servers</span>
-                <select multiple class="cf-multi" bind:value={newAgent.mcp_servers}>
-                  {#each mcpResources as m}<option value={m.value}>{m.label}</option>{/each}
-                </select>
-              </label>
+              <!-- Checkboxes, not a multi-select: a grey highlight read as "listed", not "selected". -->
+              <div class="cf-field full"><span>MCP servers</span>
+                <div class="cf-checks">
+                  {#each mcpResources as m}
+                    <label class="cf-check"><input type="checkbox" value={m.value} bind:group={newAgent.mcp_servers} /> {m.label}</label>
+                  {:else}
+                    <span class="cf-none">No MCP server resources</span>
+                  {/each}
+                </div>
+              </div>
             </div>
           </div>
           {:else}
@@ -551,11 +556,16 @@
               <label class="cf-field"><span>Endpoint (trigger)</span>
                 <ResourceSelect value={bindings.ep_path} options={triggerOptions} placeholder="— select endpoint —" allowNew={true} newLabel="+ New endpoint" onchange={(v) => bindings.ep_path = v} onnew={createEndpointForAgent} />
               </label>
-              <label class="cf-field"><span>MCP servers</span>
-                <select multiple class="cf-multi" bind:value={bindings.mcp_servers}>
-                  {#each mcpResources as m}<option value={m.value}>{m.label}</option>{/each}
-                </select>
-              </label>
+              <!-- Checkboxes, not a multi-select: a grey highlight read as "listed", not "selected". -->
+              <div class="cf-field"><span>MCP servers</span>
+                <div class="cf-checks">
+                  {#each mcpResources as m}
+                    <label class="cf-check"><input type="checkbox" value={m.value} bind:group={bindings.mcp_servers} /> {m.label}</label>
+                  {:else}
+                    <span class="cf-none">No MCP server resources</span>
+                  {/each}
+                </div>
+              </div>
               <label class="cf-field"><span>Max iterations</span><input type="number" bind:value={bindings.max_iterations} /></label>
               <label class="cf-field"><span>Temperature</span><input type="number" step="0.1" bind:value={bindings.temperature} /></label>
               <label class="cf-field full"><span>System prompt (override)</span><textarea rows="6" bind:value={bindings.system_prompt}></textarea></label>
@@ -811,7 +821,9 @@
   .pf-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .pf-head h3 { margin-bottom: 0; }
   .pf-form { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
-  .cf-multi { width: 100%; min-height: 64px; font-size: 12px; font-family: var(--font-mono); padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-surface); color: var(--text-1); }
+  .cf-checks { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-surface); }
+  .cf-check { display: flex; align-items: center; gap: 8px; font-size: 12px; font-family: var(--font-mono); color: var(--text-1); cursor: pointer; }
+  .cf-none { font-size: 12px; color: var(--text-3, var(--text-2)); }
 
   /* Panel forms */
   .pf { padding: 24px 32px; max-width: 600px; }

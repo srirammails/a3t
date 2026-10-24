@@ -76,11 +76,16 @@
   // endpoint (EP) runs the shared a3t-chat-agent flow on that agent's bound LLM.
   // The EP is resolved from its trigger (agent-{id}-chat) → stored ep_path → /agent/{id}/chat.
   // Selection defaults to the system-default agent (variables.system_default, else agt-default).
-  let agents = $state<{ id: string; name: string; llm: string; target: string; ep_path: string; system_default: boolean; enabled_tools: string[] }[]>([]);
+  let agents = $state<{ id: string; name: string; llm: string; target: string; ep_path: string; system_default: boolean; enabled_tools: string[]; mcp_servers: string[] }[]>([]);
   let selectedAgent = $state<string>(loadLS<string>(LS_AGENT, ''));
   let epByAgent = $state<Record<string, string>>({});   // agent id → endpoint path from its trigger
 
   function llmLabel(llm: string) { return llm ? llm.split('/').pop() : ''; }
+  // Saved MCP servers as `ns/name` refs (the UI stores bare names in the agent's namespace).
+  function mcpServerRefs(raw: unknown, ns?: string): string[] {
+    const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+    return list.map(s => String(s).trim()).filter(Boolean).map(s => (s.includes('/') ? s : `${ns || 'a3t'}/${s}`));
+  }
 
   async function loadAgents() {
     const res = await execFlow('a3t-agents-list', 'a3t', { org_id: 'org-default' }, { silent: true });
@@ -91,7 +96,7 @@
         try { vars = JSON.parse(r.variables || '{}'); } catch {}
         let rb: any = {};
         try { rb = JSON.parse(r.resource_bindings || '{}'); } catch {}
-        return { id: r.id, name: r.name, llm: rb.llm || '', target: vars.target || '', ep_path: vars.ep_path || '', system_default: !!vars.system_default, enabled_tools: Array.isArray(vars.enabled_tools) ? vars.enabled_tools : [] };
+        return { id: r.id, name: r.name, llm: rb.llm || '', target: vars.target || '', ep_path: vars.ep_path || '', system_default: !!vars.system_default, enabled_tools: Array.isArray(vars.enabled_tools) ? vars.enabled_tools : [], mcp_servers: mcpServerRefs(vars.mcp_servers, r.namespace) };
       });
       // Default the selection to the system-default agent (else the stored one, else first).
       if (!selectedAgent || !agents.some(a => a.id === selectedAgent)) {
@@ -265,6 +270,8 @@
     if (a?.llm) body.llm_resource = a.llm;
     // Forward the agent's capability ceiling so the policy engine enforces it in chat too.
     if (a?.enabled_tools?.length) body.enabled_tools = a.enabled_tools;
+    // The agent's MCP servers (Configuration tab), so the engine discovers their tools.
+    if (a?.mcp_servers?.length) body.mcp_servers = a.mcp_servers;
     setPending({ sessionId, agent: selectedAgent, seq: 0 });
     attachStream(sessionId);
     const res = await webhookChat(ep, body, { maxPolls: 90, pollInterval: 1000 });

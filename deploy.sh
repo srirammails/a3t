@@ -238,8 +238,12 @@ step_ui_serve() {
     fi
     setsid nohup python3 -I "$UI_DIR/serve-dev.py" "$UI_DIR/build" "$UI_PORT" \
         >> "$UI_STATE/serve.log" 2>&1 < /dev/null &
-    sleep 2
-    pid=$(ss -ltnp 2>/dev/null | grep ":$UI_PORT " | grep -oE 'pid=[0-9]+' | cut -d= -f2 | head -1 || true)
+    # Python starts slowly from the CIFS mount; wait up to 10 s for the port.
+    for _ in $(seq 20); do
+        sleep 0.5
+        pid=$(ss -ltnp 2>/dev/null | grep ":$UI_PORT " | grep -oE 'pid=[0-9]+' | cut -d= -f2 | head -1 || true)
+        [ -n "$pid" ] && break
+    done
     [ -n "$pid" ] || { err "Server did not start; see $UI_STATE/serve.log"; exit 1; }
     echo "$pid" > "$UI_STATE/serve.pid"
     log "Serving $UI_DIR/build on :$UI_PORT (pid $pid, log $UI_STATE/serve.log)"
