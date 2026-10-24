@@ -2,6 +2,7 @@
   import { API_BASE } from '$lib/config';
   import * as YAML from 'yaml';
   import { mcpCall, getAccessToken } from '$lib/services/api';
+  import { discoverServerTools, allToolNames, toolSections, type ServerTools } from '$lib/services/mcpTools';
   import SchemaConfigForm from './SchemaConfigForm.svelte';
   import { getEditorContext, initEditorContext, getFunctionManifest } from '$lib/editor/context';
   import { validateWithParams } from '$lib/editor/schema-utils';
@@ -405,7 +406,8 @@
   // Capability ceiling (Permissions tab). The tool list is DISCOVERED from the
   // template's selected MCP servers (list_mcp_tools), not a static catalog.
   // `enabled_tools` empty = unrestricted; non-empty = the only tools an agent may use.
-  let availableTools = $state<string[]>([]);
+  let serverTools = $state<ServerTools[]>([]);
+  let availableTools = $derived(allToolNames(serverTools));
   let toolsLoading = $state(false);
   let _lastToolsKey = '__init__';
   $effect(() => {
@@ -413,29 +415,20 @@
     const key = servers.join('|');
     if (key === _lastToolsKey) return;
     _lastToolsKey = key;
-    if (servers.length === 0) { availableTools = []; return; }
+    if (servers.length === 0) { serverTools = []; toolsLoading = false; return; }
     toolsLoading = true;
-    (async () => {
-      const set = new Set<string>();
-      for (const s of servers) {
-        const i = s.indexOf('/');
-        const [ns, nm] = i >= 0 ? [s.slice(0, i), s.slice(i + 1)] : ['a3t', s];
-        const res = await mcpCall('list_mcp_tools', { namespace: ns, name: nm });
-        if (res.ok && res.data) {
-          let raw: any = res.data;
-        if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
-          for (const t of (raw.tools ?? [])) set.add(String(t));
-        }
-      }
-      availableTools = [...set].sort();
+    discoverServerTools(servers, namespace || 'a3t').then(found => {
+      if (_lastToolsKey !== key) return;   // the selection changed meanwhile
+      serverTools = found;
       // Reconcile: drop any allowed tool that the current servers no longer expose.
+      const set = new Set(allToolNames(found));
       const cur = cfgGetArr('enabled_tools');
       if (cur.length) {
         const kept = cur.filter((t: string) => set.has(t));
         if (kept.length !== cur.length) cfgSetArr('enabled_tools', kept);
       }
       toolsLoading = false;
-    })();
+    });
   });
   const isDestructive = (t: string) => /delete|remove|drop|purge|destroy|clear|wipe/i.test(t);
   // A tool is allowed when the list is empty (unrestricted) or explicitly present.
@@ -925,25 +918,34 @@
       <p class="perm-hint">This template has no tools to govern yet. Add one or more <strong>MCP servers</strong> on the <button type="button" class="linkish" onclick={() => activeTab = 'tools'}>Tools</button> tab first — the ceiling controls which of <em>their</em> tools an agent may use.</p>
     {:else if toolsLoading}
       <p class="perm-hint">Discovering tools from the selected MCP servers…</p>
-    {:else if availableTools.length === 0}
-      <p class="perm-hint">The selected MCP servers didn't report any listable tools here — remote servers are discovered by the agent at run time.</p>
     {:else}
-      <p class="perm-hint">Uncheck a tool to block it for agents from this template. All checked = unrestricted; the policy engine denies anything unchecked even if the model tries it.</p>
-      <div class="perm-summary">
-        {#if cfgGetArr('enabled_tools').length === 0}
-          <span class="perm-badge ok">All {availableTools.length} allowed</span>
-        {:else}
-          <span class="perm-badge warn">{cfgGetArr('enabled_tools').length} of {availableTools.length} allowed</span>
-          <button class="perm-all" onclick={() => cfgSetArr('enabled_tools', [])}>Allow all</button>
+      {#if availableTools.length > 0}
+        <p class="perm-hint">Uncheck a tool to block it for agents from this template. All checked = unrestricted; the policy engine denies anything unchecked even if the model tries it.</p>
+        <div class="perm-summary">
+          {#if cfgGetArr('enabled_tools').length === 0}
+            <span class="perm-badge ok">All {availableTools.length} allowed</span>
+          {:else}
+            <span class="perm-badge warn">{cfgGetArr('enabled_tools').length} of {availableTools.length} allowed</span>
+            <button class="perm-all" onclick={() => cfgSetArr('enabled_tools', [])}>Allow all</button>
+          {/if}
+        </div>
+      {/if}
+      {#each serverTools as srv (srv.server)}
+        {#if srv.tools.length === 0}
+          <div class="sub-label">{srv.name}</div>
+          <p class="perm-hint perm-err">No tools listed: {srv.error}</p>
         {/if}
-      </div>
-      <div class="perm-tools">
-        {#each availableTools as t}
-          <label class="perm-chk" class:on={permAllowed(t)} class:danger={isDestructive(t)}>
-            <input type="checkbox" checked={permAllowed(t)} onchange={() => permToggle(t)} /><span>{t}</span>
-          </label>
+        {#each toolSections(srv) as g (g.group)}
+          <div class="sub-label">{g.group} <span class="perm-count">{g.tools.length}</span></div>
+          <div class="perm-tools">
+            {#each g.tools as t (t)}
+              <label class="perm-chk" class:on={permAllowed(t)} class:danger={isDestructive(t)}>
+                <input type="checkbox" checked={permAllowed(t)} onchange={() => permToggle(t)} /><span>{t}</span>
+              </label>
+            {/each}
+          </div>
         {/each}
-      </div>
+      {/each}
     {/if}
   </div>
 
@@ -1377,4 +1379,6 @@
   .slot-status { font-size: 8px; padding: 1px 5px; border-radius: 3px; font-family: var(--font-mono); text-transform: uppercase; color: var(--text-4); background: var(--bg-subtle); margin-left: auto; }
   .slot-status.wired { color: var(--runtime, #1a7158); background: var(--runtime-bg, #e6f4ef); }
   .slot-desc { font-size: 9px; color: var(--text-4); padding-left: 4px; display: block; margin-bottom: 4px; }
+  .perm-count { font-weight: 400; opacity: 0.6; margin-left: 4px; }
+  .perm-err { color: var(--danger, #b42318); }
 </style>

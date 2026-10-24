@@ -2,6 +2,7 @@
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { execFlow, mcpCall, canvasApi } from '$lib/services/api';
+  import { discoverServerTools, allToolNames, toolSections, isDestructive, serverRef, type ServerTools } from '$lib/services/mcpTools';
   import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { can } from '$lib/stores/auth';
   import { onMount } from 'svelte';
@@ -269,7 +270,8 @@
     let llm = rb.llm ?? tpl.llm_resource ?? '';
     if (llm && !String(llm).includes('/')) llm = `a3t/${llm}`;
     const mcpRaw = vars.mcp_servers ?? tpl.mcp_servers ?? [];
-    const mcp = Array.isArray(mcpRaw) ? mcpRaw : String(mcpRaw).split(',').map(s => s.trim()).filter(Boolean);
+    const mcp = (Array.isArray(mcpRaw) ? mcpRaw : String(mcpRaw).split(',').map(s => s.trim()).filter(Boolean))
+      .map((s: string) => serverRef(s, agent?.namespace || 'a3t'));   // older agents saved bare names
     bindings = {
       llm,
       system_prompt: vars.system_prompt ?? String(tpl.system_prompt ?? '').trim(),
@@ -284,25 +286,38 @@
     };
   }
 
-  // The FlowR tools an agent's MCP server exposes, grouped for the Permissions UI.
-  // A checked tool is allowed; leaving every box unchecked = no restriction.
-  const TOOL_GROUPS: { group: string; tools: string[] }[] = [
-    { group: 'Read', tools: ['list_flows','get_flow','list_resources','get_resource','list_resource_types','get_execution_status','list_executions','list_task_types','get_task_type','get_state','list_triggers','get_trigger','list_agents','get_agent','list_agent_templates','get_agent_template','get_agent_history'] },
-    { group: 'Run', tools: ['execute_flow','send_message','set_state','clear_agent_session'] },
-    { group: 'Author', tools: ['create_flow','update_flow','create_agent','create_agent_template','create_trigger','update_trigger','enable_trigger','pause_trigger','attach_trigger','detach_trigger','create_resource'] },
-    { group: 'Destructive', tools: ['delete_flow','delete_resource','delete_trigger','delete_agent'] },
-  ];
+  // The tools of the agent's MCP servers, discovered with list_mcp_tools whenever the
+  // selection changes (FlowR's own tools in-process, other servers via tools/list).
+  // enabled_tools empty = unrestricted; non-empty = the only tools the agent may use.
+  let serverTools = $state<ServerTools[]>([]);
+  let toolsLoading = $state(false);
+  let _toolsKey = '';
+  $effect(() => {
+    const servers: string[] = (bindings.mcp_servers ?? []).map(String);
+    const key = servers.join('|');
+    if (key === _toolsKey) return;
+    _toolsKey = key;
+    if (servers.length === 0) { serverTools = []; toolsLoading = false; return; }
+    toolsLoading = true;
+    discoverServerTools(servers, agent?.namespace || 'a3t').then(found => {
+      if (_toolsKey !== key) return;   // the selection changed meanwhile
+      serverTools = found;
+      toolsLoading = false;
+    });
+  });
+  let restrictTools = $derived((bindings.enabled_tools?.length ?? 0) > 0);
+  const toolAllowed = (t: string) => !restrictTools || bindings.enabled_tools.includes(t);
   function toggleTool(name: string) {
-    const s = new Set(bindings.enabled_tools);
+    // Unrestricted → materialise "everything" before removing one tool.
+    const s = new Set<string>(restrictTools ? bindings.enabled_tools : allToolNames(serverTools));
     s.has(name) ? s.delete(name) : s.add(name);
     bindings.enabled_tools = [...s];
   }
   function setGroup(tools: string[], on: boolean) {
-    const s = new Set(bindings.enabled_tools);
+    const s = new Set<string>(restrictTools ? bindings.enabled_tools : allToolNames(serverTools));
     for (const t of tools) { on ? s.add(t) : s.delete(t); }
     bindings.enabled_tools = [...s];
   }
-  let restrictTools = $derived((bindings.enabled_tools?.length ?? 0) > 0);
 
   // Re-init the form once per agent selection (after templates have loaded)
   $effect(() => {
@@ -636,31 +651,43 @@
 
             <label class="perm-toggle">
               <input type="checkbox" checked={restrictTools}
-                onchange={(e) => { if (!(e.currentTarget as HTMLInputElement).checked) bindings.enabled_tools = []; else setGroup(TOOL_GROUPS[0].tools.concat(TOOL_GROUPS[1].tools), true); }} />
-              <span><strong>Restrict tools</strong> — {restrictTools ? `${bindings.enabled_tools.length} allowed` : 'off · agent may use every tool'}</span>
+                onchange={(e) => { bindings.enabled_tools = (e.currentTarget as HTMLInputElement).checked ? allToolNames(serverTools).filter(t => !isDestructive(t)) : []; }} />
+              <span><strong>Restrict tools</strong> — {restrictTools ? `${bindings.enabled_tools.length} of ${allToolNames(serverTools).length} allowed` : 'off · agent may use every tool below'}</span>
             </label>
 
-            {#if restrictTools}
+            {#if (bindings.mcp_servers ?? []).length === 0}
+              <p class="pf-hint">No MCP servers selected. Pick them in <strong>Configuration</strong>; their tools appear here.</p>
+            {:else if toolsLoading}
+              <p class="pf-hint">Discovering tools from {bindings.mcp_servers.length} MCP server{bindings.mcp_servers.length === 1 ? '' : 's'}…</p>
+            {:else}
               <div class="perm-groups">
-                {#each TOOL_GROUPS as g}
-                  {@const allOn = g.tools.every(t => bindings.enabled_tools.includes(t))}
-                  <div class="perm-group">
-                    <div class="perm-group-head">
-                      <span class="perm-group-name" class:danger={g.group === 'Destructive'}>{g.group}</span>
-                      <button class="perm-all" onclick={() => setGroup(g.tools, !allOn)}>{allOn ? 'Clear' : 'All'}</button>
+                {#each serverTools as srv (srv.server)}
+                  {#if srv.tools.length === 0}
+                    <div class="perm-group">
+                      <div class="perm-group-head"><span class="perm-group-name">{srv.name}</span></div>
+                      <p class="pf-hint perm-err">No tools listed: {srv.error}</p>
                     </div>
-                    <div class="perm-tools">
-                      {#each g.tools as t}
-                        <label class="perm-chk" class:on={bindings.enabled_tools.includes(t)}>
-                          <input type="checkbox" checked={bindings.enabled_tools.includes(t)} onchange={() => toggleTool(t)} />
-                          <span>{t}</span>
-                        </label>
-                      {/each}
+                  {/if}
+                  {#each toolSections(srv) as g (g.group)}
+                    {@const allOn = g.tools.every(t => toolAllowed(t))}
+                    <div class="perm-group">
+                      <div class="perm-group-head">
+                        <span class="perm-group-name" class:danger={g.group.endsWith('Destructive')}>{g.group} <span class="perm-count">{g.tools.length}</span></span>
+                        <button class="perm-all" onclick={() => setGroup(g.tools, !allOn)}>{allOn ? 'Clear' : 'All'}</button>
+                      </div>
+                      <div class="perm-tools">
+                        {#each g.tools as t (t)}
+                          <label class="perm-chk" class:on={toolAllowed(t)}>
+                            <input type="checkbox" checked={toolAllowed(t)} onchange={() => toggleTool(t)} />
+                            <span>{t}</span>
+                          </label>
+                        {/each}
+                      </div>
                     </div>
-                  </div>
+                  {/each}
                 {/each}
               </div>
-              <p class="pf-hint" style="margin-top:10px">Destructive tools are additionally blocked by the platform baseline for everyone — allowing one here still won't override that.</p>
+              <p class="pf-hint" style="margin-top:10px">Unticking a tool turns on the restriction. Destructive tools are additionally blocked by the platform baseline for everyone — allowing one here still won't override that.</p>
             {/if}
 
             <div class="perm-actions">
@@ -839,6 +866,8 @@
   .pf-select { width: auto; }
 
   /* Permissions tab */
+  .perm-count { font-weight: 400; opacity: 0.6; margin-left: 4px; }
+  .perm-err { color: var(--danger, #b42318); margin: 4px 0 0; }
   .perm-toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-2);
     padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-surface); cursor: pointer; }
   .perm-toggle input { width: 15px; height: 15px; accent-color: var(--spec-ink, #5530a8); }
