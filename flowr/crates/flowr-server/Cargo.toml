@@ -15,6 +15,7 @@ flowr-ce = { path = "../../../flowr-ce/crates/flowr-ce" }
 
 # Policy contract — map validated JWT claims → Principal at the AuthN layer (E0.4a)
 flowr-policy = { workspace = true }
+flowr-mcp-core = { workspace = true }
 
 # EE glue (optional): the Cedar policy hook. `--features ee` produces the
 # enforcing EE binary; the default CE build excludes it — no Cedar in CE.

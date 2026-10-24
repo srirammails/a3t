@@ -41,8 +41,9 @@ pub use tools::{
     authorize_mcp_tool_call, mcp_decision_id,
     // Dispatch for callers that already authorized — the gate runs exactly once.
     dispatch_tool_call,
-    // The POST endpoint for an MCP server URL (`…/sse` → `…/message`).
-    mcp_message_url,
+    // The POST endpoint for an MCP server URL (`…/sse` → `…/message`), and
+    // whether a URL is this FlowR (served in-process).
+    mcp_message_url, is_self_mcp_url, set_self_port,
 };
 
 // Re-export the identity type so MCP-server call sites can name the principal

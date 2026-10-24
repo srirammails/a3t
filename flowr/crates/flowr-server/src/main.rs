@@ -46,6 +46,8 @@ async fn main() -> anyhow::Result<()> {
     let port: u16 = get_arg(&args, "--port")
         .and_then(|p| p.parse().ok())
         .unwrap_or(3002);
+    // MCP URLs on this port are FlowR itself (served in-process).
+    flowr_mcp_core::set_self_port(port);
     let ui_enabled = args.contains(&"--ui".to_string());
     let config_path = get_arg(&args, "--config").unwrap_or_else(|| "config/flowr.yaml".to_string());
 

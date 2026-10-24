@@ -2295,6 +2295,38 @@ async fn get_resource(storage: &dyn StorageBackend, args: &Value) -> CallToolRes
 /// List the tool names an MCP server resource exposes, so the UI can offer a
 /// capability ceiling scoped to that server (not a static catalog). FlowR's own
 /// MCP surface (loopback URL) is resolved in-process via `get_tools()`.
+static SELF_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(3002);
+
+/// The port this FlowR serves MCP on (`--port`); servers call this at startup.
+pub fn set_self_port(port: u16) {
+    SELF_PORT.store(port, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether an MCP URL points back at this FlowR, so its tools are served in-process.
+///
+/// Host must be a loopback name or `flowr` (the service name) **and** the port this
+/// FlowR listens on. Matching on the host alone treated every MCP server on the same
+/// machine (e.g. ADB on 127.0.0.1:3000 in local dev) as FlowR itself, so its tools
+/// were silently replaced by FlowR's. An empty URL also means this FlowR.
+pub fn is_self_mcp_url(url: &str) -> bool {
+    let url = url.trim();
+    if url.is_empty() {
+        return true;
+    }
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let authority = rest.split(['/', '?']).next().unwrap_or("");
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) if !h.ends_with(']') || authority.starts_with('[') => (h, p.parse::<u16>().ok()),
+        _ => (authority, None),
+    };
+    let port = port.unwrap_or(if url.starts_with("https://") { 443 } else { 80 });
+    let host = host.to_ascii_lowercase();
+    let selfish = matches!(host.as_str(), "localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]")
+        || host == "flowr"
+        || host.starts_with("flowr.");
+    selfish && port == SELF_PORT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Where an MCP server takes JSON-RPC POSTs. Resources often store the SSE URL
 /// (`…/sse`, as A3T's defaults do); its POST endpoint is the sibling `…/message`.
 /// Any other URL gets `/message` appended unless it already ends with it — the rule
@@ -2387,12 +2419,7 @@ async fn list_mcp_tools(storage: &dyn StorageBackend, args: &Value) -> CallToolR
         .or_else(|| resource.config.get("endpoint"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let is_local = url.is_empty()
-        || url.contains("localhost")
-        || url.contains("127.0.0.1")
-        || url.contains("0.0.0.0")
-        || url.contains("flowr:3002");
-    if is_local {
+    if is_self_mcp_url(url) {
         // FlowR's own MCP surface — the tools this process serves.
         let names: Vec<String> = get_tools().into_iter().map(|t| t.name).collect();
         CallToolResult::json(json!({
@@ -2794,6 +2821,22 @@ fn mask_sensitive_fields(config: &mut Value) {
 #[cfg(test)]
 mod mcp_url_tests {
     use super::mcp_message_url;
+
+    #[test]
+    fn only_this_flowrs_own_port_is_self() {
+        use super::{is_self_mcp_url, set_self_port};
+        set_self_port(3002);
+        assert!(is_self_mcp_url(""));
+        assert!(is_self_mcp_url("http://localhost:3002/message"));
+        assert!(is_self_mcp_url("http://127.0.0.1:3002"));
+        assert!(is_self_mcp_url("http://flowr:3002/message"));
+        assert!(is_self_mcp_url("http://flowr.a3t.svc.cluster.local:3002/message"));
+        // Another server on the same machine is not this FlowR.
+        assert!(!is_self_mcp_url("http://127.0.0.1:3000/mcp/sse"));
+        assert!(!is_self_mcp_url("http://localhost:39001/mcp/message"));
+        assert!(!is_self_mcp_url("http://adb.a3t.svc.cluster.local:3000/mcp/message"));
+        assert!(!is_self_mcp_url("https://console.dev.a3t.io/message"));
+    }
 
     #[test]
     fn sse_urls_map_to_their_message_endpoint() {

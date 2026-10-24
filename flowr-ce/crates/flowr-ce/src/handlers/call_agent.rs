@@ -1518,7 +1518,7 @@ async fn resolve_agent_mcp_url(
 }
 
 fn is_local_mcp_url(url: &str) -> bool {
-    url.contains("localhost") || url.contains("127.0.0.1") || url.contains("0.0.0.0")
+    flowr_mcp_core::is_self_mcp_url(url)
 }
 
 /// Convert a `CallToolResult` (in-process handler output) into the `Value` the
