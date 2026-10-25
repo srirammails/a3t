@@ -154,7 +154,7 @@
     }
   });
   let messagesEl = $state<HTMLDivElement>();
-  let agents = $state<{ id: string; name: string; llm: string; target: string; ep_path: string; system_default: boolean; enabled_tools?: string[] }[]>([]);
+  let agents = $state<{ id: string; name: string; llm: string; target: string; ep_path: string; system_default: boolean; enabled_tools?: string[]; mcp_servers?: string[] }[]>([]);
   let selectedAgent = $state<string>(loadLS<string>(LS_AGENT, ''));
   let sessionId = $state<string>('');
 
@@ -238,6 +238,9 @@
             // different: absent is "never configured", empty is "configured down
             // to nothing".
             ...(Array.isArray(a?.enabled_tools) ? { enabled_tools: a.enabled_tools } : {}),
+            // The agent's MCP servers (Configuration tab), so the engine discovers and
+            // can call their tools; without them the chat wrapper falls back to FlowR's.
+            ...(a?.mcp_servers?.length ? { mcp_servers: a.mcp_servers } : {}),
           },
         };
       },
@@ -327,6 +330,7 @@
       // tool asks). Defaulting to [] here would silently restrict every agent
       // that had simply never been given a tool list.
       enabled_tools: Array.isArray(r.enabled_tools) ? r.enabled_tools : undefined,
+      mcp_servers: mcpServerRefs(r.mcp_servers ?? variablesOf(r).mcp_servers, r.namespace),
     }));
     if (!selectedAgent && agents.length > 0) {
       selectedAgent = (agents.find(a => a.system_default) ?? agents[0]).id;
@@ -734,6 +738,23 @@
   /// Resource bindings for an agent, whether the server sent an object or a
   /// JSON string. Both shapes occur: records written by the console are strings,
   /// and a malformed one must not take the page down.
+  /// The agent's `variables` (LLM prompt, MCP servers, …): object or JSON string, as above.
+  function variablesOf(r: any): Record<string, any> {
+    const v = r?.variables;
+    if (!v) return {};
+    if (typeof v === 'object') return v;
+    if (typeof v === 'string') {
+      try { return JSON.parse(v) ?? {}; } catch { return {}; }
+    }
+    return {};
+  }
+
+  /// Saved MCP servers as `ns/name` refs (the UI stores bare names in the agent's namespace).
+  function mcpServerRefs(raw: unknown, ns?: string): string[] {
+    const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+    return list.map(s => String(s).trim()).filter(Boolean).map(s => (s.includes('/') ? s : `${ns || 'a3t'}/${s}`));
+  }
+
   function bindingsOf(r: any): Record<string, any> {
     const rb = r?.resource_bindings;
     if (!rb) return {};
