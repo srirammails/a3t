@@ -192,6 +192,57 @@ impl TriggerManager {
         results
     }
 
+    /// Deliver one ADB topic message (`message` = the published fields) to an
+    /// `adb_topic` trigger's targets. `None` if the trigger is gone or disabled.
+    pub async fn deliver_topic_message(
+        &self,
+        trigger_id: &str,
+        offset: u64,
+        message: Value,
+        agent_sender: &dyn AgentMessageSender,
+        workflow_executor: &dyn WorkflowExecutor,
+    ) -> Option<TriggerDeliveryResult> {
+        let trigger = self.triggers.read().await.get(trigger_id).cloned()?;
+        if !trigger.enabled {
+            return None;
+        }
+        let TriggerConfig::AdbTopic { topic, message_template, .. } = &trigger.config else { return None };
+        let content = message_template.clone().unwrap_or_else(|| {
+            format!("Message on topic {}:\n{}", topic, serde_json::to_string_pretty(&message).unwrap_or_default())
+        });
+        // Workflow targets get the message's fields, plus where it came from.
+        let mut input = message;
+        if let Some(m) = input.as_object_mut() {
+            m.insert("_topic".into(), json!(topic));
+            m.insert("_offset".into(), json!(offset));
+        }
+        Some(
+            self.deliver_to_targets(
+                &trigger.id,
+                &trigger.name,
+                &trigger.targets,
+                &content,
+                Some(input),
+                &format!("adb_topic:{}", topic),
+                agent_sender,
+                workflow_executor,
+            )
+            .await,
+        )
+    }
+
+    /// Record (or clear) the ADB subscription an `adb_topic` trigger reads.
+    pub async fn set_topic_subscription(&self, trigger_id: &str, subscription: Option<String>) -> bool {
+        let mut triggers = self.triggers.write().await;
+        match triggers.get_mut(trigger_id).map(|t| &mut t.config) {
+            Some(TriggerConfig::AdbTopic { subscription: s, .. }) => {
+                *s = subscription;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Deliver an internal event to matching triggers
     pub async fn deliver_event(
         &self,

@@ -54,6 +54,24 @@ pub enum TriggerConfig {
         timezone: Option<String>,
         message: String,
     },
+    /// ADB topic — fires once per message published to `topic` on the ADB resource
+    /// `resource` (ADB stage F, F5). FlowR holds its own subscription (kept here once
+    /// made, so a restart resumes), so every FlowR instance with this trigger sees
+    /// every message.
+    #[serde(rename = "adb_topic")]
+    AdbTopic {
+        /// ADB resource (`namespace/name`, or `name` in `default`)
+        resource: String,
+        topic: String,
+        /// Field = value conditions on the message (optional)
+        #[serde(default)]
+        filter: Option<Value>,
+        #[serde(default)]
+        message_template: Option<String>,
+        /// The ADB subscription id, set when FlowR first subscribes
+        #[serde(default)]
+        subscription: Option<String>,
+    },
     /// Internal event — fires when matching events are emitted
     Event {
         source: String,

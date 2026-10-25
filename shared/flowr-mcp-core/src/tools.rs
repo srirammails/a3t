@@ -716,7 +716,7 @@ conversation, because the request the user would approve is never raised."
         },
         Tool {
             name: "create_trigger".to_string(),
-            description: "Create a new trigger (webhook, cron, or event).".to_string(),
+            description: "Create a new trigger (webhook, cron, event, or adb_topic — run targets once per message published to an ADB topic).".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -735,7 +735,7 @@ conversation, because the request the user would approve is never raised."
                     },
                     "config": {
                         "type": "object",
-                        "description": "Trigger config: {type: 'webhook', path: '/...'} or {type: 'cron', expression: '*/5 * * * *'} or {type: 'event', source: '...'}"
+                        "description": "Trigger config: {type: 'webhook', path: '/...'} or {type: 'cron', expression: '*/5 * * * *'} or {type: 'event', source: '...'} or {type: 'adb_topic', resource: 'ns/adb-resource', topic: 'orders', filter?: {field: value}}"
                     },
                     "targets": {
                         "type": "array",

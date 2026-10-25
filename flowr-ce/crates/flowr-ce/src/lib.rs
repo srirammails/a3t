@@ -13,6 +13,7 @@ pub mod ops;
 pub mod integrity;
 pub mod handlers;
 pub mod registry;
+pub mod topic_triggers;
 
 use std::sync::Arc;
 
@@ -97,7 +98,8 @@ pub async fn init_storage(data_dir: &str) -> anyhow::Result<Arc<dyn StorageBacke
     Ok(storage)
 }
 
-/// Restore persisted triggers from state store
+/// Restore persisted triggers from state store, then start the `adb_topic`
+/// trigger readers (they follow trigger changes from then on).
 pub async fn restore_triggers(storage: &Arc<dyn StorageBackend>) {
     if let Ok(Some(data)) = storage.state().get("_triggers").await {
         match flowr_ce_agents::trigger_manager().import_all(&data).await {
@@ -105,6 +107,7 @@ pub async fn restore_triggers(storage: &Arc<dyn StorageBackend>) {
             Err(e) => warn!(error = %e, "Failed to restore triggers"),
         }
     }
+    topic_triggers::spawn(Arc::clone(storage));
 }
 
 /// Persist triggers to state store
