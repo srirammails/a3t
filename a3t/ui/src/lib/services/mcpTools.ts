@@ -22,24 +22,47 @@ export function serverRef(s: string, ns = 'a3t'): string {
   return v.includes('/') ? v : `${ns}/${v}`;
 }
 
-/** Discover every server's tools in parallel, in the order given. */
+async function listTools(namespace: string, name: string): Promise<{ ok: boolean; raw: any; error?: string }> {
+  const res = await mcpCall('list_mcp_tools', { namespace, name });
+  if (!res.ok) return { ok: false, raw: {}, error: res.error ?? 'list_mcp_tools failed' };
+  let raw: any = res.data;
+  if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
+  return { ok: true, raw };
+}
+
+/**
+ * Discover every server's tools in parallel, in the order given. A bare name is
+ * looked up in `ns` (the agent's or template's namespace), then `a3t` (where A3T's
+ * resources live), then `default` — the order FlowR's agent runtime resolves them in.
+ */
 export async function discoverServerTools(servers: string[], ns = 'a3t'): Promise<ServerTools[]> {
   return Promise.all(
     servers.map(async (s): Promise<ServerTools> => {
-      const ref = serverRef(s, ns);
-      const i = ref.indexOf('/');
-      const [namespace, name] = [ref.slice(0, i), ref.slice(i + 1)];
-      const res = await mcpCall('list_mcp_tools', { namespace, name });
-      if (!res.ok) return { server: ref, name, tools: [], local: false, error: res.error ?? 'list_mcp_tools failed' };
-      let raw: any = res.data;
-      if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = {}; } }
+      const v = String(s).trim();
+      const slash = v.indexOf('/');
+      const name = slash >= 0 ? v.slice(slash + 1) : v;
+      const namespaces = slash >= 0 ? [v.slice(0, slash)] : [...new Set([ns, 'a3t', 'default'])];
+      let found = { ok: false, raw: {} as any, error: undefined as string | undefined };
+      let namespace = namespaces[0];
+      for (const n of namespaces) {
+        namespace = n;
+        found = await listTools(n, name);
+        // Not this namespace: try the next. Anything else (tools, or a real error) is the answer.
+        if (!(found.ok && /no MCP server resource/.test(found.raw?.error ?? ''))) break;
+      }
+      const ref = `${namespace}/${name}`;
+      if (!found.ok) return { server: ref, name, tools: [], local: false, error: found.error };
+      const raw = found.raw;
       const tools = [...new Set<string>((raw?.tools ?? []).map(String))].sort();
+      const notFound = /no MCP server resource/.test(raw?.error ?? '');
       return {
         server: ref,
         name,
         tools,
         local: raw?.transport === 'in-process',
-        error: raw?.error ?? (tools.length === 0 ? 'the server reported no tools' : undefined),
+        error: notFound
+          ? `no MCP server resource '${name}' in ${namespaces.join(', ')}`
+          : raw?.error ?? (tools.length === 0 ? 'the server reported no tools' : undefined),
       };
     }),
   );
@@ -57,6 +80,7 @@ export const isDestructive = (t: string) => /delete|remove|drop|purge|destroy|cl
  * Read / Run / Author / Destructive split; any other server is one section.
  */
 export function toolSections(s: ServerTools): { group: string; tools: string[] }[] {
+  if (s.tools.length === 0) return [];   // shown as the server's error instead
   if (!s.local) return [{ group: s.name, tools: s.tools }];
   const groups: Record<string, string[]> = { Read: [], Run: [], Author: [], Destructive: [] };
   for (const t of s.tools) {
