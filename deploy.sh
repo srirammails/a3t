@@ -106,6 +106,9 @@ binary_for() { echo "$BUILD_DIR/bin/$1"; }
 step_build() {
     local target="$1"
     mkdir -p "$BUILD_DIR/bin"
+    # Keep build dirs under budget: they're on the node disk, and at ~200 GB the
+    # kubelet evicted every pod on the node (2026-10-25).
+    [ -x "$HOME/bin/build-budget.sh" ] && BUILD_DIR="$BUILD_DIR" "$HOME/bin/build-budget.sh"
     case "$target" in
         flowr-ce|flowr-ee)
             local features=()
