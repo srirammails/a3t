@@ -137,7 +137,15 @@ impl AgentMemory {
         namespace: &str,
         session_id: &str,
     ) -> Result<Self, String> {
-        let url = resolve_adb_url(storage, resource).await?;
+        // A bare name (A3T's Memory tab saves one) is looked up in `default`, then in
+        // `a3t`, as agent MCP servers are.
+        let url = match resource.contains('/') {
+            true => resolve_adb_url(storage, resource).await?,
+            false => match resolve_adb_url(storage, resource).await {
+                Ok(u) => u,
+                Err(_) => resolve_adb_url(storage, &format!("a3t/{resource}")).await?,
+            },
+        };
         Ok(Self { client, url, namespace: namespace.to_string(), session_id: session_id.to_string() })
     }
 

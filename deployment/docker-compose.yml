@@ -42,9 +42,25 @@ services:
     networks:
       - flowr-network
 
+  # ADB - agent memory (A3T resources `a3t/agent-memory`, `a3t/agent-memory-mcp`
+  # point at http://adb:3000). Durable: the log and the Lance store live in adb-data.
+  adb:
+    image: ${ADB_IMAGE:-ghcr.io/srirammails/adb:2026-10-25-h}
+    container_name: flowr-adb
+    ports:
+      - "3005:3000"   # HTTP: /query, /mcp, /subscriptions (3000 on the host is Iggy's)
+    volumes:
+      - adb-data:/data/adb
+    environment:
+      - ADB_DATA_DIR=/data/adb
+      - RUST_LOG=info,lance=warn
+    networks:
+      - flowr-network
+
 volumes:
   iggy-data:
   dragonfly-data:
+  adb-data:
 
 networks:
   flowr-network:

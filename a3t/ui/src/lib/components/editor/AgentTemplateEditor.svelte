@@ -398,6 +398,13 @@
   $effect(() => { onsection?.(activeTab); });
 
   // Derived config helpers for specific tabs
+  // What the agent engine does when a tier is left unset (FlowR agent_memory.rs, F3).
+  const MEMORY_TIER_DEFAULTS: Record<string, { read: boolean; write: boolean }> = {
+    working: { read: true, write: true },
+    episodic: { read: true, write: true },
+    semantic: { read: true, write: false },
+    procedural: { read: false, write: false },
+  };
   function cfgGet(key: string): any { return configValues[key]; }
   function cfgSet(key: string, val: any) { if (val === undefined || val === '') delete configValues[key]; else configValues[key] = val; configValues = { ...configValues }; emitChange(); }
   function cfgGetArr(key: string): any[] { return (configValues[key] as any[]) ?? []; }
@@ -982,20 +989,21 @@
     <div class="sub-label">MEMORY TIERS</div>
     {#each ['working', 'episodic', 'semantic', 'procedural'] as tier}
       {@const t = (cfgGetObj('memory_config')[tier] ?? {}) as Record<string, any>}
+      {@const d = MEMORY_TIER_DEFAULTS[tier]}
       <div class="mem-tier">
         <span class="mem-tier-name">{tier}</span>
-        <label class="mem-chk"><input type="checkbox" checked={t.read !== false}
+        <label class="mem-chk"><input type="checkbox" checked={t.read ?? d.read}
           onchange={(e) => { const obj = { ...cfgGetObj('memory_config') }; obj[tier] = { ...(obj[tier] ?? {}), read: e.currentTarget.checked }; cfgSet('memory_config', obj); }} /> read</label>
-        <label class="mem-chk"><input type="checkbox" checked={t.write === true}
+        <label class="mem-chk"><input type="checkbox" checked={t.write ?? d.write}
           onchange={(e) => { const obj = { ...cfgGetObj('memory_config') }; obj[tier] = { ...(obj[tier] ?? {}), write: e.currentTarget.checked }; cfgSet('memory_config', obj); }} /> write</label>
       </div>
     {/each}
 
     <div class="mem-hint">
-      <strong>Working</strong> — current turn scratchpad<br/>
-      <strong>Episodic</strong> — conversation history across sessions<br/>
-      <strong>Semantic</strong> — facts and knowledge<br/>
-      <strong>Procedural</strong> — learned patterns, lookup before LLM
+      <strong>Working</strong> — this session's user turns<br/>
+      <strong>Episodic</strong> — this session's replies<br/>
+      <strong>Semantic</strong> — facts (saved with the <code>remember</code> tool); read puts the newest into the prompt<br/>
+      <strong>Procedural</strong> — when read is on, a procedure matching the request answers without the LLM
     </div>
   </div>
 
