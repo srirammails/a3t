@@ -117,30 +117,7 @@ fn default_temperature() -> f64 { 0.7 }
 fn default_memory_namespace() -> String { "default".to_string() }
 fn default_ttl() -> u64 { 1800 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct MemoryTierConfig {
-    #[serde(default)]
-    working: TierMode,
-    #[serde(default)]
-    episodic: TierMode,
-    #[serde(default)]
-    semantic: TierMode,
-    #[serde(default)]
-    procedural: TierMode,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TierMode {
-    #[serde(default = "bool_true")]
-    read: bool,
-    #[serde(default = "bool_true")]
-    write: bool,
-}
-fn bool_true() -> bool { true }
-
-impl Default for TierMode {
-    fn default() -> Self { Self { read: true, write: true } }
-}
+use super::agent_memory::{AgentMemory, MemoryTierConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ToolFlowRef {
@@ -547,16 +524,47 @@ impl TaskHandler for AgentHandler {
         fire_after(self, ctx, "load_session", "call:state:get").await;
 
         // ── Phase 3: RECALL MEMORY ─────────────────────────
-        fire_before(self, ctx, "recall_memory", "call:clawdb").await;
-        // Memory recall via ClawDB is optional — only if memory_resource is configured
-        // TODO: implement ClawDB AQL queries for working/episodic/semantic/procedural
-        if config.config.memory_resource.is_some() {
-            debug!("memory recall: skipped (ClawDB integration pending in call:a3t:agent)");
+        // Only with `memory_resource` (an ADB resource): agent_memory.rs, F1–F2.
+        fire_before(self, ctx, "recall_memory", "call:adb").await;
+        let memory = match config.config.memory_resource.as_deref() {
+            Some(resource) => match AgentMemory::connect(
+                storage.as_ref(),
+                http_client.clone(),
+                resource,
+                &config.config.memory_namespace,
+                &config.session_id,
+            )
+            .await
+            {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    warn!(error = %e, "agent memory unavailable; this turn runs without it");
+                    None
+                }
+            },
+            None => None,
+        };
+        let recalled = match &memory {
+            Some(m) => Some(m.recall(&config.config.memory_config, &config.message).await),
+            None => None,
+        };
+        if let Some(r) = &recalled {
+            debug!(facts = r.facts.len(), working = r.working.len(), episodic = r.episodic.len(), "memory recalled");
+            if let Some(section) = r.prompt_section() {
+                state.system_prompt.push_str(&section);
+            }
         }
-        fire_after(self, ctx, "recall_memory", "call:clawdb").await;
+        fire_after(self, ctx, "recall_memory", "call:adb").await;
 
         // ── Phase 4: PROCEDURAL CHECK ──────────────────────
-        // Procedural memory short-circuit (if recall returned a match)
+        // A procedure whose pattern matches the message well enough answers without
+        // the LLM — only when PROCEDURAL reads are on (F4, off by default).
+        if config.config.memory_config.procedural_read() {
+            if let Some(answer) = recalled.as_ref().and_then(|r| r.procedure_answer()) {
+                state.procedural_hit = true;
+                state.agent_response = Some(answer);
+            }
+        }
         if state.procedural_hit {
             debug!("procedural hit — skipping reasoning loop");
         }
@@ -1054,11 +1062,19 @@ impl TaskHandler for AgentHandler {
 
         // ── Phase 8: STORE MEMORY ──────────────────────────
         ctx.context = state.to_context_value(&config);
-        fire_before(self, ctx, "store_memory", "call:clawdb").await;
-        if config.config.memory_resource.is_some() {
-            debug!("memory store: skipped (ClawDB integration pending in call:a3t:agent)");
+        fire_before(self, ctx, "store_memory", "call:adb").await;
+        if let Some(m) = &memory {
+            m.store_turn(
+                &config.config.memory_config,
+                config.config.ttl,
+                &config.message,
+                state.agent_response.as_deref().unwrap_or_default(),
+                state.tool_calls_made,
+                state.iteration,
+            )
+            .await;
         }
-        fire_after(self, ctx, "store_memory", "call:clawdb").await;
+        fire_after(self, ctx, "store_memory", "call:adb").await;
 
         // ── Phase 9: SAVE SESSION ──────────────────────────
         fire_before(self, ctx, "save_session", "call:state:set").await;

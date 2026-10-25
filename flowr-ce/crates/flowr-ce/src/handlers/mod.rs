@@ -8,6 +8,7 @@
 //! - call:state:get/set/delete — state store operations
 //! - run:script — inline script execution (Lua, JS, Python)
 
+pub mod agent_memory;
 pub mod call_adb;
 pub mod call_agent;
 pub mod call_lancedb;
