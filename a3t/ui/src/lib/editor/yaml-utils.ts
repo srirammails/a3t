@@ -41,14 +41,41 @@ export function findPrimaryCall(workflow: SWFWorkflow): { call: string; with?: R
   return null
 }
 
+const CONFIG_DEFAULTS_RE = /^\$\{\s*(\{[\s\S]*\})\s*\+\s*\(\s*\.config\s*\/\/\s*\{\}\s*\)\s*\}$/
+
 /**
- * Get config from the primary call task's with.config.
+ * A template's config as DEFAULTS under the caller's: `${ {...} + (.config // {}) }`.
+ * jq's `+` merges objects with the right side winning, so each agent's own config
+ * (LLM, MCP servers, tool ceiling — sent by the chat wrapper) overrides the template,
+ * and the template fills in whatever the agent doesn't set. A literal `config:`
+ * here replaced every agent's config (e.g. no LLM → `default-llm`).
+ */
+export function configDefaultsExpr(defaults: Record<string, unknown>): string {
+  return `\${ ${JSON.stringify(defaults)} + (.config // {}) }`
+}
+
+/** The defaults in a `configDefaultsExpr` string, or null if `v` isn't one. */
+export function parseConfigDefaults(v: unknown): Record<string, unknown> | null {
+  if (typeof v !== 'string') return null
+  const m = v.trim().match(CONFIG_DEFAULTS_RE)
+  if (!m) return null
+  try {
+    const o = JSON.parse(m[1])
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Get config from the primary call task's with.config (a literal object, or the
+ * template defaults of a `configDefaultsExpr`).
  */
 export function getCallConfig(workflow: SWFWorkflow): Record<string, unknown> {
   const call = findPrimaryCall(workflow)
   if (!call?.with) return {}
   const w = call.with as Record<string, unknown>
-  return (w.config ?? w) as Record<string, unknown>
+  return (parseConfigDefaults(w.config) ?? w.config ?? w) as Record<string, unknown>
 }
 
 /**

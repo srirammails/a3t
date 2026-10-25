@@ -6,6 +6,7 @@
   import SchemaConfigForm from './SchemaConfigForm.svelte';
   import { getEditorContext, initEditorContext, getFunctionManifest } from '$lib/editor/context';
   import { validateWithParams } from '$lib/editor/schema-utils';
+  import { configDefaultsExpr, parseConfigDefaults } from '$lib/editor/yaml-utils';
   import type { FunctionManifest } from '$lib/editor/types';
 
   let {
@@ -498,7 +499,7 @@
           // cfg may be an expression string like "${ .config }" — no literal values
           // to show. Fall back to the agent's seeded config so the form reflects the
           // agent (not a blank template).
-          configValues = (cfg && typeof cfg === 'object') ? cfg : ({ ...(configSeed ?? {}) });
+          configValues = (cfg && typeof cfg === 'object') ? cfg : (parseConfigDefaults(cfg) ?? { ...(configSeed ?? {}) });
           withValues = rest;
           break;
         }
@@ -568,8 +569,10 @@
 
     // Build the call task with values
     const callType = detectCallType(template) ?? 'a3t:agent';
-    const withBlock: any = {
-      config: Object.keys(configValues).length > 0 ? configValues : {
+    // The template's values are DEFAULTS merged under each caller's config (see
+    // configDefaultsExpr): a literal config here overrode every agent's own LLM,
+    // MCP servers and tool ceiling.
+    const templateDefaults: Record<string, unknown> = Object.keys(configValues).length > 0 ? configValues : {
         system_prompt: 'You are a helpful assistant.',
         max_iterations: 10,
         max_tokens: 4096,
@@ -579,9 +582,12 @@
         mcp_servers: [],
         memory_namespace: name || 'default',
         ttl: 1800,
-      },
+      };
+    const withBlock: any = {
+      config: configDefaultsExpr(templateDefaults),
       session_id: '${ .session_id // "default" }',
       message: '${ .message }',
+      ui_context: '${ .ui_context }',
     };
 
     doc.do = [{
