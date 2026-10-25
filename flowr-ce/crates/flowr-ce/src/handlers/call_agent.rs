@@ -612,7 +612,10 @@ impl TaskHandler for AgentHandler {
             }
 
             // Discover tools from MCP servers (tools/list) and advertise them to the LLM.
-            // Tool calls the LLM makes for these names are dispatched via call_mcp_tool.
+            // Tool calls the LLM makes for these names are dispatched via call_mcp_tool,
+            // to the server that advertised the tool (`tool_server`). Dispatching every
+            // call to the first server sent e.g. ADB's `recall` to FlowR ("Unknown tool").
+            let mut tool_server: HashMap<String, String> = HashMap::new();
             for server in &config.config.mcp_servers {
                 match list_mcp_tools(&http_client, &storage, &agent_principal, server).await {
                     Ok(mcp_tools) => {
@@ -620,6 +623,11 @@ impl TaskHandler for AgentHandler {
                         for t in mcp_tools {
                             let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
                             if name.is_empty() { continue; }
+                            if let Some(first) = tool_server.get(name) {
+                                warn!(tool = %name, server = %server, kept = %first, "MCP tool name offered by two servers; calls go to the first");
+                                continue;
+                            }
+                            tool_server.insert(name.to_string(), server.clone());
                             let description = t.get("description").and_then(|v| v.as_str()).unwrap_or("");
                             let input_schema = t.get("inputSchema")
                                 .or_else(|| t.get("input_schema"))
@@ -730,9 +738,11 @@ impl TaskHandler for AgentHandler {
                             // Execute as nested workflow
                             execute_tool_flow(&storage, &flow_ref.namespace, &flow_ref.name, tool_input.clone(), ctx).await
                         } else {
-                            // Execute via MCP
-                            let mcp_resource = config.config.mcp_servers.first()
-                                .map(|s| s.as_str())
+                            // Execute via MCP, on the server that advertised this tool
+                            // (else the first server, as before, for tools the LLM names
+                            // without discovery having listed them).
+                            let mcp_resource = tool_server.get(tool_name).map(|s| s.as_str())
+                                .or_else(|| config.config.mcp_servers.first().map(|s| s.as_str()))
                                 .unwrap_or("agent-flows");
                             // E2 #3: build the agent's template ceiling from its
                             // config — exposedTools = the tools it declares, enabledTools
