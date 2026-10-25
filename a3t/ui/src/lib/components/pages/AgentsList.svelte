@@ -57,7 +57,7 @@
       if (cfg.llm_resource) newAgent.llm = String(cfg.llm_resource).includes('/') ? cfg.llm_resource : `a3t/${cfg.llm_resource}`;
       if (Array.isArray(cfg.mcp_servers)) newAgent.mcp_servers = cfg.mcp_servers;
       // Inherit the template's capability ceiling as the new agent's default.
-      newAgent.enabled_tools = Array.isArray(cfg.enabled_tools) ? [...cfg.enabled_tools] : [];
+      newAgent.enabled_tools = Array.isArray(cfg.enabled_tools) ? [...cfg.enabled_tools] : null;
     }
   }
 
@@ -78,7 +78,7 @@
   let newAgent = $state({
     name: '', namespace: 'a3t', template_id: '', template_version: '1.0.0',
     mode: 'session', target: '', ep_path: '',
-    llm: 'a3t/claude-cli-max', mcp_servers: [] as string[], enabled_tools: [] as string[],
+    llm: 'a3t/claude-cli-max', mcp_servers: [] as string[], enabled_tools: null as string[] | null,
   });
   let creating = $state(false);
 
@@ -177,7 +177,7 @@
     // Endpoint: selected existing trigger path, else auto /agent/{id}/chat (created below).
     const usingExisting = !!newAgent.ep_path && triggerOptions.some(t => t.value === newAgent.ep_path);
     const epPath = newAgent.ep_path || `/agent/${id}/chat`;
-    const vars = { target, ep_path: epPath, mcp_servers: newAgent.mcp_servers, enabled_tools: newAgent.enabled_tools ?? [] };
+    const vars = { target, ep_path: epPath, mcp_servers: newAgent.mcp_servers, enabled_tools: newAgent.enabled_tools ?? null };
     const resource_bindings = JSON.stringify({ llm: newAgent.llm });
     const res = await execFlow('a3t-agents-create', 'a3t', {
       org_id: 'org-default', user_id: 'usr-superadmin', timestamp: new Date().toISOString(),
@@ -201,7 +201,7 @@
         await loadTriggerOptions();
       }
       creatingNew = false;
-      newAgent = { name: '', namespace: 'a3t', template_id: '', template_version: '1.0.0', mode: 'session', target: '', ep_path: '', llm: 'a3t/claude-cli-max', mcp_servers: [], enabled_tools: [] };
+      newAgent = { name: '', namespace: 'a3t', template_id: '', template_version: '1.0.0', mode: 'session', target: '', ep_path: '', llm: 'a3t/claude-cli-max', mcp_servers: [], enabled_tools: null };
       await loadAgents();
       selectAgent(id);
     } else { error = res.error ?? 'Create failed'; }
@@ -254,7 +254,7 @@
     llm_resource: bindings.llm ? String(bindings.llm).split('/').pop() : '',
     system_prompt: bindings.system_prompt ?? '',
     mcp_servers: bindings.mcp_servers ?? [],
-    enabled_tools: bindings.enabled_tools ?? [],
+    enabled_tools: bindings.enabled_tools ?? undefined,
     max_iterations: bindings.max_iterations,
     temperature: bindings.temperature,
   });
@@ -281,14 +281,15 @@
       target: vars.target ?? '',
       ep_path: vars.ep_path ?? '',
       // Capability ceiling: an allow-list of tool names this agent may invoke.
-      // Empty = unrestricted (may use every tool its MCP servers expose).
-      enabled_tools: Array.isArray(vars.enabled_tools) ? [...vars.enabled_tools] : [],
+      // null = unrestricted (every tool its MCP servers expose); a list, even an
+      // empty one, = only those tools — the runtime denies the rest.
+      enabled_tools: Array.isArray(vars.enabled_tools) ? [...vars.enabled_tools] : null,
     };
   }
 
   // The tools of the agent's MCP servers, discovered with list_mcp_tools whenever the
   // selection changes (FlowR's own tools in-process, other servers via tools/list).
-  // enabled_tools empty = unrestricted; non-empty = the only tools the agent may use.
+  // enabled_tools null = unrestricted; a list (even empty) = the only tools the agent may use.
   let serverTools = $state<ServerTools[]>([]);
   let toolsLoading = $state(false);
   let _toolsKey = '';
@@ -305,18 +306,22 @@
       toolsLoading = false;
     });
   });
-  let restrictTools = $derived((bindings.enabled_tools?.length ?? 0) > 0);
-  const toolAllowed = (t: string) => !restrictTools || bindings.enabled_tools.includes(t);
+  let restrictTools = $derived(Array.isArray(bindings.enabled_tools));
+  const toolAllowed = (t: string) => !restrictTools || (bindings.enabled_tools ?? []).includes(t);
+  // Every tool allowed again → null (unrestricted) rather than the full list.
+  function setAllowed(s: Set<string>) {
+    bindings.enabled_tools = allToolNames(serverTools).every(t => s.has(t)) ? null : [...s];
+  }
   function toggleTool(name: string) {
     // Unrestricted → materialise "everything" before removing one tool.
     const s = new Set<string>(restrictTools ? bindings.enabled_tools : allToolNames(serverTools));
     s.has(name) ? s.delete(name) : s.add(name);
-    bindings.enabled_tools = [...s];
+    setAllowed(s);
   }
   function setGroup(tools: string[], on: boolean) {
     const s = new Set<string>(restrictTools ? bindings.enabled_tools : allToolNames(serverTools));
     for (const t of tools) { on ? s.add(t) : s.delete(t); }
-    bindings.enabled_tools = [...s];
+    setAllowed(s);
   }
 
   // Re-init the form once per agent selection (after templates have loaded)
@@ -352,7 +357,7 @@
     vars.mcp_servers = bindings.mcp_servers;
     vars.target = bindings.target;
     vars.ep_path = bindings.ep_path;
-    vars.enabled_tools = bindings.enabled_tools ?? [];
+    vars.enabled_tools = bindings.enabled_tools ?? null;
     const res = await execFlow('a3t-agents-update', 'a3t', {
       id: agent.id, org_id: 'org-default', user_id: 'usr-superadmin', timestamp: new Date().toISOString(),
       data: {
@@ -651,8 +656,8 @@
 
             <label class="perm-toggle">
               <input type="checkbox" checked={restrictTools}
-                onchange={(e) => { bindings.enabled_tools = (e.currentTarget as HTMLInputElement).checked ? allToolNames(serverTools).filter(t => !isDestructive(t)) : []; }} />
-              <span><strong>Restrict tools</strong> — {restrictTools ? `${bindings.enabled_tools.length} of ${allToolNames(serverTools).length} allowed` : 'off · agent may use every tool below'}</span>
+                onchange={(e) => { bindings.enabled_tools = (e.currentTarget as HTMLInputElement).checked ? allToolNames(serverTools).filter(t => !isDestructive(t)) : null; }} />
+              <span><strong>Restrict tools</strong> — {restrictTools ? `${(bindings.enabled_tools ?? []).length} of ${allToolNames(serverTools).length} allowed` : 'off · agent may use every tool below'}</span>
             </label>
 
             {#if (bindings.mcp_servers ?? []).length === 0}

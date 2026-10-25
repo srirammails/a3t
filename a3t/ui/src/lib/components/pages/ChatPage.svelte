@@ -76,7 +76,7 @@
   // endpoint (EP) runs the shared a3t-chat-agent flow on that agent's bound LLM.
   // The EP is resolved from its trigger (agent-{id}-chat) → stored ep_path → /agent/{id}/chat.
   // Selection defaults to the system-default agent (variables.system_default, else agt-default).
-  let agents = $state<{ id: string; name: string; llm: string; target: string; ep_path: string; system_default: boolean; enabled_tools: string[]; mcp_servers: string[] }[]>([]);
+  let agents = $state<{ id: string; name: string; llm: string; target: string; ep_path: string; system_default: boolean; enabled_tools?: string[]; mcp_servers: string[] }[]>([]);
   let selectedAgent = $state<string>(loadLS<string>(LS_AGENT, ''));
   let epByAgent = $state<Record<string, string>>({});   // agent id → endpoint path from its trigger
 
@@ -96,7 +96,7 @@
         try { vars = JSON.parse(r.variables || '{}'); } catch {}
         let rb: any = {};
         try { rb = JSON.parse(r.resource_bindings || '{}'); } catch {}
-        return { id: r.id, name: r.name, llm: rb.llm || '', target: vars.target || '', ep_path: vars.ep_path || '', system_default: !!vars.system_default, enabled_tools: Array.isArray(vars.enabled_tools) ? vars.enabled_tools : [], mcp_servers: mcpServerRefs(vars.mcp_servers, r.namespace) };
+        return { id: r.id, name: r.name, llm: rb.llm || '', target: vars.target || '', ep_path: vars.ep_path || '', system_default: !!vars.system_default, enabled_tools: Array.isArray(vars.enabled_tools) ? vars.enabled_tools : undefined, mcp_servers: mcpServerRefs(vars.mcp_servers, r.namespace) };
       });
       // Default the selection to the system-default agent (else the stored one, else first).
       if (!selectedAgent || !agents.some(a => a.id === selectedAgent)) {
@@ -269,7 +269,8 @@
     const body: Record<string, any> = { message: text, session_id: `${selectedAgent}:${sessionId}` };
     if (a?.llm) body.llm_resource = a.llm;
     // Forward the agent's capability ceiling so the policy engine enforces it in chat too.
-    if (a?.enabled_tools?.length) body.enabled_tools = a.enabled_tools;
+    // Absent = unrestricted; a list, even an empty one, is the agent's allow-list.
+    if (Array.isArray(a?.enabled_tools)) body.enabled_tools = a.enabled_tools;
     // The agent's MCP servers (Configuration tab), so the engine discovers their tools.
     if (a?.mcp_servers?.length) body.mcp_servers = a.mcp_servers;
     setPending({ sessionId, agent: selectedAgent, seq: 0 });

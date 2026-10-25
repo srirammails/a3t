@@ -352,7 +352,7 @@
         if (llm && body.llm_resource == null) body.llm_resource = String(llm).includes('/') ? llm : `a3t/${llm}`;
         const sp = cfgGet('system_prompt'); if (sp && body.system_prompt == null) body.system_prompt = sp;
         const mcps = cfgGetArr('mcp_servers'); if (mcps.length && body.mcp_servers == null) body.mcp_servers = mcps;
-        const et = cfgGetArr('enabled_tools'); if (et.length && body.enabled_tools == null) body.enabled_tools = et;
+        if (permRestricted() && body.enabled_tools == null) body.enabled_tools = cfgGetArr('enabled_tools');
         const res = await mcpCall('execute_flow', { name: tname, namespace: tns, input: body });
         if (!res.ok) { testError = res.error ?? 'Execute failed'; testRunning = false; return; }
         const text = typeof res.data === 'string' ? res.data : JSON.stringify(res.data ?? '');
@@ -406,7 +406,8 @@
 
   // Capability ceiling (Permissions tab). The tool list is DISCOVERED from the
   // template's selected MCP servers (list_mcp_tools), not a static catalog.
-  // `enabled_tools` empty = unrestricted; non-empty = the only tools an agent may use.
+  // `enabled_tools` absent = unrestricted; a list (even an empty one) = the only tools
+  // an agent may use. That is how the runtime reads it: an empty list allows nothing.
   let serverTools = $state<ServerTools[]>([]);
   let availableTools = $derived(allToolNames(serverTools));
   let toolsLoading = $state(false);
@@ -424,7 +425,7 @@
       // Reconcile: drop any allowed tool that the current servers no longer expose.
       const set = new Set(allToolNames(found));
       const cur = cfgGetArr('enabled_tools');
-      if (cur.length) {
+      if (permRestricted()) {
         const kept = cur.filter((t: string) => set.has(t));
         if (kept.length !== cur.length) cfgSetArr('enabled_tools', kept);
       }
@@ -432,16 +433,16 @@
     });
   });
   const isDestructive = (t: string) => /delete|remove|drop|purge|destroy|clear|wipe/i.test(t);
-  // A tool is allowed when the list is empty (unrestricted) or explicitly present.
-  function permAllowed(t: string) { const e = cfgGetArr('enabled_tools'); return e.length === 0 || e.includes(t); }
+  function permRestricted() { return Array.isArray(cfgGet('enabled_tools')); }
+  // A tool is allowed when there is no list (unrestricted) or it is on the list.
+  function permAllowed(t: string) { return !permRestricted() || cfgGetArr('enabled_tools').includes(t); }
   function permToggle(t: string) {
-    let e = cfgGetArr('enabled_tools');
-    if (e.length === 0) e = [...availableTools];           // materialize "all" before removing one
-    const s = new Set(e);
+    const s = new Set(permRestricted() ? cfgGetArr('enabled_tools') : availableTools);   // "all" before removing one
     s.has(t) ? s.delete(t) : s.add(t);
     const arr = [...s];
-    // Everything allowed again → store [] (unrestricted) rather than the full list.
-    cfgSetArr('enabled_tools', arr.length >= availableTools.length ? [] : arr);
+    // Everything allowed again → drop the list (unrestricted) rather than store it all.
+    if (availableTools.every(x => s.has(x))) cfgSet('enabled_tools', undefined);
+    else cfgSetArr('enabled_tools', arr);
   }
 
   // LLM picker: current value + the LLM-typed options. Kept here (not inline
@@ -928,11 +929,11 @@
       {#if availableTools.length > 0}
         <p class="perm-hint">Uncheck a tool to block it for agents from this template. All checked = unrestricted; the policy engine denies anything unchecked even if the model tries it.</p>
         <div class="perm-summary">
-          {#if cfgGetArr('enabled_tools').length === 0}
+          {#if !permRestricted()}
             <span class="perm-badge ok">All {availableTools.length} allowed</span>
           {:else}
             <span class="perm-badge warn">{cfgGetArr('enabled_tools').length} of {availableTools.length} allowed</span>
-            <button class="perm-all" onclick={() => cfgSetArr('enabled_tools', [])}>Allow all</button>
+            <button class="perm-all" onclick={() => cfgSet('enabled_tools', undefined)}>Allow all</button>
           {/if}
         </div>
       {/if}
