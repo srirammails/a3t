@@ -234,6 +234,11 @@ async fn apply_sandbox(
     if !runtime_class.is_empty() {
         pod_spec["runtimeClassName"] = serde_json::json!(runtime_class);
     }
+    // Runtime images are private on GHCR: the pull secret (in the sandbox's
+    // namespace) named by `A3T_RUNTIME_PULL_SECRET`.
+    if let Some(secret) = std::env::var("A3T_RUNTIME_PULL_SECRET").ok().filter(|s| !s.is_empty()) {
+        pod_spec["imagePullSecrets"] = serde_json::json!([{ "name": secret }]);
+    }
     if !node_selector.is_empty() {
         pod_spec["nodeSelector"] = serde_json::json!(node_selector);
     }
