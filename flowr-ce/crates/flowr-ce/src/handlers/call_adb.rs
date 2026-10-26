@@ -119,7 +119,28 @@ pub async fn resolve_adb(storage: &dyn flowr_storage::StorageBackend, resource: 
 }
 
 /// A Flight client for `flight` (channels are cached and reconnect lazily).
-pub fn flight_client(flight: &str) -> std::result::Result<arrow_flight::flight_service_client::FlightServiceClient<tonic::transport::Channel>, String> {
+/// `authorization` on every Flight call to an ADB that needs a token (W3): the
+/// header [`flowr_mcp_core::adb_auth_header`] gives for its HTTP or Flight URL.
+#[derive(Clone)]
+pub struct AdbBearer(Option<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>);
+
+impl tonic::service::Interceptor for AdbBearer {
+    fn call(&mut self, mut req: tonic::Request<()>) -> std::result::Result<tonic::Request<()>, tonic::Status> {
+        if let Some(v) = &self.0 {
+            req.metadata_mut().insert("authorization", v.clone());
+        }
+        Ok(req)
+    }
+}
+
+pub type AdbFlightClient =
+    arrow_flight::flight_service_client::FlightServiceClient<tonic::service::interceptor::InterceptedService<tonic::transport::Channel, AdbBearer>>;
+
+pub fn flight_client(ep: &AdbEndpoint) -> std::result::Result<AdbFlightClient, String> {
+    let flight = ep.flight.as_str();
+    let bearer = flowr_mcp_core::adb_auth_header(&ep.http)
+        .or_else(|| flowr_mcp_core::adb_auth_header(flight))
+        .and_then(|h| h.parse().ok());
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     static CHANNELS: OnceLock<Mutex<HashMap<String, tonic::transport::Channel>>> = OnceLock::new();
@@ -135,7 +156,7 @@ pub fn flight_client(flight: &str) -> std::result::Result<arrow_flight::flight_s
             c
         }
     };
-    Ok(arrow_flight::flight_service_client::FlightServiceClient::new(channel)
+    Ok(arrow_flight::flight_service_client::FlightServiceClient::with_interceptor(channel, AdbBearer(bearer))
         .max_decoding_message_size(64 << 20)
         .max_encoding_message_size(64 << 20))
 }
@@ -143,7 +164,7 @@ pub fn flight_client(flight: &str) -> std::result::Result<arrow_flight::flight_s
 /// A Flight `do_action` with a JSON body; the answer's JSON.
 pub async fn flight_action(ep: &AdbEndpoint, kind: &str, body: &Value) -> std::result::Result<Value, String> {
     use futures::StreamExt;
-    let mut client = flight_client(&ep.flight)?;
+    let mut client = flight_client(ep)?;
     let action = arrow_flight::Action { r#type: kind.to_string(), body: body.to_string().into() };
     let mut stream = client
         .do_action(action)
@@ -170,7 +191,7 @@ fn flight_err(ep: &AdbEndpoint, e: tonic::Status) -> String {
 /// Rows of an ADB platform table (`do_get`).
 pub async fn flight_get(ep: &AdbEndpoint, table: &str, filter: Option<&str>, limit: usize) -> std::result::Result<Vec<arrow_array::RecordBatch>, String> {
     use futures::TryStreamExt;
-    let mut client = flight_client(&ep.flight)?;
+    let mut client = flight_client(ep)?;
     let ticket = json!({ "table": table, "filter": filter, "limit": limit });
     let stream = client
         .do_get(arrow_flight::Ticket { ticket: ticket.to_string().into() })
@@ -188,7 +209,7 @@ pub async fn flight_get(ep: &AdbEndpoint, table: &str, filter: Option<&str>, lim
 /// it the whole table (columns included); the answer's metadata.
 pub async fn flight_put(ep: &AdbEndpoint, table: &str, batch: arrow_array::RecordBatch, replace: bool) -> std::result::Result<Value, String> {
     use futures::StreamExt;
-    let mut client = flight_client(&ep.flight)?;
+    let mut client = flight_client(ep)?;
     let mut path = vec![table.to_string()];
     if replace {
         path.push("replace".into());

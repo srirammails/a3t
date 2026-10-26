@@ -43,7 +43,7 @@ pub use tools::{
     dispatch_tool_call,
     // The POST endpoint for an MCP server URL (`…/sse` → `…/message`), and
     // whether a URL is this FlowR (served in-process).
-    mcp_message_url, is_self_mcp_url, set_self_port,
+    mcp_message_url, is_self_mcp_url, set_self_port, adb_auth_header, with_adb_auth,
 };
 
 // Re-export the identity type so MCP-server call sites can name the principal

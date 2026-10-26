@@ -2342,6 +2342,29 @@ pub fn mcp_message_url(url: &str) -> String {
     }
 }
 
+/// `Authorization` for a request to `url` when it is an ADB that needs a token (ADB
+/// W3): `Bearer $ADB_AUTH_TOKEN`, but only for URLs starting with one of the
+/// comma-separated prefixes in `ADB_AUTH_URLS`, so the token never reaches any
+/// other server. The token lives in FlowR's environment (a Secret), not in the
+/// registry.
+pub fn adb_auth_header(url: &str) -> Option<String> {
+    let token = std::env::var("ADB_AUTH_TOKEN").ok().filter(|t| !t.is_empty())?;
+    let prefixes = std::env::var("ADB_AUTH_URLS").ok()?;
+    prefixes
+        .split(',')
+        .map(|p| p.trim().trim_end_matches('/'))
+        .any(|p| !p.is_empty() && (url == p || url.starts_with(&format!("{p}/"))))
+        .then(|| format!("Bearer {token}"))
+}
+
+/// `req` to `url`, with [`adb_auth_header`] when it applies.
+pub fn with_adb_auth(req: reqwest::RequestBuilder, url: &str) -> reqwest::RequestBuilder {
+    match adb_auth_header(url) {
+        Some(h) => req.header(reqwest::header::AUTHORIZATION, h),
+        None => req,
+    }
+}
+
 /// `tools/list` on a remote MCP server: the tool names, or why they couldn't be read.
 async fn remote_tool_names(url: &str) -> Result<Vec<String>, String> {
     let endpoint = mcp_message_url(url);
@@ -2349,8 +2372,7 @@ async fn remote_tool_names(url: &str) -> Result<Vec<String>, String> {
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client
-        .post(&endpoint)
+    let resp = with_adb_auth(client.post(&endpoint), &endpoint)
         .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
         .send()
         .await

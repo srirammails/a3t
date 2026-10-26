@@ -103,8 +103,8 @@ fn subscribe_aql(topic: &str, filter: &Option<Value>) -> String {
 /// Call one of ADB's MCP tools (JSON over HTTP) and parse its JSON text result.
 async fn mcp_tool(client: &reqwest::Client, ep: &AdbEndpoint, tool: &str, args: Value) -> Result<Value, String> {
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": args } });
-    let resp: Value = client
-        .post(format!("{}/mcp", ep.http))
+    let url = format!("{}/mcp", ep.http);
+    let resp: Value = flowr_mcp_core::with_adb_auth(client.post(&url), &url)
         .json(&body)
         .send()
         .await

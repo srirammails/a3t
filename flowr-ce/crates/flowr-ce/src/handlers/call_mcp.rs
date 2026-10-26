@@ -100,8 +100,7 @@ impl TaskHandler for McpHandler {
             })
         };
 
-        let resp = self.client
-            .post(&server_url)
+        let resp = flowr_mcp_core::with_adb_auth(self.client.post(&server_url), &server_url)
             .header("Content-Type", "application/json")
             .json(&mcp_request)
             .send()

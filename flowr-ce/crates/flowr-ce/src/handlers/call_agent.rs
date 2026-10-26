@@ -1839,7 +1839,7 @@ async fn call_mcp_tool(
         }
     });
 
-    let resp = client.post(&server_url)
+    let resp = flowr_mcp_core::with_adb_auth(client.post(&server_url), &server_url)
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
@@ -1886,7 +1886,7 @@ async fn list_mcp_tools(
 
     let payload = json!({"jsonrpc": "2.0", "method": "tools/list", "id": 1});
 
-    let resp = client.post(&server_url)
+    let resp = flowr_mcp_core::with_adb_auth(client.post(&server_url), &server_url)
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
