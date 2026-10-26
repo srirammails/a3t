@@ -51,6 +51,24 @@ fn default_image() -> String {
 /// Env every runtime pod gets from the controller's own `A3T_RUNTIME_ENV_<NAME>`
 /// variables, as `<NAME>` — how runtimes learn where ADB is (ADB MVP W2b), e.g.
 /// `A3T_RUNTIME_ENV_FLOWR_REGISTRY_ADB=http://adb.a3t.svc.cluster.local:3000`.
+/// Secret env for runtime pods from the controller's
+/// `A3T_RUNTIME_SECRET_ENV_<NAME>=<secret>:<key>` variables: `<NAME>` from that
+/// Secret (in the sandbox's namespace) by `secretKeyRef`, so the value never sits
+/// in a Sandbox spec — e.g. `A3T_RUNTIME_SECRET_ENV_ADB_AUTH_TOKEN=adb-auth:token`.
+fn runtime_secret_env() -> Vec<serde_json::Value> {
+    let mut env: Vec<(String, String, String)> = std::env::vars()
+        .filter_map(|(k, v)| {
+            let name = k.strip_prefix("A3T_RUNTIME_SECRET_ENV_").filter(|n| !n.is_empty())?;
+            let (secret, key) = v.split_once(':')?;
+            Some((name.to_string(), secret.to_string(), key.to_string()))
+        })
+        .collect();
+    env.sort();
+    env.into_iter()
+        .map(|(name, secret, key)| serde_json::json!({ "name": name, "valueFrom": { "secretKeyRef": { "name": secret, "key": key } } }))
+        .collect()
+}
+
 fn runtime_env() -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = std::env::vars()
         .filter_map(|(k, v)| k.strip_prefix("A3T_RUNTIME_ENV_").filter(|n| !n.is_empty()).map(|n| (n.to_string(), v)))
@@ -219,6 +237,7 @@ async fn apply_sandbox(
     for (k, v) in runtime_env() {
         env.push(serde_json::json!({ "name": k, "value": v }));
     }
+    env.extend(runtime_secret_env());
     for (k, v) in extra_env {
         env.push(serde_json::json!({ "name": k, "value": v }));
     }
