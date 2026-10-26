@@ -15,6 +15,7 @@ pub mod handlers;
 pub mod registry;
 pub mod topic_triggers;
 pub mod platform_db;
+pub mod shared_registry;
 
 use std::sync::Arc;
 
@@ -96,7 +97,68 @@ pub async fn init_storage(data_dir: &str) -> anyhow::Result<Arc<dyn StorageBacke
     storage.init().await.map_err(|e| anyhow::anyhow!("{}", e))?;
 
     info!("Storage initialized successfully");
-    Ok(storage)
+    match std::env::var("FLOWR_REGISTRY_ADB").ok().filter(|u| !u.is_empty()) {
+        Some(url) => shared_registry_storage(storage, &url, &db_path).await,
+        None => Ok(storage),
+    }
+}
+
+/// The deployment a runtime pod serves (`A3T_CANVAS` = `namespace/name`, set by the
+/// a3t-controller), or `None` for a console FlowR.
+pub fn runtime_canvas() -> Option<(String, String)> {
+    let c = std::env::var("A3T_CANVAS").ok().filter(|c| !c.is_empty())?;
+    let (ns, name) = c.split_once('/').unwrap_or(("default", c.as_str()));
+    Some((ns.to_string(), name.to_string()))
+}
+
+/// The ADB topic a deployed canvas takes its work from (ADB MVP W2b).
+pub fn canvas_topic(namespace: &str, name: &str) -> String {
+    format!("canvas.{namespace}.{name}")
+}
+
+/// `FLOWR_REGISTRY_ADB` (EE): the registry and agent state on that ADB's platform
+/// tables, shared by the console and its runtime pods ([`shared_registry`]). A
+/// console seeds an empty shared registry from its local one on first boot; a
+/// runtime never does. ADB must be reachable: a FlowR told to share its registry
+/// doesn't quietly run on a private one.
+async fn shared_registry_storage(
+    local: Arc<dyn StorageBackend>,
+    url: &str,
+    local_path: &str,
+) -> anyhow::Result<Arc<dyn StorageBackend>> {
+    if !platform_db::ADB_PLATFORM_SUPPORTED {
+        anyhow::bail!("FLOWR_REGISTRY_ADB is set, but a shared registry on ADB is a FlowR EE feature (this build has no adb-platform)");
+    }
+    let flight = std::env::var("FLOWR_REGISTRY_ADB_FLIGHT").ok().filter(|f| !f.is_empty());
+    let db = platform_db::open_platform_db_config(
+        &serde_json::json!({ "backend": "adb", "url": url, "flight_url": flight }),
+        handlers::call_lancedb::DEFAULT_PLATFORM_DB_PATH,
+    );
+    let runtime = runtime_canvas();
+    // A runtime keeps its trigger (and the subscription it acked) in ADB, under
+    // its deployment, so a replacement pod resumes where the last one stopped.
+    let aliases = runtime
+        .iter()
+        .map(|(ns, name)| ("_triggers".to_string(), format!("runtime:{ns}/{name}:triggers")))
+        .collect();
+    let shared = shared_registry::SharedRegistryStorage::new(local, Arc::clone(&db), aliases);
+    let mut tries = 0;
+    loop {
+        match shared.init().await {
+            Ok(()) => break,
+            Err(e) if tries < 30 => {
+                tries += 1;
+                warn!(adb = %db.describe(), error = %e, "shared registry: ADB not ready; retrying");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            Err(e) => anyhow::bail!("shared registry on {}: {e}", db.describe()),
+        }
+    }
+    if runtime.is_none() {
+        shared_registry::seed(&*db, local_path).await.map_err(|e| anyhow::anyhow!("seeding the shared registry: {e}"))?;
+    }
+    info!(registry = %shared.describe(), runtime = ?runtime, "registry and agent state on ADB (shared)");
+    Ok(Arc::new(shared))
 }
 
 /// Restore persisted triggers from state store, then start the `adb_topic`
@@ -108,7 +170,57 @@ pub async fn restore_triggers(storage: &Arc<dyn StorageBackend>) {
             Err(e) => warn!(error = %e, "Failed to restore triggers"),
         }
     }
+    runtime_trigger(storage).await;
     topic_triggers::spawn(Arc::clone(storage));
+}
+
+/// A runtime pod (ADB MVP W2b): make sure its deployment has the `adb_topic`
+/// trigger that runs `A3T_FLOW` once per message on the canvas topic. The ADB is
+/// the resource `A3T_ADB_RESOURCE` (default `a3t/agent-memory`) in the shared
+/// registry. The trigger id is fixed per deployment, so a restored one (with its
+/// subscription) is kept.
+async fn runtime_trigger(storage: &Arc<dyn StorageBackend>) {
+    use flowr_ce_agents::triggers::types::{Trigger, TriggerConfig, TriggerTarget};
+    let Some((ns, name)) = runtime_canvas() else { return };
+    let Some(flow) = std::env::var("A3T_FLOW").ok().filter(|f| !f.is_empty()) else {
+        warn!(canvas = %format!("{ns}/{name}"), "runtime: A3T_CANVAS without A3T_FLOW; nothing to run");
+        return;
+    };
+    let (fns, fname) = flow.split_once('/').unwrap_or(("default", flow.as_str()));
+    let resource = std::env::var("A3T_ADB_RESOURCE").ok().filter(|r| !r.is_empty())
+        .unwrap_or_else(|| "a3t/agent-memory".to_string());
+    let topic = canvas_topic(&ns, &name);
+    let id = format!("runtime-{ns}-{name}");
+    let manager = flowr_ce_agents::trigger_manager();
+    if let Some(t) = manager.get(&id).await {
+        let same = matches!(&t.config, TriggerConfig::AdbTopic { resource: r, topic: tp, .. } if *r == resource && *tp == topic)
+            && matches!(t.targets.as_slice(), [TriggerTarget::Workflow { namespace, name, .. }] if namespace == fns && name == fname);
+        if same {
+            info!(trigger = %id, topic = %topic, flow = %flow, "runtime: canvas trigger restored");
+            return;
+        }
+        let _ = manager.delete(&id).await;
+    }
+    let trigger = Trigger {
+        id: id.clone(),
+        name: format!("canvas {ns}/{name}"),
+        namespace: ns.clone(),
+        config: TriggerConfig::AdbTopic { resource, topic: topic.clone(), filter: None, message_template: None, subscription: None },
+        targets: vec![TriggerTarget::Workflow { namespace: fns.to_string(), name: fname.to_string(), input_mapping: None }],
+        enabled: true,
+        status: Default::default(),
+        description: Some("Runs the deployed flow once per message on the canvas topic (a3t-controller runtime).".into()),
+    };
+    match manager.create(trigger).await {
+        Ok(_) => {
+            info!(trigger = %id, topic = %topic, flow = %flow, "runtime: canvas trigger created");
+            let data = manager.export_all().await;
+            if let Err(e) = storage.state().set("_triggers", data, None).await {
+                warn!(error = %e, "runtime: trigger not persisted");
+            }
+        }
+        Err(e) => warn!(trigger = %id, error = %e, "runtime: canvas trigger not created"),
+    }
 }
 
 /// Persist triggers to state store
@@ -519,10 +631,24 @@ impl flowr_ce_agents::triggers::WorkflowExecutor for TriggerWorkflowAdapter {
         };
         let storage_clone = storage.clone();
         let n = name.to_string();
+        let reply = request.input.get("_reply_topic").and_then(|t| t.as_str()).map(String::from)
+            .zip(request.input.get("_adb_resource").and_then(|r| r.as_str()).map(String::from));
+        let input = request.input.clone();
         tokio::spawn(async move {
-            match execute_workflow(storage_clone, &reqwest::Client::new(), request).await {
+            let result = execute_workflow(storage_clone.clone(), &reqwest::Client::new(), request).await;
+            match &result {
                 Ok(state) => info!(workflow = %n, instance_id = %instance_id, status = ?state.status, "Trigger workflow completed"),
                 Err(e) => warn!(workflow = %n, error = %e, "Trigger workflow failed"),
+            }
+            if let Some((topic, resource)) = reply {
+                let id = instance_id.to_string();
+                let fields = match &result {
+                    Ok(state) => topic_triggers::reply_fields(&input, &id, Ok(state)),
+                    Err(e) => topic_triggers::reply_fields(&input, &id, Err(&e.to_string())),
+                };
+                if let Err(e) = topic_triggers::publish(storage_clone.as_ref(), &resource, &topic, fields).await {
+                    warn!(workflow = %n, topic = %topic, error = %e, "reply not published");
+                }
             }
         });
         Ok(instance_id.to_string())

@@ -1,0 +1,29 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: runtime-echo
+  version: 1.0.0
+  metadata:
+    description: >
+      Runs in a deployed canvas (a runtime pod). Remembers the request in ADB
+      (SEMANTIC, key "echo-<request_id>") and answers with an echo. Input:
+      {"request_id": "...", "text": "..."}; the runtime publishes the result to
+      the request's _reply_topic. Deploy it as a canvas, then send it work with
+      a3t/canvas-dispatch.
+do:
+- init:
+    set:
+      _in: ${ .input // . }
+    export:
+      as: '${ $context + . }'
+- remember:
+    call: adb
+    with:
+      query: '${ "STORE INTO SEMANTIC (key = \"echo-" + $context._in.request_id + "\", content = \"" + $context._in.text + "\")" }'
+      _resource: a3t/agent-memory
+    export:
+      as: '${ $context + {remember: .} }'
+- answer:
+    set:
+      echo: ${ $context._in.text }
+      stored: ${ $context.remember.data.type }

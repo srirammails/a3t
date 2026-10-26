@@ -1,0 +1,87 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: canvas-dispatch
+  version: 1.0.0
+  metadata:
+    description: >
+      Sends one request to a deployed canvas through ADB and waits for its reply
+      (ADB MVP W2): PUBLISH to the canvas topic canvas.<ns>.<name> with a reply
+      topic, then read the reply the runtime publishes there. Input:
+      {"canvas": "a3t/<canvas name>", "text": "hello", "adb_resource": "a3t/agent-memory",
+      "mcp_resource": "a3t/agent-memory-mcp", "wait_seconds": 30}.
+      Returns {ok, reply: {request_id, status, canvas, instance_id}, output, memory}.
+do:
+- init:
+    set:
+      _in: ${ .input // . }
+      _run: ${ now | tostring | split(".") | .[0] }
+    export:
+      as: '${ $context + . }'
+- names:
+    set:
+      _adb: ${ $context._in.adb_resource // "a3t/agent-memory" }
+      _mcp: ${ $context._in.mcp_resource // "a3t/agent-memory-mcp" }
+      _topic: ${ "canvas." + (($context._in.canvas // "a3t/echo") | sub("/"; ".")) }
+      _reply: ${ "replies.dispatch-" + $context._run }
+      _req: ${ "req-" + $context._run }
+    export:
+      as: '${ $context + . }'
+- subscribe:
+    call: adb
+    with:
+      query: '${ "SUBSCRIBE TOPIC \"" + $context._reply + "\"" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {subscribe: .} }'
+- send:
+    call: mcp
+    with:
+      tool: publish
+      arguments:
+        topic: ${ $context._topic }
+        fields:
+          request_id: ${ $context._req }
+          text: ${ $context._in.text // "hello from canvas-dispatch" }
+          _reply_topic: ${ $context._reply }
+      _resource: ${ $context._mcp }
+    export:
+      as: '${ $context + {send: (if type == "string" then fromjson else . end)} }'
+- wait:
+    call: mcp
+    with:
+      tool: next_events
+      arguments:
+        subscription: ${ $context.subscribe.data.subscription }
+        wait_seconds: ${ $context._in.wait_seconds // 30 }
+      _resource: ${ $context._mcp }
+    export:
+      as: '${ $context + {wait: (if type == "string" then fromjson else . end)} }'
+- memory:
+    call: adb
+    with:
+      query: '${ "LOOKUP FROM SEMANTIC KEY id = \"echo-" + $context._req + "\"" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {memory: .} }'
+- unsubscribe:
+    call: adb
+    with:
+      query: '${ "UNSUBSCRIBE \"" + $context.subscribe.data.subscription + "\"" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {unsubscribe: .} }'
+- report:
+    set:
+      topic: ${ $context._topic }
+      request_id: ${ $context._req }
+      reply: ${ [$context.wait.deliveries[]?.changes[]? | select(.op == "publish") | .value] | first }
+    export:
+      as: '${ $context + {report: .} }'
+- summary:
+    set:
+      ok: ${ ($context.report.reply.status == "completed") }
+      topic: ${ $context.report.topic }
+      reply: ${ $context.report.reply | del(.output_json) }
+      output: ${ ($context.report.reply.output_json // "null") | fromjson }
+      memory: ${ $context.memory.data.records[0].data.content }

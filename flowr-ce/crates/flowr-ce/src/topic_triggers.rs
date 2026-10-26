@@ -100,29 +100,66 @@ fn subscribe_aql(topic: &str, filter: &Option<Value>) -> String {
     q
 }
 
-/// ADB's `next_events` MCP tool: `{deliveries, next, tip}`.
-/// ADB's MCP endpoint (JSON over HTTP): `next_events` is an MCP tool.
-async fn next_events(client: &reqwest::Client, ep: &AdbEndpoint, sub: &str, from: Option<u64>) -> Result<Value, String> {
-    let url = &ep.http;
-    let mut args = json!({ "subscription": sub, "max": 50, "wait_seconds": WAIT_SECONDS });
-    if let Some(f) = from {
-        args["from"] = json!(f);
-    }
-    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "next_events", "arguments": args } });
+/// Call one of ADB's MCP tools (JSON over HTTP) and parse its JSON text result.
+async fn mcp_tool(client: &reqwest::Client, ep: &AdbEndpoint, tool: &str, args: Value) -> Result<Value, String> {
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": tool, "arguments": args } });
     let resp: Value = client
-        .post(format!("{url}/mcp"))
+        .post(format!("{}/mcp", ep.http))
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("ADB next_events request failed: {e}"))?
+        .map_err(|e| format!("ADB {tool} request failed: {e}"))?
         .json()
         .await
-        .map_err(|e| format!("ADB next_events response: {e}"))?;
+        .map_err(|e| format!("ADB {tool} response: {e}"))?;
     let text = resp.pointer("/result/content/0/text").and_then(|t| t.as_str()).unwrap_or_default();
     if resp.pointer("/result/isError").and_then(|v| v.as_bool()) == Some(true) || resp.get("error").is_some() {
         return Err(if text.is_empty() { resp.to_string() } else { text.to_string() });
     }
-    serde_json::from_str(text).map_err(|e| format!("ADB next_events: {e}: {text}"))
+    serde_json::from_str(text).map_err(|e| format!("ADB {tool}: {e}: {text}"))
+}
+
+/// ADB's `next_events` MCP tool: `{deliveries, next, tip}`.
+async fn next_events(client: &reqwest::Client, ep: &AdbEndpoint, sub: &str, from: Option<u64>) -> Result<Value, String> {
+    let mut args = json!({ "subscription": sub, "max": 50, "wait_seconds": WAIT_SECONDS });
+    if let Some(f) = from {
+        args["from"] = json!(f);
+    }
+    mcp_tool(client, ep, "next_events", args).await
+}
+
+/// Publish `fields` to `topic` on the ADB resource `resource` (MCP `publish`).
+pub async fn publish(storage: &dyn StorageBackend, resource: &str, topic: &str, fields: Value) -> Result<Value, String> {
+    let ep = resolve_adb(storage, resource).await?;
+    mcp_tool(&reqwest::Client::new(), &ep, "publish", json!({ "topic": topic, "fields": fields })).await
+}
+
+/// A finished run as the reply a deployed canvas publishes to `_reply_topic`
+/// (ADB MVP W2b): the caller's `request_id`, the run's status, its output (as
+/// `output_json`) and error.
+pub fn reply_fields(input: &Value, instance_id: &str, result: Result<&flowr_types::ExecutionState, &str>) -> Value {
+    let mut r = json!({ "instance_id": instance_id });
+    if let Some(id) = input.get("request_id") {
+        r["request_id"] = id.clone();
+    }
+    if let Some(c) = std::env::var("A3T_CANVAS").ok().filter(|c| !c.is_empty()) {
+        r["canvas"] = json!(c);
+    }
+    match result {
+        Ok(state) => {
+            r["status"] = serde_json::to_value(&state.status).unwrap_or(Value::Null);
+            // As JSON text: ADB topic messages hold scalars (AQL literals).
+            r["output_json"] = json!(state.output.as_ref().map(|o| o.to_string()).unwrap_or_else(|| "null".into()));
+            if let Some(e) = &state.error {
+                r["error"] = json!(e);
+            }
+        }
+        Err(e) => {
+            r["status"] = json!("failed");
+            r["error"] = json!(e);
+        }
+    }
+    r
 }
 
 /// One trigger's reader: subscribe if needed, then deliver and ack, forever.
@@ -186,7 +223,12 @@ async fn read_topic(storage: Arc<dyn StorageBackend>, client: reqwest::Client, t
                 if change.get("op").and_then(|o| o.as_str()) != Some("publish") {
                     continue;
                 }
-                let message = change.get("value").cloned().unwrap_or(Value::Null);
+                let mut message = change.get("value").cloned().unwrap_or(Value::Null);
+                // A request that wants its result back: the run publishes it to
+                // `_reply_topic` on this same ADB.
+                if let Some(m) = message.as_object_mut().filter(|m| m.contains_key("_reply_topic")) {
+                    m.insert("_adb_resource".into(), json!(resource));
+                }
                 // Trigger runs have no caller: targets run as the runtime service.
                 let flows = crate::TriggerWorkflowAdapter { principal: None, blocked: Default::default() };
                 let result = flowr_ce_agents::trigger_manager()

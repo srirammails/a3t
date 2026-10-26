@@ -22,8 +22,8 @@ set -euo pipefail
 #   ./deploy.sh ui                                 build a3t/ui, then restart ui-serve
 #   ./deploy.sh ui-serve                           (re)start the dash.dev.a3t.io server
 #
-#   targets: flowr-ce  flowr-ee  adb
-#   default tag: YYYY-MM-DD-ce / YYYY-MM-DD-ee for FlowR, YYYY-MM-DD for ADB
+#   targets: flowr-ce  flowr-ee  adb  controller (the a3t-controller, flowr/crates/flowr-canvas)
+#   default tag: YYYY-MM-DD-ce / YYYY-MM-DD-ee for FlowR, YYYY-MM-DD for ADB and the controller
 #
 # The A3T UI is not an image. dash.dev.a3t.io is the gateway (128.140.26.157)
 # forwarding to port 4173 on this pod, where a3t/ui/serve-dev.py serves
@@ -86,6 +86,7 @@ repo_for() {
     case "$1" in
         flowr-ce|flowr-ee) echo "$REGISTRY/flowr" ;;
         adb)               echo "$REGISTRY/adb" ;;
+        controller)        echo "$REGISTRY/a3t-controller" ;;
         *) err "Unknown target: $1"; usage ;;
     esac
 }
@@ -94,11 +95,13 @@ default_tag() {
     case "$1" in
         flowr-ce) echo "$(date +%F)-ce" ;;
         flowr-ee) echo "$(date +%F)-ee" ;;
-        adb)      date +%F ;;
+        adb|controller) date +%F ;;
     esac
 }
 
 binary_for() { echo "$BUILD_DIR/bin/$1"; }
+
+deploy_for() { [ "$1" = controller ] && echo a3t-controller || echo "${1%%-*}"; }
 
 # ═══════════════════════════════════════════════════════════════════
 # BUILD — release binary into $BUILD_DIR/bin/<target>
@@ -124,6 +127,13 @@ step_build() {
             (cd "$ADB_DIR" && CARGO_TARGET_DIR="$BUILD_DIR/target-adb" \
                 cargo build --release -p adb-cli)
             cp "$BUILD_DIR/target-adb/release/adb" "$(binary_for adb)"
+            ;;
+        controller)
+            # Same workspace as FlowR EE, so it shares that target dir's deps.
+            log "Building the a3t-controller (cargo)..."
+            (cd "$FLOWR_DIR/flowr" && CARGO_TARGET_DIR="$BUILD_DIR/target-flowr-ee" \
+                cargo build --release -p flowr-canvas --bin flowr-controller)
+            cp "$BUILD_DIR/target-flowr-ee/release/flowr-controller" "$(binary_for controller)"
             ;;
     esac
     log "Binary: $(binary_for "$target")"
@@ -151,6 +161,12 @@ step_image() {
             ba copy "$ctr" /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
             ba config --port 3000 --entrypoint '[]' \
                 --cmd '["adb", "serve-http", "--port", "3000"]' "$ctr"
+            ;;
+        controller)
+            ctr=$(ba from "$ADB_BASE")
+            ba copy --chmod 755 "$ctr" "$(binary_for controller)" /usr/local/bin/flowr-controller
+            ba copy "$ctr" /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+            ba config --port 8080 --entrypoint '[]' --cmd '["flowr-controller"]' "$ctr"
             ;;
     esac
     ba commit --squash "$ctr" "$image" > /dev/null
@@ -200,6 +216,13 @@ step_roll() {
             remote="kubectl -n $ns set image deploy/adb adb=$image && \
                 kubectl -n $ns rollout status deploy/adb --timeout=180s"
             ;;
+        controller)
+            # Runtime pods get the controller's A3T_RUNTIME_IMAGE / A3T_RUNTIME_ENV_*
+            # (set those with kubectl set env; see ADB/.ai/MVP_PLAN.md W2).
+            ns=a3t
+            remote="kubectl -n $ns set image deploy/a3t-controller controller=$image && \
+                kubectl -n $ns rollout status deploy/a3t-controller --timeout=180s"
+            ;;
     esac
 
     log "Rolling $image to $env (ns $ns)..."
@@ -207,10 +230,10 @@ step_roll() {
     # go through the metal box (the SSH key is passphrase-protected; ssh prompts).
     if [ -f "$HOME/.kube/$env.kubeconfig" ]; then
         KUBECONFIG="$HOME/.kube/$env.kubeconfig" bash -c "$remote"
-        log "Rolled. Undo with: KUBECONFIG=~/.kube/$env.kubeconfig kubectl -n $ns rollout undo deploy/${target%%-*}"
+        log "Rolled. Undo with: KUBECONFIG=~/.kube/$env.kubeconfig kubectl -n $ns rollout undo deploy/$(deploy_for "$target")"
     else
         ssh -i "$SSH_KEY" "$METAL_HOST" "export KUBECONFIG=$kubeconfig; $remote"
-        log "Rolled. Undo with: ssh $METAL_HOST KUBECONFIG=$kubeconfig kubectl -n $ns rollout undo deploy/${target%%-*}"
+        log "Rolled. Undo with: ssh $METAL_HOST KUBECONFIG=$kubeconfig kubectl -n $ns rollout undo deploy/$(deploy_for "$target")"
     fi
 }
 

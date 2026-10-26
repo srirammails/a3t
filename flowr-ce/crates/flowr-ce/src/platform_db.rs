@@ -139,7 +139,7 @@ pub async fn switch(storage: &dyn flowr_storage::StorageBackend, target: &Value)
 }
 
 /// [`open_platform_db`] from a resource config already in hand.
-fn open_platform_db_config(config: &Value, default_path: &str) -> Arc<dyn PlatformDb> {
+pub fn open_platform_db_config(config: &Value, default_path: &str) -> Arc<dyn PlatformDb> {
     if config.get("backend").and_then(|b| b.as_str()) == Some("adb") {
         #[cfg(feature = "adb-platform")]
         if let Some(url) = config.get("url").or_else(|| config.get("endpoint")).and_then(|u| u.as_str()) {

@@ -42,6 +42,23 @@ pub enum ReconcileError {
 const DEFAULT_IMAGE: &str = "ghcr.io/srirammails/flowr:latest";
 const PORT: i32 = 3002;
 
+/// The runtime image when a Runtime CR names none: `A3T_RUNTIME_IMAGE`, else
+/// [`DEFAULT_IMAGE`].
+fn default_image() -> String {
+    std::env::var("A3T_RUNTIME_IMAGE").ok().filter(|i| !i.is_empty()).unwrap_or_else(|| DEFAULT_IMAGE.to_string())
+}
+
+/// Env every runtime pod gets from the controller's own `A3T_RUNTIME_ENV_<NAME>`
+/// variables, as `<NAME>` — how runtimes learn where ADB is (ADB MVP W2b), e.g.
+/// `A3T_RUNTIME_ENV_FLOWR_REGISTRY_ADB=http://adb.a3t.svc.cluster.local:3000`.
+fn runtime_env() -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = std::env::vars()
+        .filter_map(|(k, v)| k.strip_prefix("A3T_RUNTIME_ENV_").filter(|n| !n.is_empty()).map(|n| (n.to_string(), v)))
+        .collect();
+    env.sort();
+    env
+}
+
 // ────────────────────────────── Runtime ──────────────────────────────
 
 /// Runtime reconcile: emit Deployment + Service + HPA (+ base IngressRoute).
@@ -55,7 +72,7 @@ pub async fn reconcile_runtime(
     let sb_name = format!("rt-{name}");
     let owner = runtime.controller_owner_ref(&()).into_iter().collect::<Vec<_>>();
     let labels = runtime_labels(&name, &runtime.spec.labels);
-    let image = if runtime.spec.image.is_empty() { DEFAULT_IMAGE.to_string() } else { runtime.spec.image.clone() };
+    let image = if runtime.spec.image.is_empty() { default_image() } else { runtime.spec.image.clone() };
 
     // A3T orchestrates Agent Sandbox: a Runtime → a `Sandbox` (isolated, hibernatable).
     // `state` maps to the Sandbox `operatingMode` (Running | Suspended → 0 pods).
@@ -125,14 +142,17 @@ pub async fn reconcile_canvas(
         let rt_api: Api<Runtime> = Api::all(ctx.client.clone());
         let runtimes = rt_api.list(&Default::default()).await?.items;
         let target = select_runtime(&canvas.spec.placement, &runtimes);
-        let image = target.map(|r| r.spec.image.clone()).filter(|i| !i.is_empty()).unwrap_or_else(|| DEFAULT_IMAGE.to_string());
+        let image = target.map(|r| r.spec.image.clone()).filter(|i| !i.is_empty()).unwrap_or_else(default_image);
         let runtime_class = target.map(|r| r.spec.runtime_class_name.clone()).unwrap_or_default();
         let node_selector = target.map(|r| r.spec.node_selector.clone()).unwrap_or_default();
 
         // lifecycle.state Running|Paused → Sandbox Running|Suspended (hibernated).
         let operating_mode = if matches!(canvas.spec.lifecycle.state, LifecycleState::Paused) { "Suspended" } else { "Running" };
         let session = if matches!(canvas.spec.lifecycle.session, SessionMode::Persistent) { "persistent" } else { "ephemeral" };
+        // The runtime reads its flow from the shared registry, runs it once per
+        // message on the canvas topic, and finds ADB through the runtime env.
         let extra_env = [
+            ("A3T_CANVAS", format!("{ns}/{name}")),
             ("A3T_FLOW", canvas.spec.flow_ref.clone()),
             ("A3T_SESSION_MODE", session.to_string()),
         ];
@@ -196,6 +216,9 @@ async fn apply_sandbox(
     owner: &[OwnerReference],
 ) -> Result<(bool, String), ReconcileError> {
     let mut env = vec![serde_json::json!({ "name": "RUST_LOG", "value": "info" })];
+    for (k, v) in runtime_env() {
+        env.push(serde_json::json!({ "name": k, "value": v }));
+    }
     for (k, v) in extra_env {
         env.push(serde_json::json!({ "name": k, "value": v }));
     }
