@@ -53,8 +53,9 @@ pub struct AuthConfig {
     /// A3T platform database path (for user lookups)
     pub a3t_db_path: String,
     /// Where `users` is read and written: the embedded LanceDB at `a3t_db_path`, or
-    /// ADB platform tables when `a3t/a3t-platform-db` says so (ADB stage G).
-    pub platform: Arc<dyn flowr_ce::platform_db::PlatformDb>,
+    /// ADB platform tables when `a3t/a3t-platform-db` says so (ADB stage G) —
+    /// looked up per login, so switching (Settings) needs no restart.
+    pub platform: flowr_ce::platform_db::PlatformSource,
     /// Canonical external URL of this MCP server (e.g. https://console.a3t.io).
     /// Used as the OAuth 2.0 resource identifier / token audience (RFC 8707)
     /// and in the WWW-Authenticate resource_metadata pointer (RFC 9728).
@@ -80,9 +81,9 @@ impl AuthConfig {
                 .unwrap_or(7 * 24 * 60 * 60),
             a3t_db_path: std::env::var("A3T_DB_PATH")
                 .unwrap_or_else(|_| "/data/a3t/a3t-platform.lance".to_string()),
-            platform: Arc::new(flowr_ce::platform_db::LanceDbPlatform::new(
+            platform: flowr_ce::platform_db::PlatformSource::Fixed(Arc::new(flowr_ce::platform_db::LanceDbPlatform::new(
                 std::env::var("A3T_DB_PATH").unwrap_or_else(|_| "/data/a3t/a3t-platform.lance".to_string()),
-            )),
+            ))),
             resource_uri: std::env::var("MCP_RESOURCE_URI")
                 .unwrap_or_else(|_| "http://localhost:3002".to_string()),
             oidc_issuer: std::env::var("FLOWR_SECURITY_OIDC_ISSUER").unwrap_or_default(),

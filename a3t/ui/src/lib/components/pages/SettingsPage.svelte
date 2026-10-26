@@ -1,7 +1,7 @@
 <script lang="ts">
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
   import { onMount } from 'svelte';
-  import { execFlow } from '$lib/services/api';
+  import { execFlow, getPlatformDb, switchPlatformDb, type PlatformDbStatus } from '$lib/services/api';
   import { currentUser } from '$lib/stores/auth';
   import { API_BASE, getDefaultApiBase, getApiOverride, setApiOverride, clearApiOverride } from '$lib/config';
 
@@ -106,6 +106,7 @@
       { key: 'infra.clusters', label: 'Clusters', icon: 'nodes' },
       { key: 'infra.storage', label: 'Storage & Data', icon: 'database' },
       { key: 'infra.backend', label: 'Storage Backend', icon: 'database', ee: true },
+      { key: 'infra.platformdb', label: 'Platform Database', icon: 'database', ee: true },
       { key: 'infra.logs', label: 'Logs & Retention', icon: 'audit' },
       { key: 'infra.registry', label: 'Image Registry', icon: 'box' },
     ]},
@@ -135,6 +136,37 @@
   // Edition of the connected runtime (from settingsCRUD `_edition`); EE features
   // are locked unless the connected runtime reports 'ee'.
   let edition = $state<'ce' | 'ee'>('ee');
+
+  // Platform database (ADB stage G): where A3T's registry tables live.
+  let pdb = $state<PlatformDbStatus | null>(null);
+  let pdbUrl = $state('http://adb.a3t.svc.cluster.local:3000');
+  let pdbFlight = $state('');
+  let pdbBusy = $state(false);
+  let pdbMsg = $state('');
+  let pdbOk = $state(false);
+  async function loadPlatformDb() {
+    const r = await getPlatformDb();
+    if (r.ok && r.data) {
+      pdb = r.data;
+      if (r.data.config?.url) pdbUrl = String(r.data.config.url);
+      if (r.data.config?.flight_url) pdbFlight = String(r.data.config.flight_url);
+    } else {
+      pdbMsg = r.error ?? 'Could not read the platform database setting';
+      pdbOk = false;
+    }
+  }
+  async function switchTo(backend: 'adb' | 'lancedb') {
+    const where = backend === 'adb' ? `ADB at ${pdbUrl}` : 'the embedded LanceDB';
+    if (!confirm(`Copy all platform data (agents, templates, canvases, users, settings, audit) to ${where} and switch A3T to it?\n\nThe copy replaces what is there. Avoid edits in the console while it runs.`)) return;
+    pdbBusy = true;
+    pdbMsg = '';
+    const r = await switchPlatformDb(backend === 'adb' ? { backend, url: pdbUrl, ...(pdbFlight ? { flight_url: pdbFlight } : {}) } : { backend });
+    pdbBusy = false;
+    pdbOk = r.ok;
+    pdbMsg = r.ok && r.data ? `Switched to ${r.data.to}: ${r.data.tables} tables, ${r.data.rows} rows copied.` : (r.error ?? 'Switch failed');
+    await loadPlatformDb();
+  }
+  $effect(() => { if (leaf === 'infra.platformdb' && !pdb) loadPlatformDb(); });
   const isLocked = (key: string) => !!LEAF[key]?.ee && edition !== 'ee';
   const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 
@@ -199,6 +231,7 @@
       { type: 'text', label: 'Connection URL', hint: 'e.g. redis://dragonfly:6379 — ignored for LanceDB' },
       { type: 'text', label: 'Event log backend', hint: 'Override just the event log/queue (blank = same as Backend)' },
     ]},
+    'infra.platformdb': { title: 'Platform Database', desc: "Where A3T's own data lives: the embedded LanceDB or ADB (Enterprise). Switch either way; data is copied across.", ee: true, controls: [] },
     'infra.logs': { title: 'Logs & Retention', desc: 'How long run history and decision logs are kept on disk, and how noisy the runtime is.', controls: [
       { type: 'select', label: 'Execution history retention', hint: 'How long finished runs are kept on disk', options: ['7 days', '14 days', '30 days', '90 days', '1 year', 'Forever'] },
       { type: 'select', label: 'Decision log retention', hint: 'Cedar allow/deny audit records', options: ['7 days', '30 days', '90 days', '1 year', 'Forever'] },
@@ -362,6 +395,32 @@
             <svg class="ov-arrow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 4l4 4-4 4"/></svg>
           </button>
         {/each}
+      </div>
+
+    {:else if leaf === 'infra.platformdb'}
+      <div class="card">
+        <div class="card-head"><h2>Platform Database</h2>{#if pdb}<span class="active-pill">Active: {pdb.backend === 'adb' ? 'ADB' : 'Embedded LanceDB'}</span>{/if}</div>
+        <p class="card-sub">Where A3T keeps its own data: agents, templates, canvases, users, settings and the audit log. The embedded LanceDB lives inside each FlowR; ADB (Enterprise) is one durable copy that every FlowR instance shares. Switching copies everything to the target first, so you can move back at any time.</p>
+        {#if pdb}
+          <p class="mono dim">Now: {pdb.describe}</p>
+          {#if !pdb.adb_supported}
+            <p class="msg">This FlowR build is Community Edition: ADB platform tables need Enterprise.</p>
+          {/if}
+          <label class="pdb-field">ADB URL <input class="mono" bind:value={pdbUrl} placeholder="http://adb.a3t.svc.cluster.local:3000" /></label>
+          <label class="pdb-field">Flight URL <input class="mono" bind:value={pdbFlight} placeholder="(blank: the same host, port 3001)" /></label>
+          <div class="row-actions">
+            {#if pdb.backend === 'adb'}
+              <button class="btn ghost" onclick={() => switchTo('lancedb')} disabled={pdbBusy}>{pdbBusy ? 'Copying…' : 'Switch back to embedded LanceDB'}</button>
+            {:else}
+              <button class="btn spec" onclick={() => switchTo('adb')} disabled={pdbBusy || !pdb.adb_supported}>{pdbBusy ? 'Copying…' : 'Switch to ADB'}</button>
+            {/if}
+            {#if pdbMsg}<span class="msg" class:ok={pdbOk}>{pdbMsg}</span>{/if}
+          </div>
+        {:else if pdbMsg}
+          <p class="msg">{pdbMsg}</p>
+        {:else}
+          <p class="dim">Loading…</p>
+        {/if}
       </div>
 
     {:else if leaf === 'general.runtime'}
@@ -548,6 +607,8 @@
 
   .row-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
   .msg { font-size: 12px; color: var(--err); }
+  .pdb-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin: 10px 0; max-width: 520px; }
+  .pdb-field input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-base, transparent); color: inherit; }
   .msg.ok { color: var(--ok, #23987f); }
   .mono.dim { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); margin-top: 12px; }
 

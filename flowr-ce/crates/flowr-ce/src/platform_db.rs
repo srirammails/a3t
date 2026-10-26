@@ -34,6 +34,121 @@ pub trait PlatformDb: Send + Sync {
     async fn create_table(&self, table: &str, schema: Option<&Map<String, Value>>, mode: &str) -> Result<Value, String>;
     async fn update(&self, table: &str, filter: &str, values: &Map<String, Value>) -> Result<(), String>;
     async fn delete(&self, table: &str, filter: &str) -> Result<(), String>;
+    /// Make `rows` (fields → strings) the whole table, with `columns` — one step,
+    /// creating the table if needed (copying across backends, [`switch`]).
+    async fn replace_table(&self, table: &str, columns: &[String], rows: &[Value]) -> Result<(), String>;
+}
+
+/// The resource that names A3T's platform database, and its default path.
+use crate::handlers::call_lancedb::{DEFAULT_PLATFORM_DB_PATH, PLATFORM_DB_RESOURCE};
+
+/// Where a long-lived component (EE login) finds the platform database: looked up in
+/// the registry on every use, so a [`switch`] takes effect without a restart.
+#[derive(Clone)]
+pub enum PlatformSource {
+    Fixed(Arc<dyn PlatformDb>),
+    Registry { storage: Arc<dyn flowr_storage::StorageBackend>, default_path: String },
+}
+
+impl PlatformSource {
+    pub async fn get(&self) -> Arc<dyn PlatformDb> {
+        match self {
+            PlatformSource::Fixed(db) => Arc::clone(db),
+            PlatformSource::Registry { storage, default_path } => {
+                open_platform_db(storage.as_ref(), Some(PLATFORM_DB_RESOURCE), default_path).await
+            }
+        }
+    }
+}
+
+/// Whether this build can use ADB platform tables (FlowR EE).
+pub const ADB_PLATFORM_SUPPORTED: bool = cfg!(feature = "adb-platform");
+
+/// The platform database now: `{backend, describe, adb_supported, config}`.
+pub async fn status(storage: &dyn flowr_storage::StorageBackend) -> Value {
+    let (ns, name) = PLATFORM_DB_RESOURCE.split_once('/').unwrap();
+    let config = storage.resources().get(ns, name).await.ok().map(|r| r.config).unwrap_or(Value::Null);
+    let db = open_platform_db(storage, Some(PLATFORM_DB_RESOURCE), DEFAULT_PLATFORM_DB_PATH).await;
+    let backend = if db.describe().starts_with("adb:") { "adb" } else { "lancedb" };
+    json!({ "backend": backend, "describe": db.describe(), "adb_supported": ADB_PLATFORM_SUPPORTED, "config": config })
+}
+
+/// Move A3T's platform database to `target` (`{"backend": "adb", "url", "flight_url"?}`
+/// or `{"backend": "lancedb", "db_path"?}`): copy every table from the current
+/// backend (replacing the target's copy, so nothing written since an earlier switch
+/// is lost), then point `a3t/a3t-platform-db` at it. Writes made while the copy runs
+/// may be missed: switch when the console is quiet. Returns `{from, to, tables, rows}`.
+pub async fn switch(storage: &dyn flowr_storage::StorageBackend, target: &Value) -> Result<Value, String> {
+    let (ns, name) = PLATFORM_DB_RESOURCE.split_once('/').unwrap();
+    let mut config = storage.resources().get(ns, name).await.ok().map(|r| r.config).unwrap_or_else(|| json!({}));
+    if !config.is_object() {
+        config = json!({});
+    }
+    let mut next = config.clone();
+    let m = next.as_object_mut().unwrap();
+    match target.get("backend").and_then(|b| b.as_str()) {
+        Some("adb") => {
+            if !ADB_PLATFORM_SUPPORTED {
+                return Err("ADB platform tables are a FlowR EE feature".into());
+            }
+            let url = target.get("url").and_then(|u| u.as_str()).or_else(|| config.get("url").and_then(|u| u.as_str()));
+            let Some(url) = url else { return Err("switching to ADB needs its url".into()) };
+            m.insert("backend".into(), json!("adb"));
+            m.insert("url".into(), json!(url));
+            match target.get("flight_url").and_then(|f| f.as_str()) {
+                Some(f) => { m.insert("flight_url".into(), json!(f)); }
+                None => { m.remove("flight_url"); }
+            }
+        }
+        Some("lancedb") => {
+            m.insert("backend".into(), json!("lancedb"));
+            if let Some(p) = target.get("db_path").and_then(|p| p.as_str()) {
+                m.insert("db_path".into(), json!(p));
+            }
+        }
+        other => return Err(format!("unknown backend {other:?} (adb or lancedb)")),
+    }
+    let from = open_platform_db_config(&config, DEFAULT_PLATFORM_DB_PATH);
+    let to = open_platform_db_config(&next, DEFAULT_PLATFORM_DB_PATH);
+    if from.describe() == to.describe() {
+        return Err(format!("the platform database is already {}", to.describe()));
+    }
+    // Copy first: a failure leaves the resource (and A3T) where it was.
+    let mut tables = 0;
+    let mut rows = 0;
+    for table in from.list_tables().await? {
+        let batches = from.query(&table, None, usize::MAX >> 1).await?;
+        let columns: Vec<String> = match batches.first() {
+            Some(b) => b.schema().fields().iter().map(|f| f.name().clone()).collect(),
+            None => Vec::new(),
+        };
+        let data = crate::handlers::call_lancedb::batches_to_json(&batches);
+        to.replace_table(&table, &columns, &data).await.map_err(|e| format!("copying {table}: {e}"))?;
+        tables += 1;
+        rows += data.len();
+    }
+    match storage.resources().get(ns, name).await {
+        Ok(_) => storage.resources().update(ns, name, next).await.map(|_| ()).map_err(|e| e.to_string())?,
+        Err(_) => {
+            let r = flowr_types::Resource::new(name.to_string(), "lancedb".to_string(), next).with_namespace(ns.to_string());
+            storage.resources().create(r).await.map(|_| ()).map_err(|e| e.to_string())?
+        }
+    }
+    info!(from = %from.describe(), to = %to.describe(), tables, rows, "platform database switched");
+    Ok(json!({ "from": from.describe(), "to": to.describe(), "tables": tables, "rows": rows }))
+}
+
+/// [`open_platform_db`] from a resource config already in hand.
+fn open_platform_db_config(config: &Value, default_path: &str) -> Arc<dyn PlatformDb> {
+    if config.get("backend").and_then(|b| b.as_str()) == Some("adb") {
+        #[cfg(feature = "adb-platform")]
+        if let Some(url) = config.get("url").or_else(|| config.get("endpoint")).and_then(|u| u.as_str()) {
+            let ep = crate::handlers::call_adb::adb_endpoint(url, config.get("flight_url").and_then(|f| f.as_str()));
+            return Arc::new(AdbPlatform { ep });
+        }
+    }
+    let path = config.get("db_path").and_then(|p| p.as_str()).unwrap_or(default_path).to_string();
+    Arc::new(LanceDbPlatform { path })
 }
 
 /// The platform database a resource names (`namespace/name`, or `name` in `a3t`),
@@ -52,21 +167,13 @@ pub async fn open_platform_db(
     };
     let config = config.unwrap_or(Value::Null);
     if config.get("backend").and_then(|b| b.as_str()) == Some("adb") {
-        #[cfg(feature = "adb-platform")]
-        {
-            match config.get("url").or_else(|| config.get("endpoint")).and_then(|u| u.as_str()) {
-                Some(url) => {
-                    let ep = crate::handlers::call_adb::adb_endpoint(url, config.get("flight_url").and_then(|f| f.as_str()));
-                    return Arc::new(AdbPlatform { ep });
-                }
-                None => warn!(resource = ?resource, "platform db: backend adb without config.url; using the embedded LanceDB"),
-            }
+        if !ADB_PLATFORM_SUPPORTED {
+            warn!(resource = ?resource, "platform db: ADB platform tables are a FlowR EE feature; this build uses the embedded LanceDB");
+        } else if config.get("url").or_else(|| config.get("endpoint")).is_none() {
+            warn!(resource = ?resource, "platform db: backend adb without config.url; using the embedded LanceDB");
         }
-        #[cfg(not(feature = "adb-platform"))]
-        warn!(resource = ?resource, "platform db: ADB platform tables are a FlowR EE feature; this build uses the embedded LanceDB");
     }
-    let path = config.get("db_path").and_then(|p| p.as_str()).unwrap_or(default_path).to_string();
-    Arc::new(LanceDbPlatform { path })
+    open_platform_db_config(&config, default_path)
 }
 
 /// `call:lancedb`'s SQL literal for an update value: strings quoted ('' escapes),
@@ -201,6 +308,21 @@ impl PlatformDb for LanceDbPlatform {
         let t = self.db().await?.open_table(table).execute().await.map_err(|e| format!("open table error: {e}"))?;
         t.delete(filter).await.map(|_| ()).map_err(|e| format!("delete error: {e}"))
     }
+
+    async fn replace_table(&self, table: &str, columns: &[String], rows: &[Value]) -> Result<(), String> {
+        let cols: Vec<String> = if columns.is_empty() { vec!["id".into()] } else { columns.to_vec() };
+        let schema = arrow_schema::Schema::new(cols.iter().map(|c| arrow_schema::Field::new(c, arrow_schema::DataType::Utf8, true)).collect::<Vec<_>>());
+        let batch = if rows.is_empty() { RecordBatch::new_empty(Arc::new(schema.clone())) } else { records_to_batch(rows, &schema) };
+        let batches = arrow_array::RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
+        self.db()
+            .await?
+            .create_table(table, Box::new(batches))
+            .mode(lancedb::database::CreateTableMode::Overwrite)
+            .execute()
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("replace {table}: {e}"))
+    }
 }
 
 // ---------------------------------------------------------------- ADB (EE)
@@ -233,7 +355,7 @@ impl PlatformDb for AdbPlatform {
         }
         let schema = infer_schema(&records[0]);
         let batch = records_to_batch(records, &schema);
-        let r = crate::handlers::call_adb::flight_put(&self.ep, table, batch).await?;
+        let r = crate::handlers::call_adb::flight_put(&self.ep, table, batch, false).await?;
         Ok(r.get("inserted").and_then(|n| n.as_u64()).unwrap_or(records.len() as u64) as usize)
     }
 
@@ -257,5 +379,17 @@ impl PlatformDb for AdbPlatform {
         crate::handlers::call_adb::flight_action(&self.ep, "delete", &json!({ "table": table, "filter": filter }))
             .await
             .map(|_| ())
+    }
+
+    async fn replace_table(&self, table: &str, columns: &[String], rows: &[Value]) -> Result<(), String> {
+        if rows.is_empty() {
+            return crate::handlers::call_adb::flight_action(&self.ep, "replace_table", &json!({ "table": table, "columns": columns }))
+                .await
+                .map(|_| ());
+        }
+        let cols: Vec<String> = if columns.is_empty() { vec!["id".into()] } else { columns.to_vec() };
+        let schema = arrow_schema::Schema::new(cols.iter().map(|c| arrow_schema::Field::new(c, arrow_schema::DataType::Utf8, true)).collect::<Vec<_>>());
+        let batch = records_to_batch(rows, &schema);
+        crate::handlers::call_adb::flight_put(&self.ep, table, batch, true).await.map(|_| ())
     }
 }

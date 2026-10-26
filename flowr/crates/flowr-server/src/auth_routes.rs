@@ -65,7 +65,7 @@ pub async fn login_handler(
     // Resolve the identity: try the local A3T user store first (superadmin, local
     // signups); on failure fall back to Keycloak (EE) so SSO-provisioned users can
     // sign in through the same email/password form. `(user_id, org, role, email, name)`.
-    let resolved = match authenticate_user(config.platform.as_ref(), &body.email, &body.password).await {
+    let resolved = match authenticate_user(config.platform.get().await.as_ref(), &body.email, &body.password).await {
         Ok(t) => Some(t),
         Err(local_err) => {
             let kc = keycloak_login(&config, &body.email, &body.password).await;
@@ -169,7 +169,8 @@ pub async fn signup_handler(
 
     // Check if email already exists (platform database: embedded LanceDB or ADB)
     let filter = format!("email = '{}'", body.email.replace('\'', "''"));
-    let existing: Vec<arrow_array::RecordBatch> = match config.platform.query("users", Some(&filter), 1).await {
+    let platform = config.platform.get().await;
+    let existing: Vec<arrow_array::RecordBatch> = match platform.query("users", Some(&filter), 1).await {
         Ok(b) => b,
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Query error: {}", e) }))).into_response();
@@ -192,7 +193,7 @@ pub async fn signup_handler(
         "password_hash": password_hash, "role": role, "avatar": "", "status": "active",
         "last_login_at": "", "created_at": now, "updated_at": now,
     });
-    if let Err(e) = config.platform.insert("users", &[record]).await {
+    if let Err(e) = platform.insert("users", &[record]).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Insert error: {}", e) }))).into_response();
     }
 

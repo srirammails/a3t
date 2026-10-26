@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Extension, Json, Router,
 };
 use serde::Deserialize;
@@ -43,7 +43,34 @@ pub fn registry_router(storage: Arc<dyn StorageBackend>) -> Router {
             "/resources/:ns/:name",
             get(get_resource).put(update_resource).delete(delete_resource),
         )
+        // A3T's platform database: embedded LanceDB or ADB platform tables (FlowR
+        // EE, ADB stage G). Switching is a `resource:update` on a3t/a3t-platform-db.
+        .route("/platform-db", get(platform_db_status))
+        .route("/platform-db/switch", post(platform_db_switch))
         .with_state(state)
+}
+
+/// GET /registry/platform-db — `{backend, describe, adb_supported, config}`.
+async fn platform_db_status(State(state): State<Arc<RegistryState>>) -> impl IntoResponse {
+    Json(crate::platform_db::status(state.storage.as_ref()).await)
+}
+
+/// POST /registry/platform-db/switch — `{"backend": "adb", "url", "flight_url"?}` or
+/// `{"backend": "lancedb"}`: copy every table to the target, then switch. Gated like
+/// editing the resource (Admin in EE).
+async fn platform_db_switch(
+    State(state): State<Arc<RegistryState>>,
+    principal: Option<Extension<Principal>>,
+    Json(target): Json<Value>,
+) -> impl IntoResponse {
+    let who = caller(principal);
+    if let Err(resp) = authorize_resource_write(&who, flowr_policy::actions::resource_update(), "lancedb", "a3t-platform-db").await {
+        return resp.into_response();
+    }
+    match crate::platform_db::switch(state.storage.as_ref(), &target).await {
+        Ok(r) => Json(r).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+    }
 }
 
 /// The caller identity, from the auth middleware's `Extension<Principal>`.

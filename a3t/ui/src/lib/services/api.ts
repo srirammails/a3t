@@ -143,6 +143,19 @@ export async function getMe(): Promise<ApiResponse<LoginResponse['user']>> {
 
 // ── MCP tool calls (authenticated) ──
 
+// ── Platform database (FlowR EE: embedded LanceDB or ADB platform tables) ──
+
+export interface PlatformDbStatus { backend: 'lancedb' | 'adb'; describe: string; adb_supported: boolean; config: Record<string, any> | null }
+
+export async function getPlatformDb(): Promise<ApiResponse<PlatformDbStatus>> {
+  return request<PlatformDbStatus>('/registry/platform-db');
+}
+
+/** Copy every platform table to `target`, then switch A3T to it. */
+export async function switchPlatformDb(target: { backend: 'adb' | 'lancedb'; url?: string; flight_url?: string }): Promise<ApiResponse<{ from: string; to: string; tables: number; rows: number }>> {
+  return request('/registry/platform-db/switch', { method: 'POST', body: JSON.stringify(target) });
+}
+
 export async function mcpCall(toolName: string, args: Record<string, any> = {}): Promise<ApiResponse> {
   const res = await request('/message', {
     method: 'POST',

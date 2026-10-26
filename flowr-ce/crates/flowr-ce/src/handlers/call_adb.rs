@@ -184,12 +184,17 @@ pub async fn flight_get(ep: &AdbEndpoint, table: &str, filter: Option<&str>, lim
         .map_err(|e| format!("ADB query {table}: {e}"))
 }
 
-/// Insert a batch into an ADB platform table (`do_put`); the answer's metadata.
-pub async fn flight_put(ep: &AdbEndpoint, table: &str, batch: arrow_array::RecordBatch) -> std::result::Result<Value, String> {
+/// Insert a batch into an ADB platform table (`do_put`) — or, with `replace`, make
+/// it the whole table (columns included); the answer's metadata.
+pub async fn flight_put(ep: &AdbEndpoint, table: &str, batch: arrow_array::RecordBatch, replace: bool) -> std::result::Result<Value, String> {
     use futures::StreamExt;
     let mut client = flight_client(&ep.flight)?;
+    let mut path = vec![table.to_string()];
+    if replace {
+        path.push("replace".into());
+    }
     let data = arrow_flight::encode::FlightDataEncoderBuilder::new()
-        .with_flight_descriptor(Some(arrow_flight::FlightDescriptor::new_path(vec![table.to_string()])))
+        .with_flight_descriptor(Some(arrow_flight::FlightDescriptor::new_path(path)))
         .build(futures::stream::iter(vec![Ok(batch)]))
         .filter_map(|r| async move { r.ok() });
     let mut results = client.do_put(data).await.map_err(|e| flight_err(ep, e))?.into_inner();
