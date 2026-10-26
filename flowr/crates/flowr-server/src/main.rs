@@ -176,8 +176,17 @@ async fn main() -> anyhow::Result<()> {
             // Superadmin / platform seeding is handled by the a3t install flow
             // (a3t-install → a3t_schema_install), not in-process here.
 
+            // Where `users` lives: the embedded LanceDB, or ADB (ADB stage G).
+            let platform = flowr_ce::platform_db::open_platform_db(
+                sec_storage.as_ref(),
+                Some(flowr_ce::handlers::call_lancedb::PLATFORM_DB_RESOURCE),
+                &flowr_config.a3t.db_path,
+            )
+            .await;
+            info!(platform_db = %platform.describe(), "A3T platform database");
             let mut router = {
                 let auth_config = Arc::new(AuthConfig {
+                    platform,
                     jwt_secret: flowr_config.auth.jwt_secret.clone(),
                     token_expiry_secs: flowr_config.auth.token_expiry,
                     refresh_expiry_secs: flowr_config.auth.refresh_expiry,

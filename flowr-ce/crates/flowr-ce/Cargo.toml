@@ -36,6 +36,10 @@ flowr-ce-agents.workspace = true
 lancedb.workspace = true
 arrow-array = "57"
 arrow-schema = "57"
+# ADB's native wire (call:adb, ADB platform tables): Arrow Flight (ADB stage G)
+arrow-flight = "57"
+arrow-ipc = "57"
+tonic = "0.14"
 serde_yaml = "0.9"
 rand = "0.8"
 
@@ -78,3 +82,8 @@ tokio-stream.workspace = true
 dirs.workspace = true
 # statvfs for the Runtime console's disk figures
 libc = "0.2"
+
+[features]
+# ADB platform tables (ADB stage G): an optional FlowR EE upgrade. The EE server
+# enables it; CE keeps the embedded LanceDB only.
+adb-platform = []

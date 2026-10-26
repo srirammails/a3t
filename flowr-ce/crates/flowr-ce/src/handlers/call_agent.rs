@@ -529,7 +529,6 @@ impl TaskHandler for AgentHandler {
         let memory = match config.config.memory_resource.as_deref() {
             Some(resource) => match AgentMemory::connect(
                 storage.as_ref(),
-                http_client.clone(),
                 resource,
                 &config.config.memory_namespace,
                 &config.session_id,

@@ -72,4 +72,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [features]
 # EE build: compile in the Cedar policy hook so security.policy_hook="cedar"
 # enforces. Default (CE) build has no aesop/cedar dependency.
-ee = ["dep:flowr-aesop", "dep:aesop-tower"]
+ee = ["dep:flowr-aesop", "dep:aesop-tower", "flowr-ce/adb-platform"]

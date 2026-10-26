@@ -65,7 +65,7 @@ pub async fn login_handler(
     // Resolve the identity: try the local A3T user store first (superadmin, local
     // signups); on failure fall back to Keycloak (EE) so SSO-provisioned users can
     // sign in through the same email/password form. `(user_id, org, role, email, name)`.
-    let resolved = match authenticate_user(&config.a3t_db_path, &body.email, &body.password).await {
+    let resolved = match authenticate_user(config.platform.as_ref(), &body.email, &body.password).await {
         Ok(t) => Some(t),
         Err(local_err) => {
             let kc = keycloak_login(&config, &body.email, &body.password).await;
@@ -167,34 +167,10 @@ pub async fn signup_handler(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid email" }))).into_response();
     }
 
-    // Open A3T database
-    let conn = match lancedb::connect(&config.a3t_db_path).execute().await {
-        Ok(c) => c,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Database error: {}", e) }))).into_response();
-        }
-    };
-
-    // Check if email already exists
-    let table = match conn.open_table("users").execute().await {
-        Ok(t) => t,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Table error: {}", e) }))).into_response();
-        }
-    };
-
+    // Check if email already exists (platform database: embedded LanceDB or ADB)
     let filter = format!("email = '{}'", body.email.replace('\'', "''"));
-    use lancedb::query::{ExecutableQuery, QueryBase};
-    let existing: Vec<arrow_array::RecordBatch> = match table.query().only_if(filter).limit(1).execute().await {
-        Ok(stream) => {
-            use futures::TryStreamExt;
-            match stream.try_collect().await {
-                Ok(b) => b,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Query error: {}", e) }))).into_response();
-                }
-            }
-        }
+    let existing: Vec<arrow_array::RecordBatch> = match config.platform.query("users", Some(&filter), 1).await {
+        Ok(b) => b,
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Query error: {}", e) }))).into_response();
         }
@@ -211,44 +187,12 @@ pub async fn signup_handler(
     let now = chrono::Utc::now().to_rfc3339();
     let password_hash = hash_password(&body.password);
 
-    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
-        arrow_schema::Field::new("id", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("org_id", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("email", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("name", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("password_hash", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("role", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("avatar", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("status", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("last_login_at", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("created_at", arrow_schema::DataType::Utf8, true),
-        arrow_schema::Field::new("updated_at", arrow_schema::DataType::Utf8, true),
-    ]));
-
-    let batch = match arrow_array::RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            std::sync::Arc::new(arrow_array::StringArray::from(vec![user_id.as_str()])),
-            std::sync::Arc::new(arrow_array::StringArray::from(vec![org_id.as_str()])),
-            std::sync::Arc::new(arrow_array::StringArray::from(vec![body.email.as_str()])),
-            std::sync::Arc::new(arrow_array::StringArray::from(vec![body.name.as_str()])),
-            std::sync::Arc::new(arrow_array::StringArray::from(vec![password_hash.as_str()])),
-            std::sync::Arc::new(arrow_array::StringArray::from(vec![role.as_str()])),
-            std::sync::Arc::new(arrow_array::StringArray::from(vec![""])),
-            std::sync::Arc::new(arrow_array::StringArray::from(vec!["active"])),
-            std::sync::Arc::new(arrow_array::StringArray::from(vec![""])),
-            std::sync::Arc::new(arrow_array::StringArray::from(vec![now.as_str()])),
-            std::sync::Arc::new(arrow_array::StringArray::from(vec![now.as_str()])),
-        ],
-    ) {
-        Ok(b) => b,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Batch error: {}", e) }))).into_response();
-        }
-    };
-
-    let batches = arrow_array::RecordBatchIterator::new(vec![Ok(batch)], schema);
-    if let Err(e) = table.add(batches).execute().await {
+    let record = json!({
+        "id": user_id, "org_id": org_id, "email": body.email, "name": body.name,
+        "password_hash": password_hash, "role": role, "avatar": "", "status": "active",
+        "last_login_at": "", "created_at": now, "updated_at": now,
+    });
+    if let Err(e) = config.platform.insert("users", &[record]).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Insert error: {}", e) }))).into_response();
     }
 

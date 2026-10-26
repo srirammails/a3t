@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-use crate::handlers::call_adb::{adb_query, resolve_adb_url};
+use crate::handlers::call_adb::{adb_query, resolve_adb, AdbEndpoint};
 
 /// How often the supervisor reconciles reader tasks with the triggers.
 const RECONCILE: Duration = Duration::from_secs(3);
@@ -101,7 +101,9 @@ fn subscribe_aql(topic: &str, filter: &Option<Value>) -> String {
 }
 
 /// ADB's `next_events` MCP tool: `{deliveries, next, tip}`.
-async fn next_events(client: &reqwest::Client, url: &str, sub: &str, from: Option<u64>) -> Result<Value, String> {
+/// ADB's MCP endpoint (JSON over HTTP): `next_events` is an MCP tool.
+async fn next_events(client: &reqwest::Client, ep: &AdbEndpoint, sub: &str, from: Option<u64>) -> Result<Value, String> {
+    let url = &ep.http;
     let mut args = json!({ "subscription": sub, "max": 50, "wait_seconds": WAIT_SECONDS });
     if let Some(f) = from {
         args["from"] = json!(f);
@@ -130,8 +132,8 @@ async fn read_topic(storage: Arc<dyn StorageBackend>, client: reqwest::Client, t
     loop {
         let Some(t) = flowr_ce_agents::trigger_manager().get(&trigger_id).await else { return };
         let TriggerConfig::AdbTopic { resource, topic, filter, subscription, .. } = t.config else { return };
-        let url = match resolve_adb_url(storage.as_ref(), &resource).await {
-            Ok(u) => u,
+        let ep = match resolve_adb(storage.as_ref(), &resource).await {
+            Ok(e) => e,
             Err(e) => {
                 warn!(trigger = %trigger_id, error = %e, "adb_topic: resource unavailable; retrying");
                 tokio::time::sleep(RETRY * 5).await;
@@ -140,7 +142,7 @@ async fn read_topic(storage: Arc<dyn StorageBackend>, client: reqwest::Client, t
         };
         let sub = match subscription {
             Some(s) => s,
-            None => match adb_query(&client, &url, &subscribe_aql(&topic, &filter), None).await {
+            None => match adb_query(&ep, &subscribe_aql(&topic, &filter), None).await {
                 Ok(r) => {
                     let Some(id) = r.pointer("/data/subscription").and_then(|v| v.as_str()).map(String::from) else {
                         warn!(trigger = %trigger_id, result = %r, "adb_topic: SUBSCRIBE returned no id");
@@ -160,7 +162,7 @@ async fn read_topic(storage: Arc<dyn StorageBackend>, client: reqwest::Client, t
                 }
             },
         };
-        let batch = match next_events(&client, &url, &sub, from).await {
+        let batch = match next_events(&client, &ep, &sub, from).await {
             Ok(b) => b,
             Err(e) => {
                 // A lost subscription (ADB reset) or an expired cursor: subscribe again
@@ -198,7 +200,7 @@ async fn read_topic(storage: Arc<dyn StorageBackend>, client: reqwest::Client, t
         }
         if let Some(offset) = last {
             let ack = format!("ACK {} OFFSET {offset}", aql_str(&sub));
-            if let Err(e) = adb_query(&client, &url, &ack, None).await {
+            if let Err(e) = adb_query(&ep, &ack, None).await {
                 warn!(trigger = %trigger_id, error = %e, "adb_topic: ack failed; those messages may be delivered again");
             }
         }

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::warn;
 
-use super::call_adb::{adb_query, resolve_adb_url};
+use super::call_adb::{adb_query, resolve_adb, AdbEndpoint};
 
 /// Per-tier switches (`memory_config.<tier>.{read,write}`); unset = the tier default.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -71,8 +71,7 @@ pub struct Recalled {
 
 /// An agent's memory for one session.
 pub struct AgentMemory {
-    client: reqwest::Client,
-    url: String,
+    ep: AdbEndpoint,
     namespace: String,
     session_id: String,
 }
@@ -132,25 +131,24 @@ impl AgentMemory {
     /// The memory of `session_id` on ADB resource `resource`.
     pub async fn connect(
         storage: &dyn flowr_storage::StorageBackend,
-        client: reqwest::Client,
         resource: &str,
         namespace: &str,
         session_id: &str,
     ) -> Result<Self, String> {
         // A bare name (A3T's Memory tab saves one) is looked up in `default`, then in
         // `a3t`, as agent MCP servers are.
-        let url = match resource.contains('/') {
-            true => resolve_adb_url(storage, resource).await?,
-            false => match resolve_adb_url(storage, resource).await {
-                Ok(u) => u,
-                Err(_) => resolve_adb_url(storage, &format!("a3t/{resource}")).await?,
+        let ep = match resource.contains('/') {
+            true => resolve_adb(storage, resource).await?,
+            false => match resolve_adb(storage, resource).await {
+                Ok(e) => e,
+                Err(_) => resolve_adb(storage, &format!("a3t/{resource}")).await?,
             },
         };
-        Ok(Self { client, url, namespace: namespace.to_string(), session_id: session_id.to_string() })
+        Ok(Self { ep, namespace: namespace.to_string(), session_id: session_id.to_string() })
     }
 
     async fn query(&self, aql: &str) -> Vec<Value> {
-        match adb_query(&self.client, &self.url, aql, None).await {
+        match adb_query(&self.ep, aql, None).await {
             Ok(r) => records(&r),
             Err(e) => {
                 warn!(error = %e, aql = %aql, "agent memory: recall failed; continuing without it");
@@ -208,7 +206,7 @@ impl AgentMemory {
             ));
         }
         for aql in writes {
-            if let Err(e) = adb_query(&self.client, &self.url, &aql, None).await {
+            if let Err(e) = adb_query(&self.ep, &aql, None).await {
                 warn!(error = %e, "agent memory: store failed; the turn is not remembered");
             }
         }

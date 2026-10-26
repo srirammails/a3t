@@ -25,21 +25,9 @@ use serde_json::Value;
 
 use flowr_storage::StorageBackend;
 
-/// Ids of the rows a filter selects, from an open platform table.
-async fn ids_matching(db: &lancedb::Connection, table: &str, filter: &str) -> Result<Vec<Value>, String> {
-    use futures::TryStreamExt;
-    use lancedb::query::{ExecutableQuery, QueryBase};
-    let t = db.open_table(table).execute().await.map_err(|e| e.to_string())?;
-    let batches: Vec<arrow_array::RecordBatch> = t
-        .query()
-        .only_if(filter)
-        .limit(1000)
-        .execute()
-        .await
-        .map_err(|e| e.to_string())?
-        .try_collect()
-        .await
-        .map_err(|e| e.to_string())?;
+/// The rows a filter selects, from the platform database (embedded or ADB).
+async fn ids_matching(db: &dyn crate::platform_db::PlatformDb, table: &str, filter: &str) -> Result<Vec<Value>, String> {
+    let batches = db.query(table, Some(filter), 1000).await?;
     Ok(crate::handlers::call_lancedb::batches_to_json(&batches))
 }
 
@@ -66,7 +54,7 @@ fn list(names: &[String]) -> String {
 
 /// Guard a `call:lancedb` delete. Only the platform tables in the tree are
 /// checked; every other table deletes as before.
-pub async fn check_table_delete(db: &lancedb::Connection, table: &str, filter: &str) -> Result<(), String> {
+pub async fn check_table_delete(db: &dyn crate::platform_db::PlatformDb, table: &str, filter: &str) -> Result<(), String> {
     match table {
         // A template with agents built from it.
         "template_registry" => {

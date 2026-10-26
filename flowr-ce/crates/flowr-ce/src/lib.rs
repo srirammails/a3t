@@ -14,6 +14,7 @@ pub mod integrity;
 pub mod handlers;
 pub mod registry;
 pub mod topic_triggers;
+pub mod platform_db;
 
 use std::sync::Arc;
 
@@ -1573,11 +1574,11 @@ async fn mcp_query_resource(storage: &Arc<dyn StorageBackend>, args: &Value) -> 
     };
     match resource.type_ref.as_str() {
         "adb" | "clawdb" => {
-            let url = match handlers::call_adb::resolve_adb_url(storage.as_ref(), &format!("{namespace}/{name}")).await {
-                Ok(u) => u,
+            let ep = match handlers::call_adb::resolve_adb(storage.as_ref(), &format!("{namespace}/{name}")).await {
+                Ok(e) => e,
                 Err(e) => return CallToolResult::error(e),
             };
-            match handlers::call_adb::adb_query(&reqwest::Client::new(), &url, query, args.get("variables")).await {
+            match handlers::call_adb::adb_query(&ep, query, args.get("variables")).await {
                 Ok(result) => CallToolResult::json(handlers::call_adb::result_rows(&result)),
                 Err(e) => CallToolResult::error(e),
             }

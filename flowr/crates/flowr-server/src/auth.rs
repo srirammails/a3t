@@ -52,6 +52,9 @@ pub struct AuthConfig {
     pub refresh_expiry_secs: u64,
     /// A3T platform database path (for user lookups)
     pub a3t_db_path: String,
+    /// Where `users` is read and written: the embedded LanceDB at `a3t_db_path`, or
+    /// ADB platform tables when `a3t/a3t-platform-db` says so (ADB stage G).
+    pub platform: Arc<dyn flowr_ce::platform_db::PlatformDb>,
     /// Canonical external URL of this MCP server (e.g. https://console.a3t.io).
     /// Used as the OAuth 2.0 resource identifier / token audience (RFC 8707)
     /// and in the WWW-Authenticate resource_metadata pointer (RFC 9728).
@@ -77,6 +80,9 @@ impl AuthConfig {
                 .unwrap_or(7 * 24 * 60 * 60),
             a3t_db_path: std::env::var("A3T_DB_PATH")
                 .unwrap_or_else(|_| "/data/a3t/a3t-platform.lance".to_string()),
+            platform: Arc::new(flowr_ce::platform_db::LanceDbPlatform::new(
+                std::env::var("A3T_DB_PATH").unwrap_or_else(|_| "/data/a3t/a3t-platform.lance".to_string()),
+            )),
             resource_uri: std::env::var("MCP_RESOURCE_URI")
                 .unwrap_or_else(|_| "http://localhost:3002".to_string()),
             oidc_issuer: std::env::var("FLOWR_SECURITY_OIDC_ISSUER").unwrap_or_default(),
@@ -317,39 +323,23 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Lookup user by email in A3T LanceDB and verify password
+/// Lookup user by email in the A3T platform database and verify password
 pub async fn authenticate_user(
-    db_path: &str,
+    db: &dyn flowr_ce::platform_db::PlatformDb,
     email: &str,
     password: &str,
 ) -> Result<(String, String, String, String, String), String> {
-    // Open A3T platform database
-    let conn = lancedb::connect(db_path)
-        .execute()
-        .await
-        .map_err(|e| format!("Failed to connect to A3T database: {}", e))?;
-
-    let table = conn
-        .open_table("users")
-        .execute()
-        .await
-        .map_err(|e| format!("Failed to open users table: {}", e))?;
-
     // Query by email
     let filter = format!("email = '{}'", email.replace('\'', "''"));
-    use lancedb::query::{ExecutableQuery, QueryBase};
-    let batches: Vec<arrow_array::RecordBatch> = table
-        .query()
-        .only_if(filter)
-        .limit(1)
-        .execute()
+    let batches: Vec<arrow_array::RecordBatch> = db
+        .query("users", Some(&filter), 1)
         .await
-        .map_err(|e| format!("Query failed: {}", e))?
-        .try_collect()
-        .await
-        .map_err(|e| format!("Failed to collect: {}", e))?;
+        .map_err(|e| format!("Failed to read users: {}", e))?
+        .into_iter()
+        .filter(|b| b.num_rows() > 0)
+        .collect();
 
-    if batches.is_empty() || batches[0].num_rows() == 0 {
+    if batches.is_empty() {
         return Err("Invalid email or password".to_string());
     }
 
@@ -383,7 +373,6 @@ pub async fn authenticate_user(
     Ok((user_id, org_id, role, email.to_string(), name))
 }
 
-use futures::TryStreamExt;
 
 // ── E2 #4: OIDC AuthN (EE) — RS256/JWKS via aesop-tower::AuthnLayer ──
 // Installed instead of the HS256 middleware when `security.authn = "oidc"`.
