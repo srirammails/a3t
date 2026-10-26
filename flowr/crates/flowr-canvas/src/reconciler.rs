@@ -55,6 +55,7 @@ fn default_image() -> String {
 /// `A3T_RUNTIME_SECRET_ENV_<NAME>=<secret>:<key>` variables: `<NAME>` from that
 /// Secret (in the sandbox's namespace) by `secretKeyRef`, so the value never sits
 /// in a Sandbox spec — e.g. `A3T_RUNTIME_SECRET_ENV_ADB_AUTH_TOKEN=adb-auth:token`.
+/// Optional: a missing Secret leaves the variable unset instead of failing the pod.
 fn runtime_secret_env() -> Vec<serde_json::Value> {
     let mut env: Vec<(String, String, String)> = std::env::vars()
         .filter_map(|(k, v)| {
@@ -65,7 +66,7 @@ fn runtime_secret_env() -> Vec<serde_json::Value> {
         .collect();
     env.sort();
     env.into_iter()
-        .map(|(name, secret, key)| serde_json::json!({ "name": name, "valueFrom": { "secretKeyRef": { "name": secret, "key": key } } }))
+        .map(|(name, secret, key)| serde_json::json!({ "name": name, "valueFrom": { "secretKeyRef": { "name": secret, "key": key, "optional": true } } }))
         .collect()
 }
 
