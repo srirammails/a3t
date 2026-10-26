@@ -1,0 +1,239 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: adb-selftest
+  version: 1.0.0
+  metadata:
+    description: >
+      ADB end-to-end self-test, run from A3T. Checks memory (store, UPDATE supersedes,
+      links, FORGET removes links), subscriptions (SUBSCRIBE / PUBLISH / next_events /
+      ACK over MCP), and platform tables (call:lancedb insert / update / query /
+      delete on whichever backend a3t-platform-db uses). Returns a report:
+      {passed, failed, ok, checks: [{check, ok, got}]}. Cleans up after itself.
+      Input (all optional): {"adb_resource": "a3t/agent-memory",
+      "mcp_resource": "a3t/agent-memory-mcp", "platform_resource": "a3t/a3t-platform-db"}.
+do:
+# ─── setup: a run id so repeated runs don't collide ───────────────────────────
+- init:
+    set:
+      _in: ${ .input // . }
+      _run: ${ now | tostring | split(".") | .[0] }
+    export:
+      as: '${ $context + . }'
+- resources:
+    set:
+      _adb: ${ $context._in.adb_resource // "a3t/agent-memory" }
+      _mcp: ${ $context._in.mcp_resource // "a3t/agent-memory-mcp" }
+      _plat: ${ $context._in.platform_resource // "a3t/a3t-platform-db" }
+      _fact: ${ "adbtest-fact-" + $context._run }
+      _ep: ${ "adbtest-ep-" + $context._run }
+      _topic: ${ "adbtest-" + $context._run }
+    export:
+      as: '${ $context + . }'
+
+# ─── memory (stage D) ─────────────────────────────────────────────────────────
+- m_store_fact:
+    call: adb
+    with:
+      query: '${ "STORE INTO SEMANTIC (key = \"" + $context._fact + "\", content = \"ADB self-test fact v1\", test_run = \"" + $context._run + "\")" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {m_store_fact: .} }'
+- m_update_fact:
+    call: adb
+    with:
+      query: '${ "UPDATE INTO SEMANTIC WHERE key = \"" + $context._fact + "\" (content = \"ADB self-test fact v2\")" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {m_update_fact: .} }'
+- m_lookup_fact:
+    call: adb
+    with:
+      query: '${ "LOOKUP FROM SEMANTIC KEY id = \"" + $context._fact + "\"" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {m_lookup_fact: .} }'
+- m_store_episode:
+    call: adb
+    with:
+      query: '${ "STORE INTO EPISODIC (key = \"" + $context._ep + "\", outcome = \"won\", test_run = \"" + $context._run + "\")" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {m_store_episode: .} }'
+- m_link:
+    call: adb
+    with:
+      query: '${ "LINK FROM SEMANTIC WHERE key = \"" + $context._fact + "\" TO EPISODIC WHERE key = \"" + $context._ep + "\" TYPE \"adbtest\" WEIGHT 0.9" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {m_link: .} }'
+- m_follow_links:
+    call: adb
+    with:
+      query: '${ "RECALL FROM SEMANTIC WHERE key = \"" + $context._fact + "\" FOLLOW LINKS TYPE \"adbtest\"" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {m_follow_links: .} }'
+- m_forget_episode:
+    call: adb
+    with:
+      query: '${ "FORGET FROM EPISODIC WHERE key = \"" + $context._ep + "\"" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {m_forget_episode: .} }'
+- m_links_after_forget:
+    call: adb
+    with:
+      query: '${ "RECALL FROM SEMANTIC WHERE key = \"" + $context._fact + "\" WITH LINKS ALL" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {m_links_after_forget: .} }'
+
+# ─── subscriptions (stage E) ──────────────────────────────────────────────────
+- e_subscribe:
+    call: adb
+    with:
+      query: '${ "SUBSCRIBE TOPIC \"" + $context._topic + "\"" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {e_subscribe: .} }'
+- e_publish_1:
+    call: adb
+    with:
+      query: '${ "PUBLISH TOPIC \"" + $context._topic + "\" (n = 1, test_run = \"" + $context._run + "\")" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {e_publish_1: .} }'
+- e_publish_2:
+    call: adb
+    with:
+      query: '${ "PUBLISH TOPIC \"" + $context._topic + "\" (n = 2, test_run = \"" + $context._run + "\")" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {e_publish_2: .} }'
+- e_next_events:
+    call: mcp
+    with:
+      tool: next_events
+      arguments:
+        subscription: ${ $context.e_subscribe.data.subscription }
+        wait_seconds: 3
+      _resource: ${ $context._mcp }
+    export:
+      as: '${ $context + {e_next_events: (if type == "string" then fromjson else . end)} }'
+- e_ack:
+    call: adb
+    with:
+      query: '${ "ACK \"" + $context.e_subscribe.data.subscription + "\" OFFSET " + ($context.e_publish_2.data.offset | tostring) }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {e_ack: .} }'
+- e_unsubscribe:
+    call: adb
+    with:
+      query: '${ "UNSUBSCRIBE \"" + $context.e_subscribe.data.subscription + "\"" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {e_unsubscribe: .} }'
+
+# ─── platform tables (stage G) — embedded LanceDB or ADB, per a3t-platform-db ─
+- g_insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: adb_selftest
+      records:
+      - id: ${ "adbtest-" + $context._run }
+        run: ${ $context._run }
+        status: new
+      _resource: ${ $context._plat }
+    export:
+      as: '${ $context + {g_insert: .} }'
+- g_update:
+    call: lancedb
+    with:
+      operation: update
+      table: adb_selftest
+      filter: '${ "id = \"adbtest-" + $context._run + "\"" }'
+      values:
+        status: done
+      _resource: ${ $context._plat }
+    export:
+      as: '${ $context + {g_update: .} }'
+- g_query:
+    call: lancedb
+    with:
+      operation: query
+      table: adb_selftest
+      filter: '${ "id = \"adbtest-" + $context._run + "\"" }'
+      limit: 10
+      _resource: ${ $context._plat }
+    export:
+      as: '${ $context + {g_query: .} }'
+- g_delete:
+    call: lancedb
+    with:
+      operation: delete
+      table: adb_selftest
+      filter: '${ "id = \"adbtest-" + $context._run + "\"" }'
+      _resource: ${ $context._plat }
+    export:
+      as: '${ $context + {g_delete: .} }'
+- g_query_after_delete:
+    call: lancedb
+    with:
+      operation: query
+      table: adb_selftest
+      filter: '${ "id = \"adbtest-" + $context._run + "\"" }'
+      limit: 10
+      _resource: ${ $context._plat }
+    export:
+      as: '${ $context + {g_query_after_delete: .} }'
+- g_list_tables:
+    call: lancedb
+    with:
+      operation: list_tables
+      _resource: ${ $context._plat }
+    export:
+      as: '${ $context + {g_list_tables: .} }'
+
+# ─── clean up the test fact ───────────────────────────────────────────────────
+- cleanup:
+    call: adb
+    with:
+      query: '${ "FORGET FROM SEMANTIC WHERE key = \"" + $context._fact + "\"" }'
+      _resource: ${ $context._adb }
+    export:
+      as: '${ $context + {cleanup: .} }'
+
+# ─── report ───────────────────────────────────────────────────────────────────
+- report:
+    set:
+      checks: >-
+        ${ [
+          {check: "memory: STORE a fact", ok: ($context.m_store_fact.data.type == "stored"), got: $context.m_store_fact.data.type},
+          {check: "memory: UPDATE supersedes it (version 2, new content)", ok: (($context.m_lookup_fact.data.records[0].metadata.version == 2) and ($context.m_lookup_fact.data.records[0].data.content == "ADB self-test fact v2")), got: ($context.m_lookup_fact.data.records[0] | {version: .metadata.version, content: .data.content})},
+          {check: "memory: LINK fact → episode", ok: ($context.m_link.success == true), got: $context.m_link.data},
+          {check: "memory: FOLLOW LINKS reaches the episode", ok: ($context.m_follow_links.data.records[0].data.key == $context._ep), got: [$context.m_follow_links.data.records[] | .data.key]},
+          {check: "memory: FORGET the episode", ok: ($context.m_forget_episode.data.count == 1), got: $context.m_forget_episode.data},
+          {check: "memory: its link is gone", ok: ((($context.m_links_after_forget.data.records[0].data.links // []) | length) == 0), got: ($context.m_links_after_forget.data.records[0].data.links // [])},
+          {check: "subscriptions: SUBSCRIBE", ok: ($context.e_subscribe.data.subscription != null), got: $context.e_subscribe.data.subscription},
+          {check: "subscriptions: next_events delivers both messages in order", ok: ([$context.e_next_events.deliveries[]? | .offset] == [$context.e_publish_1.data.offset, $context.e_publish_2.data.offset]), got: {published: [$context.e_publish_1.data.offset, $context.e_publish_2.data.offset], delivered: [$context.e_next_events.deliveries[]? | .offset]}},
+          {check: "subscriptions: ACK moves the cursor", ok: ($context.e_ack.data.cursor == $context.e_publish_2.data.offset), got: $context.e_ack.data.cursor},
+          {check: "subscriptions: UNSUBSCRIBE", ok: ($context.e_unsubscribe.data.unsubscribed == true), got: $context.e_unsubscribe.data},
+          {check: "platform: insert", ok: ($context.g_insert.inserted == 1), got: $context.g_insert},
+          {check: "platform: update + query", ok: ($context.g_query[0].status == "done"), got: $context.g_query},
+          {check: "platform: delete", ok: (($context.g_query_after_delete | length) == 0), got: $context.g_query_after_delete},
+          {check: "platform: list_tables", ok: (($context.g_list_tables | index("adb_selftest")) != null), got: ($context.g_list_tables | length)},
+          {check: "cleanup: FORGET the test fact", ok: ($context.cleanup.data.count == 1), got: $context.cleanup.data}
+        ] }
+    export:
+      as: '${ $context + . }'
+- summary:
+    set:
+      run: ${ $context._run }
+      passed: ${ [$context.checks[] | select(.ok)] | length }
+      failed: ${ [$context.checks[] | select(.ok | not)] | length }
+      ok: ${ ([$context.checks[] | select(.ok | not)] | length) == 0 }
+      failures: ${ [$context.checks[] | select(.ok | not) | .check] }
+      checks: ${ $context.checks }
