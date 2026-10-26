@@ -190,6 +190,25 @@
   let createForCategory = $state('');
   let createTab = $state('details');
   let newResource = $state({ name: '', namespace: 'a3t', type: '', config: '{}' });
+
+  // Starting config for a new resource of a type; replaced when the type changes,
+  // until the user edits it.
+  const CONFIG_TEMPLATES: Record<string, object> = {
+    adb: { url: 'http://adb.a3t.svc.cluster.local:3000' },
+    lancedb: { db_path: '/data/a3t/my-db.lance' },
+    postgres: { host: 'localhost', port: 5432, database: 'postgres', user: 'postgres', password: '' },
+  };
+  const configTemplate = (type: string) => JSON.stringify(CONFIG_TEMPLATES[type] ?? {}, null, 2);
+  const untouchedConfig = (config: string) =>
+    config.trim() === '{}' || Object.keys(CONFIG_TEMPLATES).some(t => config === configTemplate(t));
+  let lastTemplateType = '';
+  $effect(() => {
+    const t = newResource.type;
+    if (t !== lastTemplateType) {
+      lastTemplateType = t;
+      if (untouchedConfig(newResource.config)) newResource.config = configTemplate(t);
+    }
+  });
   let creating = $state(false);
 
   const createTreeNodes = [
@@ -1060,7 +1079,11 @@ do:
       {:else if createTab === 'config'}
         <div class="pf">
           <h3>Configuration</h3>
-          <p class="pf-hint">Provide the connection configuration as JSON.</p>
+          {#if newResource.type === 'adb'}
+            <p class="pf-hint">ADB: <code>url</code> is its HTTP address (AQL, MCP at <code>/mcp/sse</code>); <code>call:adb</code> uses Arrow Flight on the same host, port 3001 — set <code>flight_url</code> only if it is elsewhere.</p>
+          {:else}
+            <p class="pf-hint">Provide the connection configuration as JSON.</p>
+          {/if}
           <label class="cf-field full">
             <span>Config (JSON)</span>
             <textarea rows="10" bind:value={newResource.config}></textarea>
@@ -1076,14 +1099,16 @@ do:
             <div class="pf-row"><span class="pf-k">Type</span><span class="pf-v mono">{newResource.type || '—'}</span></div>
           </div>
           <pre class="pf-code" style="margin-top: 16px;">{newResource.config}</pre>
-          <div class="create-actions">
-            <button class="btn ghost" onclick={() => showCreate = false}>Cancel</button>
-            <button class="btn spec" disabled={creating || !newResource.name || !newResource.type} onclick={createResource}>
-              {creating ? 'Creating...' : 'Create Resource'}
-            </button>
-          </div>
         </div>
       {/if}
+      <!-- On every step: Create was only on Review, so it looked like there was no save. -->
+      <div class="create-actions pf-footer">
+        {#if !newResource.name}<span class="pf-hint">Name the resource to create it.</span>{/if}
+        <button class="btn ghost" onclick={() => showCreate = false}>Cancel</button>
+        <button class="btn spec" disabled={creating || !newResource.name || !newResource.type} onclick={createResource}>
+          {creating ? 'Creating...' : 'Create Resource'}
+        </button>
+      </div>
     </div>
   </div>
 </SlidePanel>
@@ -1266,6 +1291,8 @@ do:
 
   /* Create form fields */
   .create-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--divider); }
+  .pf-footer { align-items: center; margin: 0 24px 24px; }
+  .pf-footer .pf-hint { margin: 0 auto 0 0; }
 
   /* Panel layout (matches AgentsList) */
   .panel-layout { display: grid; grid-template-columns: 200px 1fr; height: 100%; }
