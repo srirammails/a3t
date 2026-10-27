@@ -215,6 +215,30 @@ pub async fn reconcile_canvas(
 
 // ────────────────────────────── helpers ──────────────────────────────
 
+/// The annotation holding a Sandbox's pod-template hash.
+const TEMPLATE_HASH: &str = "a3t.io/template-hash";
+
+/// A stable hash of a pod template: FNV-1a over its JSON (fixed across Rust
+/// releases, so a controller upgrade doesn't recreate every sandbox).
+fn template_hash(pod_spec: &serde_json::Value) -> String {
+    let h = pod_spec.to_string().bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100000001b3));
+    format!("{h:016x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::template_hash;
+
+    #[test]
+    fn template_hash_is_stable_and_sensitive() {
+        let a = serde_json::json!({"containers": [{"image": "flowr:ee6", "env": [{"name": "A", "value": "1"}]}]});
+        let b = serde_json::json!({"containers": [{"image": "flowr:ee7", "env": [{"name": "A", "value": "1"}]}]});
+        assert_eq!(template_hash(&a), template_hash(&a.clone()));
+        assert_ne!(template_hash(&a), template_hash(&b));
+        assert_eq!(template_hash(&a).len(), 16);
+    }
+}
+
 /// Build + server-side-apply an Agent Sandbox `Sandbox` (agents.x-k8s.io/v1beta1)
 /// holding one flowr worker, then read back its readiness. This is the single place
 /// both a `Runtime` pool and an isolated `Canvas` turn into a real sandbox.
@@ -262,10 +286,16 @@ async fn apply_sandbox(
     if !node_selector.is_empty() {
         pod_spec["nodeSelector"] = serde_json::json!(node_selector);
     }
+    // Agent Sandbox doesn't replace a running pod when its template changes (W2-L10):
+    // stamp the template's hash, and recreate the Sandbox when it differs.
+    let hash = template_hash(&pod_spec);
     let manifest = serde_json::json!({
         "apiVersion": "agents.x-k8s.io/v1beta1",
         "kind": "Sandbox",
-        "metadata": { "name": name, "namespace": ns, "labels": labels, "ownerReferences": owner },
+        "metadata": {
+            "name": name, "namespace": ns, "labels": labels, "ownerReferences": owner,
+            "annotations": { TEMPLATE_HASH: hash },
+        },
         "spec": {
             "operatingMode": operating_mode,
             "service": true,
@@ -275,6 +305,20 @@ async fn apply_sandbox(
     let gvk = GroupVersionKind::gvk("agents.x-k8s.io", "v1beta1", "Sandbox");
     let ar = ApiResource::from_gvk(&gvk);
     let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), ns, &ar);
+    if let Some(existing) = api.get_opt(name).await? {
+        let current = existing.metadata.annotations.as_ref().and_then(|a| a.get(TEMPLATE_HASH)).cloned();
+        if current.as_deref() != Some(hash.as_str()) {
+            info!(sandbox = %name, namespace = %ns, from = ?current, to = %hash, "pod template changed: recreating the sandbox");
+            api.delete(name, &Default::default()).await?;
+            // Applying while the old one terminates would patch it, not replace it.
+            for _ in 0..60 {
+                if api.get_opt(name).await?.is_none() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+    }
     api.patch(name, &PatchParams::apply("a3t-controller").force(), &Patch::Apply(&manifest)).await?;
 
     let (ready, fqdn) = match api.get(name).await {
