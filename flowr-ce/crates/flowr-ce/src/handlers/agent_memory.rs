@@ -3,8 +3,10 @@
 //! With `memory_resource` set, each turn:
 //! - **recalls** WORKING and EPISODIC of this session (newest 20 each; they are put on
 //!   the context for extensions — the session history already carries them), the
-//!   newest SEMANTIC facts in the agent's namespace, and — when PROCEDURAL reads are
-//!   on — the procedure whose pattern best matches the message;
+//!   SEMANTIC facts in the agent's namespace most relevant to the message (ADB's
+//!   `RECALL … LIKE $q`, MVP W4; `memory_config.semantic.{limit, min_confidence}`,
+//!   default 5 and none; the newest facts on an ADB without it), and — when
+//!   PROCEDURAL reads are on — the procedure whose pattern best matches the message;
 //! - adds the facts (and a weaker procedure match) to the system prompt, bounded;
 //! - **stores** the user turn in WORKING (TTL = the session's) and the reply in
 //!   EPISODIC.
@@ -19,13 +21,20 @@ use tracing::warn;
 
 use super::call_adb::{adb_query, resolve_adb, AdbEndpoint};
 
-/// Per-tier switches (`memory_config.<tier>.{read,write}`); unset = the tier default.
+/// Per-tier settings (`memory_config.<tier>.{read, write, limit, min_confidence}`);
+/// unset = the tier default.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TierMode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub write: Option<bool>,
+    /// How many records a read brings back (AQL `LIMIT`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+    /// SEMANTIC: the least similarity a fact needs (AQL `MIN_CONFIDENCE`, 0–1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_confidence: Option<f64>,
 }
 
 /// `memory_config` (F3 defaults: WORKING and EPISODIC read/write, SEMANTIC read only —
@@ -157,21 +166,50 @@ impl AgentMemory {
         }
     }
 
+    /// The facts most relevant to `message` (`RECALL … LIKE $q`), or `None` when
+    /// this ADB can't rank (older, or no durable engine): the caller falls back.
+    async fn relevant_facts(&self, message: &str, tier: &TierMode) -> Option<Vec<Value>> {
+        let mut aql = format!("RECALL FROM SEMANTIC LIKE $q NAMESPACE {}", aql_str(&self.namespace));
+        if let Some(c) = tier.min_confidence {
+            aql.push_str(&format!(" MIN_CONFIDENCE {c:?}"));
+        }
+        aql.push_str(&format!(" LIMIT {}", tier.limit.unwrap_or(FACTS as u64)));
+        match adb_query(&self.ep, &aql, Some(&serde_json::json!({ "q": message }))).await {
+            Ok(r) => Some(records(&r)),
+            Err(e) => {
+                warn!(error = %e, "agent memory: relevance recall unavailable; using the newest facts");
+                None
+            }
+        }
+    }
+
     pub async fn recall(&self, tiers: &MemoryTierConfig, message: &str) -> Recalled {
         let (sid, ns) = (aql_str(&self.session_id), aql_str(&self.namespace));
         let mut out = Recalled::default();
         if tiers.working_read() {
-            out.working = self.query(&format!("RECALL FROM WORKING WHERE session_id = {sid} NAMESPACE {ns} LIMIT 20")).await;
+            let n = tiers.working.limit.unwrap_or(20);
+            out.working = self.query(&format!("RECALL FROM WORKING WHERE session_id = {sid} NAMESPACE {ns} LIMIT {n}")).await;
         }
         if tiers.episodic_read() {
-            out.episodic = self.query(&format!("RECALL FROM EPISODIC WHERE session_id = {sid} NAMESPACE {ns} LIMIT 20")).await;
+            let n = tiers.episodic.limit.unwrap_or(20);
+            out.episodic = self.query(&format!("RECALL FROM EPISODIC WHERE session_id = {sid} NAMESPACE {ns} LIMIT {n}")).await;
         }
         if tiers.semantic_read() {
-            // Newest facts first (relevance ranking arrives with ADB's hybrid recall, M2).
-            let mut facts = self.query(&format!("RECALL FROM SEMANTIC ALL NAMESPACE {ns} LIMIT 200")).await;
-            facts.sort_by_key(|r| std::cmp::Reverse(created_at(r)));
-            facts.truncate(FACTS);
-            out.facts = facts;
+            let limit = tiers.semantic.limit.unwrap_or(FACTS as u64) as usize;
+            let relevant = match message.trim().is_empty() {
+                true => None,
+                false => self.relevant_facts(message, &tiers.semantic).await,
+            };
+            out.facts = match relevant {
+                Some(facts) => facts,
+                // No message, or an ADB that can't rank: the newest facts.
+                None => {
+                    let mut facts = self.query(&format!("RECALL FROM SEMANTIC ALL NAMESPACE {ns} LIMIT 200")).await;
+                    facts.sort_by_key(|r| std::cmp::Reverse(created_at(r)));
+                    facts.truncate(limit);
+                    facts
+                }
+            };
         }
         if tiers.procedural_read() {
             // Matched here: ADB's `PATTERN` takes a bound variable only (limitations S7),
@@ -235,7 +273,7 @@ impl Recalled {
         if lines.is_empty() {
             return None;
         }
-        let mut section = String::from("\n\n## What you remember\nFrom your long-term memory (newest first); use it if relevant:\n");
+        let mut section = String::from("\n\n## What you remember\nFrom your long-term memory (most relevant first); use it if relevant:\n");
         for l in lines {
             if section.len() + l.len() + 1 > PROMPT_BUDGET {
                 break;

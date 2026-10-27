@@ -399,12 +399,20 @@
 
   // Derived config helpers for specific tabs
   // What the agent engine does when a tier is left unset (FlowR agent_memory.rs, F3).
-  const MEMORY_TIER_DEFAULTS: Record<string, { read: boolean; write: boolean }> = {
-    working: { read: true, write: true },
-    episodic: { read: true, write: true },
-    semantic: { read: true, write: false },
+  const MEMORY_TIER_DEFAULTS: Record<string, { read: boolean; write: boolean; limit?: number }> = {
+    working: { read: true, write: true, limit: 20 },
+    episodic: { read: true, write: true, limit: 20 },
+    semantic: { read: true, write: false, limit: 5 },
     procedural: { read: false, write: false },
   };
+  // Set one setting of a memory tier; an empty value removes it (the tier default).
+  function setTier(tier: string, key: string, val: any) {
+    const obj = { ...cfgGetObj('memory_config') };
+    const t = { ...(obj[tier] ?? {}) };
+    if (val === undefined || val === '' || Number.isNaN(val)) delete t[key]; else t[key] = val;
+    obj[tier] = t;
+    cfgSet('memory_config', obj);
+  }
   function cfgGet(key: string): any { return configValues[key]; }
   function cfgSet(key: string, val: any) { if (val === undefined || val === '') delete configValues[key]; else configValues[key] = val; configValues = { ...configValues }; emitChange(); }
   function cfgGetArr(key: string): any[] { return (configValues[key] as any[]) ?? []; }
@@ -996,13 +1004,23 @@
           onchange={(e) => { const obj = { ...cfgGetObj('memory_config') }; obj[tier] = { ...(obj[tier] ?? {}), read: e.currentTarget.checked }; cfgSet('memory_config', obj); }} /> read</label>
         <label class="mem-chk"><input type="checkbox" checked={t.write ?? d.write}
           onchange={(e) => { const obj = { ...cfgGetObj('memory_config') }; obj[tier] = { ...(obj[tier] ?? {}), write: e.currentTarget.checked }; cfgSet('memory_config', obj); }} /> write</label>
+        {#if d.limit !== undefined}
+          <label class="mem-num" title="How many records a read brings back (AQL LIMIT)">limit
+            <input type="number" min="1" max="200" value={t.limit ?? ''} placeholder={String(d.limit)}
+              oninput={(e) => setTier(tier, 'limit', e.currentTarget.value === '' ? '' : Number(e.currentTarget.value))} /></label>
+        {/if}
+        {#if tier === 'semantic'}
+          <label class="mem-num" title="The least similarity (0–1) a fact needs to reach the prompt (AQL MIN_CONFIDENCE); empty = no threshold">min conf
+            <input type="number" min="0" max="1" step="0.05" value={t.min_confidence ?? ''} placeholder="—"
+              oninput={(e) => setTier(tier, 'min_confidence', e.currentTarget.value === '' ? '' : Number(e.currentTarget.value))} /></label>
+        {/if}
       </div>
     {/each}
 
     <div class="mem-hint">
       <strong>Working</strong> — this session's user turns<br/>
       <strong>Episodic</strong> — this session's replies<br/>
-      <strong>Semantic</strong> — facts (saved with the <code>remember</code> tool); read puts the newest into the prompt<br/>
+      <strong>Semantic</strong> — facts (saved with the <code>remember</code> tool); read puts the ones most relevant to the message into the prompt (up to <em>limit</em>, at least <em>min conf</em> similar)<br/>
       <strong>Procedural</strong> — when read is on, a procedure matching the request answers without the LLM
     </div>
   </div>
@@ -1318,6 +1336,8 @@
   .mem-tier { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; margin-bottom: 4px; background: var(--bg-surface); }
   .mem-tier-name { font-family: var(--font-mono); font-size: 13px; font-weight: 550; color: var(--text-1); text-transform: capitalize; min-width: 100px; }
   .mem-chk { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-2); cursor: pointer; flex-direction: row !important; }
+  .mem-num { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-3); }
+  .mem-num input { width: 58px; }
   .mem-chk input { accent-color: var(--spec); }
   .mem-hint { font-size: 11px; color: var(--text-4); line-height: 1.6; margin-top: 10px; padding: 8px 10px; background: var(--bg-subtle); border-radius: 4px; }
   .mem-hint strong { color: var(--text-2); font-weight: 600; }

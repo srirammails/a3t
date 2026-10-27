@@ -159,6 +159,10 @@ step_image() {
             ctr=$(ba from "$ADB_BASE")
             ba copy --chmod 755 "$ctr" "$(binary_for adb)" /usr/local/bin/adb
             ba copy "$ctr" /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+            # The embedding model (W4), at ADB's default ADB_EMBED_MODEL_DIR.
+            local model
+            model="$("$ADB_DIR/tests/fetch-model.sh" "$BUILD_DIR/models/bge-small-en-v1.5")"
+            ba copy "$ctr" "$model" /models/bge-small-en-v1.5
             ba config --port 3000 --entrypoint '[]' \
                 --cmd '["adb", "serve-http", "--port", "3000"]' "$ctr"
             ;;
