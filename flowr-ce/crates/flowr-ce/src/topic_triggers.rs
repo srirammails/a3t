@@ -215,30 +215,41 @@ async fn read_topic(storage: Arc<dyn StorageBackend>, client: reqwest::Client, t
                 continue;
             }
         };
-        let deliveries = batch.get("deliveries").and_then(|d| d.as_array()).cloned().unwrap_or_default();
-        let mut last = None;
-        for d in &deliveries {
+        // A `reset` (ADB W9: away longer than ADB's log keeps) carries the messages
+        // missed, each with its own offset; then the deliveries.
+        let mut items: Vec<(u64, Value)> = Vec::new();
+        for change in batch.pointer("/reset/changes").and_then(|c| c.as_array()).into_iter().flatten() {
+            items.push((change.get("offset").and_then(|o| o.as_u64()).unwrap_or(0), change.clone()));
+        }
+        for d in batch.get("deliveries").and_then(|d| d.as_array()).into_iter().flatten() {
             let offset = d.get("offset").and_then(|o| o.as_u64()).unwrap_or(0);
-            for change in d.get("changes").and_then(|c| c.as_array()).into_iter().flatten() {
-                if change.get("op").and_then(|o| o.as_str()) != Some("publish") {
-                    continue;
-                }
-                let mut message = change.get("value").cloned().unwrap_or(Value::Null);
-                // A request that wants its result back: the run publishes it to
-                // `_reply_topic` on this same ADB.
-                if let Some(m) = message.as_object_mut().filter(|m| m.contains_key("_reply_topic")) {
-                    m.insert("_adb_resource".into(), json!(resource));
-                }
-                // Trigger runs have no caller: targets run as the runtime service.
-                let flows = crate::TriggerWorkflowAdapter { principal: None, blocked: Default::default() };
-                let result = flowr_ce_agents::trigger_manager()
-                    .deliver_topic_message(&trigger_id, offset, message, &agents, &flows)
-                    .await;
-                if result.is_none() {
-                    return; // paused or deleted meanwhile; the supervisor restarts us if needed
-                }
+            items.extend(d.get("changes").and_then(|c| c.as_array()).into_iter().flatten().map(|c| (offset, c.clone())));
+        }
+        // Ack through the reset even when it held nothing to run, so a restart
+        // doesn't catch up from the table again.
+        let mut last = batch.pointer("/reset/offset").and_then(|o| o.as_u64());
+        if let Some(r) = last {
+            warn!(trigger = %trigger_id, offset = r, "adb_topic: caught up from ADB's table (reset)");
+        }
+        for (offset, change) in items {
+            last = Some(last.map_or(offset, |l| l.max(offset)));
+            if change.get("op").and_then(|o| o.as_str()) != Some("publish") {
+                continue;
             }
-            last = Some(offset);
+            let mut message = change.get("value").cloned().unwrap_or(Value::Null);
+            // A request that wants its result back: the run publishes it to
+            // `_reply_topic` on this same ADB.
+            if let Some(m) = message.as_object_mut().filter(|m| m.contains_key("_reply_topic")) {
+                m.insert("_adb_resource".into(), json!(resource));
+            }
+            // Trigger runs have no caller: targets run as the runtime service.
+            let flows = crate::TriggerWorkflowAdapter { principal: None, blocked: Default::default() };
+            let result = flowr_ce_agents::trigger_manager()
+                .deliver_topic_message(&trigger_id, offset, message, &agents, &flows)
+                .await;
+            if result.is_none() {
+                return; // paused or deleted meanwhile; the supervisor restarts us if needed
+            }
         }
         if let Some(offset) = last {
             let ack = format!("ACK {} OFFSET {offset}", aql_str(&sub));
