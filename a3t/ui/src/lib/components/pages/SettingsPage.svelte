@@ -1,7 +1,7 @@
 <script lang="ts">
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
   import { onMount } from 'svelte';
-  import { execFlow, getPlatformDb, switchPlatformDb, getAdbEmbedding, setAdbEmbedding, type PlatformDbStatus, type AdbEmbeddingStatus, type AdbEmbeddingSettings } from '$lib/services/api';
+  import { execFlow, getPlatformDb, switchPlatformDb, getAdbEmbedding, setAdbEmbedding, getAdbCache, setAdbCache, type PlatformDbStatus, type AdbEmbeddingStatus, type AdbEmbeddingSettings, type AdbCacheStatus, type AdbCacheRule, type AdbCacheKeep } from '$lib/services/api';
   import { currentUser } from '$lib/stores/auth';
   import { API_BASE, getDefaultApiBase, getApiOverride, setApiOverride, clearApiOverride } from '$lib/config';
 
@@ -108,6 +108,7 @@
       { key: 'infra.backend', label: 'Storage Backend', icon: 'database', ee: true },
       { key: 'infra.platformdb', label: 'Platform Database', icon: 'database', ee: true },
       { key: 'infra.adbembedding', label: 'ADB Embeddings', icon: 'database', ee: true },
+      { key: 'infra.adbcache', label: 'ADB Memory Cache', icon: 'database', ee: true },
       { key: 'infra.logs', label: 'Logs & Retention', icon: 'audit' },
       { key: 'infra.registry', label: 'Image Registry', icon: 'box' },
     ]},
@@ -203,6 +204,56 @@
       : (r.data?.error ?? r.error ?? 'Save failed');
   }
   $effect(() => { if (leaf === 'infra.adbembedding' && !emb && !embMsg) loadEmbedding(); });
+
+  // ADB memory cache (ADB W10): what ADB keeps in memory, per memory type and scope.
+  type KeepKind = 'all' | 'none' | 'last' | 'bytes' | 'within';
+  type CacheRow = { memory: AdbCacheRule['memory']; scope: string; kind: KeepKind; value: string };
+  const MEMORIES: AdbCacheRule['memory'][] = ['working', 'episodic', 'semantic', 'procedural', 'tools'];
+  let cacheUrl = $state('http://adb.a3t.svc.cluster.local:3000');
+  let cache = $state<AdbCacheStatus | null>(null);
+  let cacheRows = $state<CacheRow[]>([]);
+  let cacheMax = $state('256MB');
+  let cacheBusy = $state(false);
+  let cacheMsg = $state('');
+  let cacheOk = $state(false);
+  const mb = (n: number) => `${(n / 1048576).toFixed(1)} MB`;
+  function toRow(r: AdbCacheRule): CacheRow {
+    const k = r.keep;
+    if (k === 'all' || k === 'none') return { memory: r.memory, scope: r.scope ?? '*', kind: k, value: '' };
+    if ('last' in k) return { memory: r.memory, scope: r.scope ?? '*', kind: 'last', value: String(k.last) };
+    if ('bytes' in k) return { memory: r.memory, scope: r.scope ?? '*', kind: 'bytes', value: typeof k.bytes === 'number' ? mb(k.bytes).replace(' ', '') : k.bytes };
+    return { memory: r.memory, scope: r.scope ?? '*', kind: 'within', value: k.within };
+  }
+  function toRule(r: CacheRow): AdbCacheRule {
+    const keep: AdbCacheKeep = r.kind === 'all' || r.kind === 'none' ? r.kind
+      : r.kind === 'last' ? { last: Number(r.value) }
+      : r.kind === 'bytes' ? { bytes: r.value }
+      : { within: r.value };
+    return { memory: r.memory, scope: r.scope.trim() || '*', keep };
+  }
+  async function loadCache() {
+    cacheMsg = '';
+    const r = await getAdbCache(cacheUrl);
+    if (r.ok && r.data?.success && r.data.data) {
+      cache = r.data.data;
+      cacheRows = cache.settings.rules.map(toRow);
+      cacheMax = typeof cache.settings.max_bytes === 'number' ? mb(cache.settings.max_bytes).replace(' ', '') : cache.settings.max_bytes;
+    } else {
+      cache = null;
+      cacheOk = false;
+      cacheMsg = r.data?.error ?? r.error ?? 'Could not read the ADB cache settings';
+    }
+  }
+  async function saveCache() {
+    cacheBusy = true;
+    cacheMsg = '';
+    const r = await setAdbCache(cacheUrl, { max_bytes: cacheMax, rules: cacheRows.map(toRule) });
+    cacheBusy = false;
+    cacheOk = !!(r.ok && r.data?.success);
+    cacheMsg = cacheOk ? `Saved and applied in ${r.data?.data?.took_ms ?? 0} ms.` : (r.data?.error ?? r.error ?? 'Save failed');
+    if (cacheOk) await loadCache();
+  }
+  $effect(() => { if (leaf === 'infra.adbcache' && !cache && !cacheMsg) loadCache(); });
   const isLocked = (key: string) => !!LEAF[key]?.ee && edition !== 'ee';
   const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 
@@ -267,6 +318,7 @@
       { type: 'text', label: 'Connection URL', hint: 'e.g. redis://dragonfly:6379 — ignored for LanceDB' },
       { type: 'text', label: 'Event log backend', hint: 'Override just the event log/queue (blank = same as Backend)' },
     ]},
+    'infra.adbcache': { title: 'ADB Memory Cache', desc: 'Which memories ADB keeps in memory, per memory type and scope, for fast reads.', ee: true, controls: [] },
     'infra.adbembedding': { title: 'ADB Embeddings', desc: 'The model ADB uses to find memories by meaning: its built-in model or an OpenAI-compatible endpoint.', ee: true, controls: [] },
     'infra.platformdb': { title: 'Platform Database', desc: "Where A3T's own data lives: the embedded LanceDB or ADB (Enterprise). Switch either way; data is copied across.", ee: true, controls: [] },
     'infra.logs': { title: 'Logs & Retention', desc: 'How long run history and decision logs are kept on disk, and how noisy the runtime is.', controls: [
@@ -492,6 +544,55 @@
         {/if}
       </div>
 
+    {:else if leaf === 'infra.adbcache'}
+      <div class="card">
+        <div class="card-head"><h2>ADB Memory Cache</h2>{#if cache}<span class="active-pill">{cache.mode === 'off' ? 'Off' : cache.mode === 'shadow' ? 'On (checked against storage)' : 'On'}</span>{/if}</div>
+        <p class="card-sub">ADB keeps recent memories in its own memory, so agents read them in well under a millisecond instead of from storage. Each rule says how much of a memory type to keep, per scope; the first rule that matches a scope wins (<span class="mono">*</span> matches any part). Reads the cache can't answer whole go to storage, so results never change, only speed. Saving applies at once, without a restart.</p>
+        <label class="pdb-field">ADB URL <input class="mono" bind:value={cacheUrl} placeholder="http://adb.a3t.svc.cluster.local:3000" onchange={loadCache} /></label>
+        {#if cache}
+          <p class="mono dim">{cache.source === 'settings' ? 'Saved rules' : cache.source === 'environment' ? 'Rules from ADB_CACHE_RULES' : 'Default rules'}{#if cache.stats} · {cache.stats.rows} memories, {mb(cache.stats.bytes)} of {mb(cache.stats.max_bytes)} · {cache.stats.hits} reads from the cache, {cache.stats.misses} from storage{#if cache.stats.mismatches > 0} · {cache.stats.mismatches} mismatches{/if}{/if}</p>
+          <div class="cache-rules">
+            <div class="cache-rule head"><span>Memory type</span><span>Scope</span><span>Keep</span><span></span><span></span></div>
+            {#each cacheRows as row, i}
+              <div class="cache-rule">
+                <select bind:value={row.memory}>{#each MEMORIES as m}<option value={m}>{m}</option>{/each}</select>
+                <input class="mono" bind:value={row.scope} placeholder="*" />
+                <select bind:value={row.kind}>
+                  <option value="all">everything</option>
+                  <option value="last">the newest n</option>
+                  <option value="bytes">the newest that fit in</option>
+                  <option value="within">the last (time)</option>
+                  <option value="none">nothing</option>
+                </select>
+                {#if row.kind === 'all' || row.kind === 'none'}<span></span>{:else}<input class="mono" bind:value={row.value} placeholder={row.kind === 'last' ? '30' : row.kind === 'bytes' ? '10MB' : '24h'} />{/if}
+                <button class="btn ghost" title="Remove rule" onclick={() => (cacheRows = cacheRows.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            {/each}
+          </div>
+          <div class="row-actions"><button class="btn ghost" onclick={() => (cacheRows = [...cacheRows, { memory: 'episodic', scope: '*', kind: 'last', value: '30' }])}>Add rule</button></div>
+          <label class="pdb-field">Cache size limit (whole ADB) <input class="mono" bind:value={cacheMax} placeholder="256MB" /></label>
+          <div class="row-actions">
+            <button class="btn ghost" onclick={loadCache} disabled={cacheBusy}>Refresh</button>
+            <button class="btn spec" onclick={saveCache} disabled={cacheBusy || cache.mode === 'off'}>{cacheBusy ? 'Applying…' : 'Save and apply'}</button>
+            {#if cache.mode === 'off'}<span class="msg">The cache is off (ADB_CACHE=off).</span>{/if}
+            {#if cacheMsg}<span class="msg" class:ok={cacheOk}>{cacheMsg}</span>{/if}
+          </div>
+          {#if cache.stats && cache.stats.buckets.length > 0}
+            <div class="cache-rules buckets">
+              <div class="cache-rule head"><span>Memory type</span><span>Scope</span><span>Memories</span><span>Size</span><span>All kept</span></div>
+              {#each cache.stats.buckets as b}
+                <div class="cache-rule"><span>{b.memory}</span><span class="mono">{b.scope}</span><span>{b.rows}</span><span>{mb(b.bytes)}</span><span>{b.complete ? 'yes' : 'newest only'}</span></div>
+              {/each}
+            </div>
+          {/if}
+        {:else if cacheMsg}
+          <p class="msg">{cacheMsg}</p>
+          <div class="row-actions"><button class="btn ghost" onclick={loadCache}>Retry</button></div>
+        {:else}
+          <p class="dim">Loading…</p>
+        {/if}
+      </div>
+
     {:else if leaf === 'general.runtime'}
       <div class="card">
         <div class="card-head"><h2>Runtime</h2><span class="active-pill">Active: {activeRt}</span></div>
@@ -680,6 +781,12 @@
   .pdb-field select { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-base, transparent); color: inherit; }
   .pdb-field input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-base, transparent); color: inherit; }
   .msg.ok { color: var(--ok, #23987f); }
+  .cache-rules { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-width: 760px; }
+  .cache-rules.buckets { margin-top: 20px; }
+  .cache-rule { display: grid; grid-template-columns: 1.1fr 1.4fr 1.4fr 0.9fr 0.6fr; gap: 8px; align-items: center; font-size: 12px; }
+  .cache-rule.head { color: var(--text-dim, inherit); opacity: 0.7; font-size: 11px; }
+  .cache-rule select, .cache-rule input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-base, transparent); color: inherit; min-width: 0; }
+  @media (max-width: 640px) { .cache-rule { grid-template-columns: 1fr 1fr; } }
   .mono.dim { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); margin-top: 12px; }
 
   .rt-list { display: flex; flex-direction: column; gap: 8px; }

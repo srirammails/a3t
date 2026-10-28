@@ -166,6 +166,25 @@ export async function setAdbEmbedding(adbUrl: string, settings: AdbEmbeddingSett
   return request('/registry/adb-embedding', { method: 'PUT', body: JSON.stringify({ url: adbUrl, settings }) });
 }
 
+// ── ADB hot cache rules (ADB W10), through FlowR ──
+
+export type AdbCacheKeep = 'all' | 'none' | { last: number } | { bytes: number | string } | { within: string };
+export interface AdbCacheRule { memory: 'working' | 'tools' | 'procedural' | 'semantic' | 'episodic'; scope?: string; keep: AdbCacheKeep }
+export interface AdbCacheSettings { max_bytes: number | string; rules: AdbCacheRule[] }
+export interface AdbCacheBucket { memory: string; scope: string; rows: number; bytes: number; complete: boolean }
+export interface AdbCacheStats { rows: number; bytes: number; max_bytes: number; hits: number; misses: number; mismatches: number; buckets: AdbCacheBucket[] }
+export interface AdbCacheStatus { mode: 'on' | 'off' | 'shadow'; source: 'settings' | 'environment' | 'default'; settings: AdbCacheSettings; stats: AdbCacheStats | null }
+
+/** The ADB at `adbUrl`: its hot cache rules and figures. */
+export async function getAdbCache(adbUrl: string): Promise<ApiResponse<{ success: boolean; data?: AdbCacheStatus; error?: string }>> {
+  return request(`/registry/adb-cache?url=${encodeURIComponent(adbUrl)}`);
+}
+
+/** Save hot cache rules on the ADB at `adbUrl`; it rebuilds its cache with them at once. */
+export async function setAdbCache(adbUrl: string, settings: AdbCacheSettings): Promise<ApiResponse<{ success: boolean; data?: { stats: AdbCacheStats | null; took_ms: number }; error?: string }>> {
+  return request('/registry/adb-cache', { method: 'PUT', body: JSON.stringify({ url: adbUrl, settings }) });
+}
+
 /** Copy every platform table to `target`, then switch A3T to it. */
 export async function switchPlatformDb(target: { backend: 'adb' | 'lancedb'; url?: string; flight_url?: string }): Promise<ApiResponse<{ from: string; to: string; tables: number; rows: number }>> {
   return request('/registry/platform-db/switch', { method: 'POST', body: JSON.stringify(target) });
