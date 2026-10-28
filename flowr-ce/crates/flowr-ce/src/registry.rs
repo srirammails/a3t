@@ -47,7 +47,60 @@ pub fn registry_router(storage: Arc<dyn StorageBackend>) -> Router {
         // EE, ADB stage G). Switching is a `resource:update` on a3t/a3t-platform-db.
         .route("/platform-db", get(platform_db_status))
         .route("/platform-db/switch", post(platform_db_switch))
+        // ADB's embedding settings (ADB W9.10), proxied with FlowR's ADB token.
+        .route("/adb-embedding", get(adb_embedding_get).put(adb_embedding_put))
         .with_state(state)
+}
+
+#[derive(Deserialize)]
+struct AdbUrlQuery {
+    url: String,
+}
+
+/// `url`'s `/admin/embedding`, if `url` is an http(s) base.
+fn adb_admin_url(url: &str) -> Result<String, (StatusCode, Json<Value>)> {
+    let base = url.trim().trim_end_matches('/');
+    if !(base.starts_with("http://") || base.starts_with("https://")) {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "url: the ADB's http(s) address" }))));
+    }
+    Ok(format!("{base}/admin/embedding"))
+}
+
+/// The ADB's answer as ours: its `{success, data, error}` body and status.
+async fn adb_proxy(req: reqwest::RequestBuilder) -> axum::response::Response {
+    match req.timeout(std::time::Duration::from_secs(60)).send().await {
+        Ok(r) => {
+            let status = StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let body = r.json::<Value>().await.unwrap_or_else(|e| json!({ "success": false, "error": format!("ADB: {e}") }));
+            (status, Json(body)).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "success": false, "error": format!("ADB unreachable: {e}") }))).into_response(),
+    }
+}
+
+/// GET /registry/adb-embedding?url=<adb> — the ADB's embedding settings and how
+/// many records still wait for a vector.
+async fn adb_embedding_get(Query(q): Query<AdbUrlQuery>) -> impl IntoResponse {
+    let url = match adb_admin_url(&q.url) {
+        Ok(u) => u,
+        Err(e) => return e.into_response(),
+    };
+    adb_proxy(flowr_mcp_core::with_adb_auth(reqwest::Client::new().get(&url), &url)).await
+}
+
+/// PUT /registry/adb-embedding — `{url, settings: {provider, model, dimension,
+/// url?, api_key_env?}}`: the ADB checks and saves them, then restarts to apply.
+/// Gated like editing a resource (Admin in EE).
+async fn adb_embedding_put(principal: Option<Extension<Principal>>, Json(body): Json<Value>) -> impl IntoResponse {
+    let who = caller(principal);
+    if let Err(resp) = authorize_resource_write(&who, flowr_policy::actions::resource_update(), "adb", "embedding").await {
+        return resp.into_response();
+    }
+    let url = match adb_admin_url(body["url"].as_str().unwrap_or_default()) {
+        Ok(u) => u,
+        Err(e) => return e.into_response(),
+    };
+    adb_proxy(flowr_mcp_core::with_adb_auth(reqwest::Client::new().put(&url), &url).json(&body["settings"])).await
 }
 
 /// GET /registry/platform-db — `{backend, describe, adb_supported, config}`.
