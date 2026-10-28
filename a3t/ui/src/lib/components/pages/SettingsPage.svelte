@@ -1,7 +1,7 @@
 <script lang="ts">
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
   import { onMount } from 'svelte';
-  import { execFlow, getPlatformDb, switchPlatformDb, type PlatformDbStatus } from '$lib/services/api';
+  import { execFlow, getPlatformDb, switchPlatformDb, getAdbEmbedding, setAdbEmbedding, type PlatformDbStatus, type AdbEmbeddingStatus, type AdbEmbeddingSettings } from '$lib/services/api';
   import { currentUser } from '$lib/stores/auth';
   import { API_BASE, getDefaultApiBase, getApiOverride, setApiOverride, clearApiOverride } from '$lib/config';
 
@@ -107,6 +107,7 @@
       { key: 'infra.storage', label: 'Storage & Data', icon: 'database' },
       { key: 'infra.backend', label: 'Storage Backend', icon: 'database', ee: true },
       { key: 'infra.platformdb', label: 'Platform Database', icon: 'database', ee: true },
+      { key: 'infra.adbembedding', label: 'ADB Embeddings', icon: 'database', ee: true },
       { key: 'infra.logs', label: 'Logs & Retention', icon: 'audit' },
       { key: 'infra.registry', label: 'Image Registry', icon: 'box' },
     ]},
@@ -167,6 +168,41 @@
     await loadPlatformDb();
   }
   $effect(() => { if (leaf === 'infra.platformdb' && !pdb) loadPlatformDb(); });
+
+  // ADB embeddings (ADB W9.10): which model ADB embeds memories with.
+  let embUrl = $state('http://adb.a3t.svc.cluster.local:3000');
+  let emb = $state<AdbEmbeddingStatus | null>(null);
+  let embForm = $state<AdbEmbeddingSettings>({ provider: 'local', model: 'bge-small-en-v1.5', dimension: 384 });
+  let embBusy = $state(false);
+  let embMsg = $state('');
+  let embOk = $state(false);
+  async function loadEmbedding() {
+    embMsg = '';
+    const r = await getAdbEmbedding(embUrl);
+    if (r.ok && r.data?.success && r.data.data) {
+      emb = r.data.data;
+      embForm = { ...r.data.data.settings };
+    } else {
+      emb = null;
+      embOk = false;
+      embMsg = r.data?.error ?? r.error ?? 'Could not read the ADB embedding settings';
+    }
+  }
+  async function saveEmbedding() {
+    if (!confirm(`Save these embedding settings on ${embUrl}?\n\nADB checks them with a sample embedding, then restarts (a few seconds). A different model or size re-embeds every memory in the background; recall by meaning is partial until it finishes.`)) return;
+    embBusy = true;
+    embMsg = '';
+    const settings: AdbEmbeddingSettings = embForm.provider === 'local'
+      ? { provider: 'local', model: embForm.model, dimension: Number(embForm.dimension) }
+      : { provider: 'openai', model: embForm.model, dimension: Number(embForm.dimension), url: embForm.url, ...(embForm.api_key_env ? { api_key_env: embForm.api_key_env } : {}) };
+    const r = await setAdbEmbedding(embUrl, settings);
+    embBusy = false;
+    embOk = !!(r.ok && r.data?.success);
+    embMsg = embOk
+      ? `Saved. ADB is restarting${r.data?.data?.reembed ? ' and will re-embed every memory' : ''}; refresh in a few seconds.`
+      : (r.data?.error ?? r.error ?? 'Save failed');
+  }
+  $effect(() => { if (leaf === 'infra.adbembedding' && !emb && !embMsg) loadEmbedding(); });
   const isLocked = (key: string) => !!LEAF[key]?.ee && edition !== 'ee';
   const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 
@@ -231,6 +267,7 @@
       { type: 'text', label: 'Connection URL', hint: 'e.g. redis://dragonfly:6379 — ignored for LanceDB' },
       { type: 'text', label: 'Event log backend', hint: 'Override just the event log/queue (blank = same as Backend)' },
     ]},
+    'infra.adbembedding': { title: 'ADB Embeddings', desc: 'The model ADB uses to find memories by meaning: its built-in model or an OpenAI-compatible endpoint.', ee: true, controls: [] },
     'infra.platformdb': { title: 'Platform Database', desc: "Where A3T's own data lives: the embedded LanceDB or ADB (Enterprise). Switch either way; data is copied across.", ee: true, controls: [] },
     'infra.logs': { title: 'Logs & Retention', desc: 'How long run history and decision logs are kept on disk, and how noisy the runtime is.', controls: [
       { type: 'select', label: 'Execution history retention', hint: 'How long finished runs are kept on disk', options: ['7 days', '14 days', '30 days', '90 days', '1 year', 'Forever'] },
@@ -423,6 +460,38 @@
         {/if}
       </div>
 
+    {:else if leaf === 'infra.adbembedding'}
+      <div class="card">
+        <div class="card-head"><h2>ADB Embeddings</h2>{#if emb?.active}<span class="active-pill">Active: {emb.active.model} ({emb.active.dimension})</span>{/if}</div>
+        <p class="card-sub">ADB turns each memory's text into a vector so agents can recall by meaning. It can run its built-in model on its own CPU, or call an OpenAI-compatible embeddings endpoint (OpenAI, Azure, Ollama, vLLM, TEI…). The endpoint's API key stays in ADB's environment: give the name of a variable set from a Kubernetes Secret.</p>
+        <label class="pdb-field">ADB URL <input class="mono" bind:value={embUrl} placeholder="http://adb.a3t.svc.cluster.local:3000" onchange={loadEmbedding} /></label>
+        {#if emb}
+          <p class="mono dim">{emb.source === 'default' ? 'Default settings' : 'Saved settings'}{#if emb.pending > 0} · {emb.pending} memories waiting for a vector{/if}</p>
+          <label class="pdb-field">Provider
+            <select bind:value={embForm.provider}>
+              <option value="local">Built-in model (on ADB's CPU)</option>
+              <option value="openai">OpenAI-compatible endpoint</option>
+            </select>
+          </label>
+          <label class="pdb-field">Model <input class="mono" bind:value={embForm.model} placeholder={embForm.provider === 'local' ? 'bge-small-en-v1.5' : 'text-embedding-3-small'} /></label>
+          <label class="pdb-field">Dimension <input class="mono" type="number" min="1" max="8192" bind:value={embForm.dimension} /></label>
+          {#if embForm.provider === 'openai'}
+            <label class="pdb-field">API base URL <input class="mono" bind:value={embForm.url} placeholder="https://api.openai.com/v1" /></label>
+            <label class="pdb-field">API key variable <input class="mono" bind:value={embForm.api_key_env} placeholder="OPENAI_API_KEY (blank: no key)" /></label>
+          {/if}
+          <div class="row-actions">
+            <button class="btn ghost" onclick={loadEmbedding} disabled={embBusy}>Refresh</button>
+            <button class="btn spec" onclick={saveEmbedding} disabled={embBusy}>{embBusy ? 'Checking…' : 'Save and restart ADB'}</button>
+            {#if embMsg}<span class="msg" class:ok={embOk}>{embMsg}</span>{/if}
+          </div>
+        {:else if embMsg}
+          <p class="msg">{embMsg}</p>
+          <div class="row-actions"><button class="btn ghost" onclick={loadEmbedding}>Retry</button></div>
+        {:else}
+          <p class="dim">Loading…</p>
+        {/if}
+      </div>
+
     {:else if leaf === 'general.runtime'}
       <div class="card">
         <div class="card-head"><h2>Runtime</h2><span class="active-pill">Active: {activeRt}</span></div>
@@ -608,6 +677,7 @@
   .row-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
   .msg { font-size: 12px; color: var(--err); }
   .pdb-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin: 10px 0; max-width: 520px; }
+  .pdb-field select { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-base, transparent); color: inherit; }
   .pdb-field input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-base, transparent); color: inherit; }
   .msg.ok { color: var(--ok, #23987f); }
   .mono.dim { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); margin-top: 12px; }

@@ -151,6 +151,21 @@ export async function getPlatformDb(): Promise<ApiResponse<PlatformDbStatus>> {
   return request<PlatformDbStatus>('/registry/platform-db');
 }
 
+// ── ADB embedding settings (ADB W9.10), through FlowR ──
+
+export interface AdbEmbeddingSettings { provider: 'local' | 'openai'; model: string; dimension: number; url?: string; api_key_env?: string }
+export interface AdbEmbeddingStatus { source: 'settings' | 'default'; settings: AdbEmbeddingSettings; active: { model: string; dimension: number } | null; pending: number }
+
+/** The ADB at `adbUrl`: its embedding settings and how many records await a vector. */
+export async function getAdbEmbedding(adbUrl: string): Promise<ApiResponse<{ success: boolean; data?: AdbEmbeddingStatus; error?: string }>> {
+  return request(`/registry/adb-embedding?url=${encodeURIComponent(adbUrl)}`);
+}
+
+/** Save new embedding settings on the ADB at `adbUrl`; ADB checks them, then restarts to apply. */
+export async function setAdbEmbedding(adbUrl: string, settings: AdbEmbeddingSettings): Promise<ApiResponse<{ success: boolean; data?: { restart: boolean; reembed: boolean }; error?: string }>> {
+  return request('/registry/adb-embedding', { method: 'PUT', body: JSON.stringify({ url: adbUrl, settings }) });
+}
+
 /** Copy every platform table to `target`, then switch A3T to it. */
 export async function switchPlatformDb(target: { backend: 'adb' | 'lancedb'; url?: string; flight_url?: string }): Promise<ApiResponse<{ from: string; to: string; tables: number; rows: number }>> {
   return request('/registry/platform-db/switch', { method: 'POST', body: JSON.stringify(target) });
