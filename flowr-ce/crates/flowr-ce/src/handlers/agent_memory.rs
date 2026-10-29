@@ -7,7 +7,12 @@
 //!   `RECALL … LIKE $q`, MVP W4; `memory_config.semantic.{limit, min_confidence}`,
 //!   default 5 and none; the newest facts on an ADB without it), and — when
 //!   PROCEDURAL reads are on — the procedure whose pattern best matches the message;
-//! - adds the facts (and a weaker procedure match) to the system prompt, bounded;
+//! - pulls in **related** knowledge (ADB P1.5, `P1_GRAPH.md` D3): other facts about the
+//!   entities of the recalled facts, and the records linked to the recalled ones, by
+//!   link weight (`memory_config.semantic.{related, related_min_weight}`, default 5
+//!   and 0.5; `related: 0` turns it off); a fact's confidence also weighs its rank;
+//! - adds the facts, the related ones (and a weaker procedure match) to the system
+//!   prompt, bounded;
 //! - **stores** the user turn in WORKING (TTL = the session's) and the reply in
 //!   EPISODIC.
 //!
@@ -35,6 +40,12 @@ pub struct TierMode {
     /// SEMANTIC: the least similarity a fact needs (AQL `MIN_CONFIDENCE`, 0–1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_confidence: Option<f64>,
+    /// SEMANTIC: how many related facts / linked records to add (default 5, 0 = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related: Option<u64>,
+    /// SEMANTIC: the least link weight (fact confidence) a related one needs (default 0.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related_min_weight: Option<f64>,
 }
 
 /// `memory_config` (F3 defaults: WORKING and EPISODIC read/write, SEMANTIC read only —
@@ -67,6 +78,8 @@ pub const PROCEDURE_SUGGESTS: f64 = 0.2;
 /// The "What you remember" section's budget (F2).
 const PROMPT_BUDGET: usize = 3_000;
 const FACTS: usize = 5;
+const RELATED: u64 = 5;
+const RELATED_MIN_WEIGHT: f64 = 0.5;
 
 /// What one turn recalled.
 #[derive(Debug, Default)]
@@ -74,6 +87,8 @@ pub struct Recalled {
     pub working: Vec<Value>,
     pub episodic: Vec<Value>,
     pub facts: Vec<Value>,
+    /// Knowledge linked to the facts, strongest first, with its weight.
+    pub related: Vec<(f64, Value)>,
     /// The best-matching procedure and its pattern overlap.
     pub procedure: Option<(f64, Value)>,
 }
@@ -125,6 +140,37 @@ fn text(r: &Value) -> String {
             d.to_string()
         }
     }
+}
+
+/// A fact's (subject, object) when `r` is one (ADB P1.4: `STORE … FACT`).
+fn fact_ends(r: &Value) -> Option<(String, Option<String>)> {
+    let d = r.get("data")?;
+    d.get("predicate")?;
+    let subject = d.get("subject")?.as_str()?.to_string();
+    Some((subject, d.get("object").and_then(|o| o.as_str()).map(String::from)))
+}
+
+/// A link's weight: a fact's confidence, a followed record's path weight, else 1.
+fn weight(r: &Value) -> f64 {
+    let d = r.get("data");
+    d.and_then(|d| d.get("_path_weight"))
+        .or_else(|| fact_ends(r).and(d.and_then(|d| d.get("confidence"))))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0)
+}
+
+/// Rank recalled facts by relevance weighed by confidence: `similarity × (½ + ½ w)`.
+fn rerank(facts: &mut [Value]) {
+    let score = |r: &Value| r.pointer("/metadata/confidence").and_then(|v| v.as_f64()).unwrap_or(0.5) * (0.5 + 0.5 * weight(r));
+    facts.sort_by(|a, b| score(b).total_cmp(&score(a)));
+}
+
+fn key(r: &Value) -> Option<String> {
+    r.pointer("/data/key").or_else(|| r.get("id")).and_then(|v| v.as_str()).map(String::from)
+}
+
+fn aql_list(items: &[String]) -> String {
+    format!("[{}]", items.iter().map(|s| aql_str(s)).collect::<Vec<_>>().join(", "))
 }
 
 /// A procedure's steps as one line.
@@ -183,6 +229,51 @@ impl AgentMemory {
         }
     }
 
+    /// Knowledge linked to `facts` (D3): other facts about the entities they mention,
+    /// and the records their (non-fact) records link to or from — at least
+    /// `min_weight`, strongest first, at most `limit`, none already in `facts`.
+    async fn related(&self, facts: &[Value], limit: usize, min_weight: f64) -> Vec<(f64, Value)> {
+        let ns = aql_str(&self.namespace);
+        let mut entities: Vec<String> = Vec::new();
+        let mut records: Vec<String> = Vec::new();
+        for f in facts {
+            match fact_ends(f) {
+                Some((s, o)) => entities.extend(std::iter::once(s).chain(o)),
+                None => records.extend(key(f)),
+            }
+        }
+        entities.sort();
+        entities.dedup();
+        let mut found: Vec<Value> = Vec::new();
+        if !entities.is_empty() {
+            let list = aql_list(&entities);
+            for end in ["subject", "object"] {
+                found.extend(self.query(&format!("RECALL FROM SEMANTIC WHERE {end} IN {list} NAMESPACE {ns} LIMIT 50")).await);
+            }
+        }
+        if !records.is_empty() {
+            found.extend(
+                self.query(&format!(
+                    "RECALL FROM SEMANTIC WHERE key IN {} NAMESPACE {ns} FOLLOW LINKS ALL BOTH MIN_WEIGHT {min_weight:?}",
+                    aql_list(&records)
+                ))
+                .await,
+            );
+        }
+        let mut seen: HashSet<String> = facts.iter().filter_map(key).collect();
+        let mut out: Vec<(f64, Value)> = found
+            .into_iter()
+            // Entity stubs (key and name only) say nothing on their own.
+            .filter(|r| fact_ends(r).is_some() || r.pointer("/data/content").is_some())
+            .filter(|r| key(r).is_some_and(|k| seen.insert(k)))
+            .map(|r| (weight(&r), r))
+            .filter(|(w, _)| *w >= min_weight)
+            .collect();
+        out.sort_by(|a, b| b.0.total_cmp(&a.0));
+        out.truncate(limit);
+        out
+    }
+
     pub async fn recall(&self, tiers: &MemoryTierConfig, message: &str) -> Recalled {
         let (sid, ns) = (aql_str(&self.session_id), aql_str(&self.namespace));
         let mut out = Recalled::default();
@@ -210,6 +301,12 @@ impl AgentMemory {
                     facts
                 }
             };
+            rerank(&mut out.facts);
+            let related = tiers.semantic.related.unwrap_or(RELATED) as usize;
+            if related > 0 && !out.facts.is_empty() {
+                let min = tiers.semantic.related_min_weight.unwrap_or(RELATED_MIN_WEIGHT);
+                out.related = self.related(&out.facts, related, min).await;
+            }
         }
         if tiers.procedural_read() {
             // Matched here: ADB's `PATTERN` takes a bound variable only (limitations S7),
@@ -264,6 +361,9 @@ impl Recalled {
         for f in &self.facts {
             lines.push(format!("- {}", text(f)));
         }
+        for (w, r) in &self.related {
+            lines.push(format!("- (related, link weight {w:.2}) {}", text(r)));
+        }
         if let Some((score, p)) = &self.procedure {
             if *score >= PROCEDURE_SUGGESTS && *score < PROCEDURE_ANSWERS {
                 let pattern = p.pointer("/data/pattern").and_then(|v| v.as_str()).unwrap_or_default();
@@ -306,6 +406,30 @@ mod tests {
         let t: MemoryTierConfig = serde_json::from_value(json!({ "semantic": { "write": true } })).unwrap();
         assert!(t.working_read() && t.working_write() && t.episodic_read() && t.episodic_write());
         assert!(t.semantic_read() && !t.procedural_read());
+    }
+
+    #[test]
+    fn facts_rank_by_relevance_and_confidence() {
+        let f = |c: f64, conf: f64, k: &str| json!({ "id": k, "data": { "key": k, "subject": "a", "predicate": "p", "confidence": conf }, "metadata": { "confidence": c } });
+        let plain = json!({ "id": "n", "data": { "key": "n", "content": "note" }, "metadata": { "confidence": 0.6 } });
+        let mut facts = vec![f(0.7, 0.2, "weak"), plain, f(0.65, 1.0, "strong")];
+        rerank(&mut facts);
+        let order: Vec<&str> = facts.iter().map(|r| r["id"].as_str().unwrap()).collect();
+        assert_eq!(order, ["strong", "n", "weak"]);
+        assert_eq!(fact_ends(&facts[0]), Some(("a".into(), None)));
+        assert!(fact_ends(&facts[1]).is_none());
+    }
+
+    #[test]
+    fn related_lines_follow_the_facts() {
+        let r = Recalled {
+            facts: vec![json!({ "data": { "content": "Ada works at Acme" } })],
+            related: vec![(0.8, json!({ "data": { "content": "Acme is based in London" } }))],
+            ..Default::default()
+        };
+        let s = r.prompt_section().unwrap();
+        let (a, b) = (s.find("Ada works at Acme").unwrap(), s.find("(related, link weight 0.80) Acme is based in London").unwrap());
+        assert!(a < b, "{s}");
     }
 
     #[test]
