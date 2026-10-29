@@ -239,5 +239,5 @@ do:
       failed: ${ [$context.checks[] | select(.ok | not)] | length }
       ok: ${ ([$context.checks[] | select(.ok | not)] | length) == 0 }
       failures: ${ [$context.checks[] | select(.ok | not) | .check] }
-      skipped: ${ if $context._mcp == null then ["subscriptions: next_events delivers both messages in order (no mcp_resource)"] else [] end }
+      skipped: '${ if $context._mcp == null then ["subscriptions: next_events delivers both messages in order (no mcp_resource)"] else [] end }'
       checks: ${ $context.checks }
