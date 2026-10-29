@@ -10,8 +10,10 @@ document:
       ACK over MCP), and platform tables (call:lancedb insert / update / query /
       delete on whichever backend a3t-platform-db uses). Returns a report:
       {passed, failed, ok, checks: [{check, ok, got}]}. Cleans up after itself.
-      Input (all optional): {"adb_resource": "a3t/agent-memory",
-      "mcp_resource": "a3t/agent-memory-mcp", "platform_resource": "a3t/a3t-platform-db"}.
+      Input (all optional): {"adb_resource": "a3t/adb",
+      "mcp_resource": "<an MCP resource on ADB's /mcp>", "platform_resource":
+      "a3t/a3t-platform-db"}. Without mcp_resource the next_events check (MCP)
+      is skipped and listed under `skipped`.
 do:
 # ─── setup: a run id so repeated runs don't collide ───────────────────────────
 - init:
@@ -22,8 +24,8 @@ do:
       as: '${ $context + . }'
 - resources:
     set:
-      _adb: ${ $context._in.adb_resource // "a3t/agent-memory" }
-      _mcp: ${ $context._in.mcp_resource // "a3t/agent-memory-mcp" }
+      _adb: ${ $context._in.adb_resource // "a3t/adb" }
+      _mcp: ${ $context._in.mcp_resource // null }
       _plat: ${ $context._in.platform_resource // "a3t/a3t-platform-db" }
       _fact: ${ "adbtest-fact-" + $context._run }
       _ep: ${ "adbtest-ep-" + $context._run }
@@ -112,6 +114,7 @@ do:
     export:
       as: '${ $context + {e_publish_2: .} }'
 - e_next_events:
+    if: ${ $context._mcp != null }
     call: mcp
     with:
       tool: next_events
@@ -218,7 +221,7 @@ do:
           {check: "memory: FORGET the episode", ok: ($context.m_forget_episode.data.count == 1), got: $context.m_forget_episode.data},
           {check: "memory: its link is gone", ok: ((($context.m_links_after_forget.data.records[0].data.links // []) | length) == 0), got: ($context.m_links_after_forget.data.records[0].data.links // [])},
           {check: "subscriptions: SUBSCRIBE", ok: ($context.e_subscribe.data.subscription != null), got: $context.e_subscribe.data.subscription},
-          {check: "subscriptions: next_events delivers both messages in order", ok: ([$context.e_next_events.deliveries[]? | .offset] == [$context.e_publish_1.data.offset, $context.e_publish_2.data.offset]), got: {published: [$context.e_publish_1.data.offset, $context.e_publish_2.data.offset], delivered: [$context.e_next_events.deliveries[]? | .offset]}},
+          (if $context._mcp == null then empty else {check: "subscriptions: next_events delivers both messages in order", ok: ([$context.e_next_events.deliveries[]? | .offset] == [$context.e_publish_1.data.offset, $context.e_publish_2.data.offset]), got: {published: [$context.e_publish_1.data.offset, $context.e_publish_2.data.offset], delivered: [$context.e_next_events.deliveries[]? | .offset]}} end),
           {check: "subscriptions: ACK moves the cursor", ok: ($context.e_ack.data.cursor == $context.e_publish_2.data.offset), got: $context.e_ack.data.cursor},
           {check: "subscriptions: UNSUBSCRIBE", ok: ($context.e_unsubscribe.data.unsubscribed == true), got: $context.e_unsubscribe.data},
           {check: "platform: insert", ok: ($context.g_insert.inserted == 1), got: $context.g_insert},
@@ -236,4 +239,5 @@ do:
       failed: ${ [$context.checks[] | select(.ok | not)] | length }
       ok: ${ ([$context.checks[] | select(.ok | not)] | length) == 0 }
       failures: ${ [$context.checks[] | select(.ok | not) | .check] }
+      skipped: ${ if $context._mcp == null then ["subscriptions: next_events delivers both messages in order (no mcp_resource)"] else [] end }
       checks: ${ $context.checks }
