@@ -213,6 +213,7 @@
   let cache = $state<AdbCacheStatus | null>(null);
   let cacheRows = $state<CacheRow[]>([]);
   let cacheMax = $state('256MB');
+  let cacheVectors = $state(true);
   let cacheBusy = $state(false);
   let cacheMsg = $state('');
   let cacheOk = $state(false);
@@ -238,6 +239,7 @@
       cache = r.data.data;
       cacheRows = cache.settings.rules.map(toRow);
       cacheMax = typeof cache.settings.max_bytes === 'number' ? mb(cache.settings.max_bytes).replace(' ', '') : cache.settings.max_bytes;
+      cacheVectors = cache.settings.vectors ?? true;
     } else {
       cache = null;
       cacheOk = false;
@@ -247,7 +249,7 @@
   async function saveCache() {
     cacheBusy = true;
     cacheMsg = '';
-    const r = await setAdbCache(cacheUrl, { max_bytes: cacheMax, rules: cacheRows.map(toRule) });
+    const r = await setAdbCache(cacheUrl, { max_bytes: cacheMax, rules: cacheRows.map(toRule), vectors: cacheVectors });
     cacheBusy = false;
     cacheOk = !!(r.ok && r.data?.success);
     cacheMsg = cacheOk ? `Saved and applied in ${r.data?.data?.took_ms ?? 0} ms.` : (r.data?.error ?? r.error ?? 'Save failed');
@@ -571,6 +573,7 @@
           </div>
           <div class="row-actions"><button class="btn ghost" onclick={() => (cacheRows = [...cacheRows, { memory: 'episodic', scope: '*', kind: 'last', value: '30' }])}>Add rule</button></div>
           <label class="pdb-field">Cache size limit (whole ADB) <input class="mono" bind:value={cacheMax} placeholder="256MB" /></label>
+          <label class="pdb-check"><input type="checkbox" bind:checked={cacheVectors} /> Keep vectors in the cache, so similarity search (LIKE) is answered from memory (about 0.75 KB per memory)</label>
           <div class="row-actions">
             <button class="btn ghost" onclick={loadCache} disabled={cacheBusy}>Refresh</button>
             <button class="btn spec" onclick={saveCache} disabled={cacheBusy || cache.mode === 'off'}>{cacheBusy ? 'Applying…' : 'Save and apply'}</button>
@@ -778,6 +781,7 @@
   .row-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
   .msg { font-size: 12px; color: var(--err); }
   .pdb-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin: 10px 0; max-width: 520px; }
+  .pdb-check { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 10px 0; max-width: 520px; }
   .pdb-field select { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-base, transparent); color: inherit; }
   .pdb-field input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-base, transparent); color: inherit; }
   .msg.ok { color: var(--ok, #23987f); }

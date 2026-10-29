@@ -170,7 +170,7 @@ export async function setAdbEmbedding(adbUrl: string, settings: AdbEmbeddingSett
 
 export type AdbCacheKeep = 'all' | 'none' | { last: number } | { bytes: number | string } | { within: string };
 export interface AdbCacheRule { memory: 'working' | 'tools' | 'procedural' | 'semantic' | 'episodic'; scope?: string; keep: AdbCacheKeep }
-export interface AdbCacheSettings { max_bytes: number | string; rules: AdbCacheRule[] }
+export interface AdbCacheSettings { max_bytes: number | string; rules: AdbCacheRule[]; vectors?: boolean }
 export interface AdbCacheBucket { memory: string; scope: string; rows: number; bytes: number; complete: boolean }
 export interface AdbCacheStats { rows: number; bytes: number; max_bytes: number; hits: number; misses: number; mismatches: number; buckets: AdbCacheBucket[] }
 export interface AdbCacheStatus { mode: 'on' | 'off' | 'shadow'; source: 'settings' | 'environment' | 'default'; settings: AdbCacheSettings; stats: AdbCacheStats | null }
