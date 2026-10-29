@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { mcpCall, resources as resourcesApi } from '$lib/services/api';
+  import { mcpCall, resources as resourcesApi, adbSql } from '$lib/services/api';
+  import { userRole } from '$lib/stores/auth';
   import SqlEditor from '$lib/components/editor/SqlEditor.svelte';
   import { onMount } from 'svelte';
 
   // ── Connection state ──
-  interface DbResource { name: string; namespace: string; type: string; }
+  interface DbResource { name: string; namespace: string; type: string; url?: string; }
 
   let dbResources = $state<DbResource[]>([]);
   let activeResource = $state<DbResource | null>(null);
@@ -19,6 +20,11 @@
   let resultError = $state('');
   let resultMs = $state(0);
   let resultMode = $state<'table' | 'raw'>('table');
+
+  // ── ADB: AQL, or SQL over its Lance tables (superadmin debug view) ──
+  let adbLang = $state<'aql' | 'sql'>('aql');
+  let showSecrets = $state(false);
+  const SECRET_COLUMN = /pass|hash|secret|token|api_?key|salt/i;
 
   // ── Saved queries ──
   let savedQueries = $state<{ name: string; query: string; resource: string }[]>([]);
@@ -80,7 +86,7 @@
           for (const r of items) {
             const type = r.type_ref ?? r.type ?? '';
             if (DB_TYPES.has(type)) {
-              dbResources.push({ name: r.name, namespace: r.namespace ?? ns, type });
+              dbResources.push({ name: r.name, namespace: r.namespace ?? ns, type, url: r.config?.url ?? r.config?.endpoint });
             }
           }
         }
@@ -111,7 +117,19 @@
       let res: any;
       const r = activeResource;
 
-      if (r.type === 'postgres' || r.type === 'mysql') {
+      if (adbSqlMode) {
+        if (!r.url) throw new Error(`${r.namespace}/${r.name} has no config.url`);
+        const out = await adbSql(r.url, query.trim());
+        if (!out.ok || !out.data?.success) throw new Error(out.error ?? out.data?.error ?? 'SQL failed');
+        const body = out.data;
+        resultMs = Math.round(performance.now() - start);
+        resultRows = body.data.rows;
+        resultColumns = body.data.columns;
+        resultRaw = JSON.stringify(body.data.rows, null, 2);
+        resultMode = 'table';
+        history = [{ resource: `${r.namespace}/${r.name} (SQL)`, query: query.trim(), ts: Date.now(), ok: true, ms: resultMs }, ...history.slice(0, 49)];
+        return;
+      } else if (r.type === 'postgres' || r.type === 'mysql') {
         res = await mcpCall('call_sql', { query: query.trim(), resource: r.name, namespace: r.namespace });
       } else if (r.type === 'redis') {
         const parts = query.trim().split(/\s+/);
@@ -193,7 +211,12 @@
   }
 
   let hasResult = $derived(resultRows.length > 0 || resultRaw || resultError);
-  let activeLang = $derived(activeResource ? getMeta(activeResource.type).lang : 'Query');
+  let isSuperadmin = $derived($userRole === 'superadmin');
+  let isAdb = $derived(!!activeResource && (activeResource.type === 'adb' || activeResource.type === 'clawdb'));
+  let adbSqlMode = $derived(isAdb && isSuperadmin && adbLang === 'sql');
+  let activeLang = $derived(adbSqlMode ? 'SQL' : activeResource ? getMeta(activeResource.type).lang : 'Query');
+  let hiddenColumns = $derived(adbSqlMode && !showSecrets ? resultColumns.filter((c) => SECRET_COLUMN.test(c)) : []);
+  let shownColumns = $derived(resultColumns.filter((c) => !hiddenColumns.includes(c)));
   let sqlDialect = $derived.by<'postgres' | 'mysql' | 'standard'>(() => {
     if (!activeResource) return 'standard';
     if (activeResource.type === 'postgres') return 'postgres';
@@ -215,7 +238,14 @@
       {/if}
     </button>
 
-    <span class="query-lang">{activeLang}</span>
+    {#if isAdb && isSuperadmin}
+      <div class="lang-pill" role="group" aria-label="Query language">
+        <button class:active={adbLang === 'aql'} onclick={() => adbLang = 'aql'}>AQL</button>
+        <button class:active={adbLang === 'sql'} onclick={() => adbLang = 'sql'} title="Read-only SQL over everything in ADB's Lance: memory, memory_current, memory_raw and the platform tables (superadmin)">SQL</button>
+      </div>
+    {:else}
+      <span class="query-lang">{activeLang}</span>
+    {/if}
     <span class="query-hint">&#8984;+Enter</span>
 
     <span style="flex: 1;"></span>
@@ -341,6 +371,12 @@
               {#if resultRows.length > 0}
                 <span class="result-meta">{resultRows.length} rows</span>
               {/if}
+              {#if adbSqlMode && resultColumns.some((c) => SECRET_COLUMN.test(c))}
+                <label class="result-meta secret-toggle">
+                  <input type="checkbox" bind:checked={showSecrets} />
+                  Show secrets{hiddenColumns.length ? ` (${hiddenColumns.length} hidden)` : ''}
+                </label>
+              {/if}
               <span class="result-meta">{resultMs}ms</span>
             {/if}
           </div>
@@ -358,7 +394,7 @@
                 <table class="result-table">
                   <thead>
                     <tr>
-                      {#each resultColumns as col}
+                      {#each shownColumns as col}
                         <th>{col}</th>
                       {/each}
                     </tr>
@@ -366,7 +402,7 @@
                   <tbody>
                     {#each resultRows as row}
                       <tr>
-                        {#each resultColumns as col}
+                        {#each shownColumns as col}
                           <td class:null-val={row[col] === null || row[col] === undefined}>{formatCell(row[col])}</td>
                         {/each}
                       </tr>
@@ -436,6 +472,13 @@
     background: color-mix(in srgb, var(--spec) 8%, transparent);
     padding: 2px 6px; border-radius: 3px;
   }
+  .lang-pill { display: inline-flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .lang-pill button {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
+    padding: 2px 8px; background: transparent; color: var(--text-4); border: 0; cursor: pointer;
+  }
+  .lang-pill button.active { color: var(--spec); background: color-mix(in srgb, var(--spec) 12%, transparent); }
+  .secret-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
   .query-hint { font-size: 10px; color: var(--text-5); font-family: var(--font-mono); }
 
   /* ── Content area ── */

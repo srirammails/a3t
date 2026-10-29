@@ -205,6 +205,24 @@ pub async fn flight_get(ep: &AdbEndpoint, table: &str, filter: Option<&str>, lim
         .map_err(|e| format!("ADB query {table}: {e}"))
 }
 
+/// Read-only SQL over an ADB's memory and platform tables (`do_get` with a `sql`
+/// ticket; the superadmin's console, not flows).
+pub async fn flight_sql(ep: &AdbEndpoint, sql: &str, limit: Option<u64>) -> std::result::Result<Vec<arrow_array::RecordBatch>, String> {
+    use futures::TryStreamExt;
+    let mut client = flight_client(ep)?;
+    let ticket = json!({ "sql": sql, "limit": limit });
+    let stream = client
+        .do_get(arrow_flight::Ticket { ticket: ticket.to_string().into() })
+        .await
+        .map_err(|e| flight_err(ep, e))?
+        .into_inner()
+        .map_err(|e| arrow_flight::error::FlightError::Tonic(Box::new(e)));
+    arrow_flight::decode::FlightRecordBatchStream::new_from_flight_data(stream)
+        .try_collect()
+        .await
+        .map_err(|e| format!("ADB SQL: {e}"))
+}
+
 /// Insert a batch into an ADB platform table (`do_put`) — or, with `replace`, make
 /// it the whole table (columns included); the answer's metadata.
 pub async fn flight_put(ep: &AdbEndpoint, table: &str, batch: arrow_array::RecordBatch, replace: bool) -> std::result::Result<Value, String> {

@@ -51,6 +51,9 @@ pub fn registry_router(storage: Arc<dyn StorageBackend>) -> Router {
         .route("/adb-embedding", get(adb_embedding_get).put(adb_embedding_put))
         // ADB's hot cache rules (ADB W10), the same way.
         .route("/adb-cache", get(adb_cache_get).put(adb_cache_put))
+        // Read-only SQL over everything in an ADB's Lance (superadmin debug view,
+        // A3T Query Console), over Flight with FlowR's ADB token.
+        .route("/adb-sql", post(adb_sql))
         .with_state(state)
 }
 
@@ -150,6 +153,62 @@ async fn platform_db_switch(
         Ok(r) => Json(r).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
+}
+
+/// POST /registry/adb-sql — `{url, sql, limit?}`: read-only SQL over the ADB at
+/// `url` (its memory tables and platform tables), for a signed-in SuperAdmin only —
+/// not agents, services or other roles. Answers `{success, data: {columns, rows}}`
+/// with every value as text (null stays null).
+async fn adb_sql(principal: Option<Extension<Principal>>, Json(body): Json<Value>) -> impl IntoResponse {
+    let superadmin = matches!(
+        principal.as_ref().map(|Extension(p)| p),
+        Some(Principal::Human { roles, .. }) if roles.iter().any(|r| r == flowr_policy::roles::SUPER_ADMIN)
+    );
+    if !superadmin {
+        return (StatusCode::FORBIDDEN, Json(json!({ "success": false, "error": "SQL on ADB is for the superadmin" }))).into_response();
+    }
+    let url = body["url"].as_str().unwrap_or_default().trim();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": "url: the ADB's http(s) address" }))).into_response();
+    }
+    let Some(sql) = body["sql"].as_str().filter(|s| !s.trim().is_empty()) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": "sql: the query" }))).into_response();
+    };
+    let ep = crate::handlers::call_adb::adb_endpoint(url, body["flight_url"].as_str());
+    match crate::handlers::call_adb::flight_sql(&ep, sql, body["limit"].as_u64()).await {
+        Ok(batches) => match batches_to_text(&batches) {
+            Ok((columns, rows)) => Json(json!({ "success": true, "data": { "columns": columns, "rows": rows } })).into_response(),
+            Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "success": false, "error": e }))).into_response(),
+        },
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": e }))).into_response(),
+    }
+}
+
+/// Any Arrow batches as column names and rows of display text (null as null).
+fn batches_to_text(batches: &[arrow_array::RecordBatch]) -> Result<(Vec<String>, Vec<Value>), String> {
+    use arrow_array::Array;
+    use arrow_cast::display::{ArrayFormatter, FormatOptions};
+    let columns: Vec<String> = batches
+        .first()
+        .map(|b| b.schema().fields().iter().map(|f| f.name().clone()).collect())
+        .unwrap_or_default();
+    let options = FormatOptions::default();
+    let mut rows = Vec::new();
+    for b in batches {
+        let formatters: Vec<ArrayFormatter> = b
+            .columns()
+            .iter()
+            .map(|c| ArrayFormatter::try_new(c.as_ref(), &options).map_err(|e| e.to_string()))
+            .collect::<Result<_, _>>()?;
+        for r in 0..b.num_rows() {
+            let mut o = serde_json::Map::new();
+            for ((name, f), c) in columns.iter().zip(&formatters).zip(b.columns()) {
+                o.insert(name.clone(), if c.is_null(r) { Value::Null } else { Value::String(f.value(r).to_string()) });
+            }
+            rows.push(Value::Object(o));
+        }
+    }
+    Ok((columns, rows))
 }
 
 /// The caller identity, from the auth middleware's `Extension<Principal>`.
@@ -815,4 +874,38 @@ async fn get_template(
     });
 
     (StatusCode::OK, Json(manifest)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn status(principal: Option<Principal>, body: Value) -> StatusCode {
+        adb_sql(principal.map(Extension), Json(body)).await.into_response().status()
+    }
+
+    /// SQL on ADB is the superadmin's alone: not other roles, agents or services.
+    #[tokio::test]
+    async fn adb_sql_is_for_the_superadmin_only() {
+        let body = json!({ "url": "not a url", "sql": "SELECT 1" });
+        let agent = Principal::Agent {
+            agent_id: flowr_policy::AgentId("a".into()),
+            on_behalf_of: None,
+            flow_id: None,
+            roles: vec![flowr_policy::roles::SUPER_ADMIN.into()],
+            owner: None,
+        };
+        for p in [
+            None,
+            Some(Principal::service("mcp")),
+            Some(Principal::human("ada", vec!["Admin".into(), "Operator".into()])),
+            Some(agent),
+        ] {
+            assert_eq!(status(p.clone(), body.clone()).await, StatusCode::FORBIDDEN, "{p:?}");
+        }
+        // The superadmin gets past the check (then the bad url is refused).
+        let root = Principal::human("root", flowr_policy::roles::canonicalize("superadmin"));
+        assert_eq!(status(Some(root.clone()), body).await, StatusCode::BAD_REQUEST);
+        assert_eq!(status(Some(root), json!({ "url": "http://adb:3000", "sql": " " })).await, StatusCode::BAD_REQUEST);
+    }
 }

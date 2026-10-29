@@ -38,6 +38,7 @@ arrow-array = "57"
 arrow-schema = "57"
 # ADB's native wire (call:adb, ADB platform tables): Arrow Flight (ADB stage G)
 arrow-flight = "57"
+arrow-cast = "57"
 arrow-ipc = "57"
 tonic = "0.14"
 serde_yaml = "0.9"

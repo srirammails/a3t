@@ -166,6 +166,15 @@ export async function setAdbEmbedding(adbUrl: string, settings: AdbEmbeddingSett
   return request('/registry/adb-embedding', { method: 'PUT', body: JSON.stringify({ url: adbUrl, settings }) });
 }
 
+// ── ADB SQL (superadmin debug view over everything in ADB's Lance), through FlowR ──
+
+export interface AdbSqlResult { columns: string[]; rows: Record<string, string | null>[] }
+
+/** Read-only SQL on the ADB at `adbUrl` (memory, memory_current, memory_raw, platform tables). Superadmin only. */
+export async function adbSql(adbUrl: string, sql: string, limit?: number): Promise<ApiResponse<{ success: boolean; data?: AdbSqlResult; error?: string }>> {
+  return request('/registry/adb-sql', { method: 'POST', body: JSON.stringify({ url: adbUrl, sql, limit }) });
+}
+
 // ── ADB hot cache rules (ADB W10), through FlowR ──
 
 export type AdbCacheKeep = 'all' | 'none' | { last: number } | { bytes: number | string } | { within: string };
