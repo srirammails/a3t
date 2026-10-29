@@ -5,7 +5,7 @@
   import { onMount } from 'svelte';
 
   // ── Connection state ──
-  interface DbResource { name: string; namespace: string; type: string; url?: string; }
+  interface DbResource { name: string; namespace: string; type: string; }
 
   let dbResources = $state<DbResource[]>([]);
   let activeResource = $state<DbResource | null>(null);
@@ -86,7 +86,7 @@
           for (const r of items) {
             const type = r.type_ref ?? r.type ?? '';
             if (DB_TYPES.has(type)) {
-              dbResources.push({ name: r.name, namespace: r.namespace ?? ns, type, url: r.config?.url ?? r.config?.endpoint });
+              dbResources.push({ name: r.name, namespace: r.namespace ?? ns, type });
             }
           }
         }
@@ -118,8 +118,7 @@
       const r = activeResource;
 
       if (adbSqlMode) {
-        if (!r.url) throw new Error(`${r.namespace}/${r.name} has no config.url`);
-        const out = await adbSql(r.url, query.trim());
+        const out = await adbSql(`${r.namespace}/${r.name}`, query.trim());
         if (!out.ok || !out.data?.success) throw new Error(out.error ?? out.data?.error ?? 'SQL failed');
         const body = out.data;
         resultMs = Math.round(performance.now() - start);
@@ -211,7 +210,8 @@
   }
 
   let hasResult = $derived(resultRows.length > 0 || resultRaw || resultError);
-  let isSuperadmin = $derived($userRole === 'superadmin');
+  // Same spellings flowr_policy::roles::canonicalize accepts for SuperAdmin.
+  let isSuperadmin = $derived(/^super[-_]?admin$/i.test(String($userRole ?? '')));
   let isAdb = $derived(!!activeResource && (activeResource.type === 'adb' || activeResource.type === 'clawdb'));
   let adbSqlMode = $derived(isAdb && isSuperadmin && adbLang === 'sql');
   let activeLang = $derived(adbSqlMode ? 'SQL' : activeResource ? getMeta(activeResource.type).lang : 'Query');

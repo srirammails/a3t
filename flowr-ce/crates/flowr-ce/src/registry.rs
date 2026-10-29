@@ -155,11 +155,16 @@ async fn platform_db_switch(
     }
 }
 
-/// POST /registry/adb-sql — `{url, sql, limit?}`: read-only SQL over the ADB at
-/// `url` (its memory tables and platform tables), for a signed-in SuperAdmin only —
+/// POST /registry/adb-sql — `{resource, sql, limit?}`: read-only SQL over the ADB
+/// resource `namespace/name` (its memory tables and platform tables). The endpoint
+/// comes from the resource, never the caller. For a signed-in SuperAdmin only —
 /// not agents, services or other roles. Answers `{success, data: {columns, rows}}`
 /// with every value as text (null stays null).
-async fn adb_sql(principal: Option<Extension<Principal>>, Json(body): Json<Value>) -> impl IntoResponse {
+async fn adb_sql(
+    State(state): State<Arc<RegistryState>>,
+    principal: Option<Extension<Principal>>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
     let superadmin = matches!(
         principal.as_ref().map(|Extension(p)| p),
         Some(Principal::Human { roles, .. }) if roles.iter().any(|r| r == flowr_policy::roles::SUPER_ADMIN)
@@ -167,14 +172,16 @@ async fn adb_sql(principal: Option<Extension<Principal>>, Json(body): Json<Value
     if !superadmin {
         return (StatusCode::FORBIDDEN, Json(json!({ "success": false, "error": "SQL on ADB is for the superadmin" }))).into_response();
     }
-    let url = body["url"].as_str().unwrap_or_default().trim();
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": "url: the ADB's http(s) address" }))).into_response();
-    }
+    let Some(resource) = body["resource"].as_str().filter(|s| !s.trim().is_empty()) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": "resource: the ADB resource, namespace/name" }))).into_response();
+    };
     let Some(sql) = body["sql"].as_str().filter(|s| !s.trim().is_empty()) else {
         return (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": "sql: the query" }))).into_response();
     };
-    let ep = crate::handlers::call_adb::adb_endpoint(url, body["flight_url"].as_str());
+    let ep = match crate::handlers::call_adb::resolve_adb(state.storage.as_ref(), resource.trim()).await {
+        Ok(ep) => ep,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "success": false, "error": e }))).into_response(),
+    };
     match crate::handlers::call_adb::flight_sql(&ep, sql, body["limit"].as_u64()).await {
         Ok(batches) => match batches_to_text(&batches) {
             Ok((columns, rows)) => Json(json!({ "success": true, "data": { "columns": columns, "rows": rows } })).into_response(),
@@ -881,13 +888,16 @@ mod tests {
     use super::*;
 
     async fn status(principal: Option<Principal>, body: Value) -> StatusCode {
-        adb_sql(principal.map(Extension), Json(body)).await.into_response().status()
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::init_storage(dir.path().to_str().unwrap()).await.unwrap();
+        let state = State(Arc::new(RegistryState { storage }));
+        adb_sql(state, principal.map(Extension), Json(body)).await.into_response().status()
     }
 
     /// SQL on ADB is the superadmin's alone: not other roles, agents or services.
     #[tokio::test]
     async fn adb_sql_is_for_the_superadmin_only() {
-        let body = json!({ "url": "not a url", "sql": "SELECT 1" });
+        let body = json!({ "resource": "a3t/missing", "sql": "SELECT 1" });
         let agent = Principal::Agent {
             agent_id: flowr_policy::AgentId("a".into()),
             on_behalf_of: None,
@@ -903,9 +913,9 @@ mod tests {
         ] {
             assert_eq!(status(p.clone(), body.clone()).await, StatusCode::FORBIDDEN, "{p:?}");
         }
-        // The superadmin gets past the check (then the bad url is refused).
+        // The superadmin gets past the check (then the unknown resource is refused).
         let root = Principal::human("root", flowr_policy::roles::canonicalize("superadmin"));
         assert_eq!(status(Some(root.clone()), body).await, StatusCode::BAD_REQUEST);
-        assert_eq!(status(Some(root), json!({ "url": "http://adb:3000", "sql": " " })).await, StatusCode::BAD_REQUEST);
+        assert_eq!(status(Some(root), json!({ "resource": "a3t/adb", "sql": " " })).await, StatusCode::BAD_REQUEST);
     }
 }
