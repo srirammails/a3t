@@ -117,7 +117,7 @@ fn default_temperature() -> f64 { 0.7 }
 fn default_memory_namespace() -> String { "default".to_string() }
 fn default_ttl() -> u64 { 1800 }
 
-use super::agent_memory::{AgentMemory, MemoryTierConfig};
+use super::agent_memory::{parse_reflection, reflection_input, AgentMemory, MemoryTierConfig, REFLECT_CONTEXT, REFLECT_PROMPT};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ToolFlowRef {
@@ -532,6 +532,7 @@ impl TaskHandler for AgentHandler {
                 resource,
                 &config.config.memory_namespace,
                 &config.session_id,
+                ctx.principal.id(),
             )
             .await
             {
@@ -1072,6 +1073,35 @@ impl TaskHandler for AgentHandler {
                 state.iteration,
             )
             .await;
+            // F-L3: the exchange's lasting facts into SEMANTIC, after the turn (the
+            // reply doesn't wait for it).
+            let reply = state.agent_response.clone().unwrap_or_default();
+            if config.config.memory_config.reflect() && !state.procedural_hit && !reply.trim().is_empty() && !config.message.trim().is_empty() {
+                let said: Vec<(String, String)> = state
+                    .messages
+                    .iter()
+                    .filter(|m| matches!(m.role.as_str(), "user" | "assistant") && !m.content.trim().is_empty())
+                    .map(|m| (m.role.clone(), m.content.clone()))
+                    .collect();
+                // What came before this turn's user message.
+                let before = said.iter().rposition(|(r, c)| r == "user" && *c == config.message).unwrap_or(said.len());
+                let context = &said[before.saturating_sub(REFLECT_CONTEXT)..before];
+                let known = recalled.as_ref().map(|r| r.known_keys()).unwrap_or_default();
+                let input = reflection_input(context, &config.message, &reply, &known);
+                let (m, client, storage) = (m.clone(), http_client.clone(), storage.clone());
+                let llm = config.config.llm_resource.clone().unwrap_or_else(|| "default-llm".to_string());
+                tokio::spawn(async move {
+                    let msgs = [Message { role: "user".to_string(), content: input, tool_call_id: None, tool_calls: None }];
+                    match call_llm(&client, &storage, &llm, REFLECT_PROMPT, &msgs, &[], 1024, 0.0, None).await {
+                        Ok(res) => {
+                            let facts = parse_reflection(res.get("content").and_then(|v| v.as_str()).unwrap_or_default());
+                            let stored = m.store_reflection(&facts).await;
+                            debug!(found = facts.len(), stored, "memory reflection");
+                        }
+                        Err(e) => warn!(error = %e, "memory reflection failed; the turn's facts are not remembered"),
+                    }
+                });
+            }
         }
         fire_after(self, ctx, "store_memory", "call:adb").await;
 

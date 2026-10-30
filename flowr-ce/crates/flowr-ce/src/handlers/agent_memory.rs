@@ -6,7 +6,8 @@
 //!   SEMANTIC facts in the agent's namespace most relevant to the message (ADB's
 //!   `RECALL … LIKE $q`, MVP W4; `memory_config.semantic.{limit, min_confidence}`,
 //!   default 5 and none; the newest facts on an ADB without it), and — when
-//!   PROCEDURAL reads are on — the procedure whose pattern best matches the message;
+//!   PROCEDURAL reads are on — the procedure whose pattern best matches the message
+//!   (ADB's `PATTERN $p`, its overlap score in `metadata.confidence`);
 //! - pulls in **related** knowledge (ADB P1.5, `P1_GRAPH.md` D3): other facts about the
 //!   entities of the recalled facts, and the records linked to the recalled ones, by
 //!   link weight (`memory_config.semantic.{related, related_min_weight}`, default 5
@@ -14,7 +15,14 @@
 //! - adds the facts, the related ones (and a weaker procedure match) to the system
 //!   prompt, bounded;
 //! - **stores** the user turn in WORKING (TTL = the session's) and the reply in
-//!   EPISODIC.
+//!   EPISODIC;
+//! - with `memory_config.semantic.reflect`, **reflects** (F-L3): after the turn, in
+//!   the background, the agent's LLM picks out the lasting facts the exchange stated
+//!   and they go to SEMANTIC as facts (`source = "reflection"`), so long-term memory
+//!   grows without the `remember` tool; a newer fact for the same subject and
+//!   predicate replaces the older (ADB keeps it as history). Facts about the user
+//!   have the subject `user:<owner>` and carry `owner`: an agent's namespace is
+//!   shared by its users, and recall leaves out other owners' facts.
 //!
 //! Memory is best effort: an ADB error is logged and the turn goes on without it.
 
@@ -46,6 +54,9 @@ pub struct TierMode {
     /// SEMANTIC: the least link weight (fact confidence) a related one needs (default 0.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_min_weight: Option<f64>,
+    /// SEMANTIC: turn each exchange's lasting facts into SEMANTIC facts (F-L3, default off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflect: Option<bool>,
 }
 
 /// `memory_config` (F3 defaults: WORKING and EPISODIC read/write, SEMANTIC read only —
@@ -69,6 +80,7 @@ impl MemoryTierConfig {
     fn episodic_write(&self) -> bool { self.episodic.write.unwrap_or(true) }
     fn semantic_read(&self) -> bool { self.semantic.read.unwrap_or(true) }
     pub fn procedural_read(&self) -> bool { self.procedural.read.unwrap_or(false) }
+    pub fn reflect(&self) -> bool { self.semantic.reflect.unwrap_or(false) }
 }
 
 /// A procedure at or above this pattern overlap answers without the LLM (F4).
@@ -80,6 +92,10 @@ const PROMPT_BUDGET: usize = 3_000;
 const FACTS: usize = 5;
 const RELATED: u64 = 5;
 const RELATED_MIN_WEIGHT: f64 = 0.5;
+/// The most facts one reflection stores.
+const REFLECT_MAX: usize = 10;
+/// How many earlier messages a reflection sees besides the exchange (for context).
+pub const REFLECT_CONTEXT: usize = 4;
 
 /// What one turn recalled.
 #[derive(Debug, Default)]
@@ -94,10 +110,13 @@ pub struct Recalled {
 }
 
 /// An agent's memory for one session.
+#[derive(Clone)]
 pub struct AgentMemory {
     ep: AdbEndpoint,
     namespace: String,
     session_id: String,
+    /// Who the session belongs to (the principal): reflected facts carry it.
+    owner: String,
 }
 
 /// A double-quoted AQL string literal.
@@ -189,6 +208,7 @@ impl AgentMemory {
         resource: &str,
         namespace: &str,
         session_id: &str,
+        owner: &str,
     ) -> Result<Self, String> {
         // A bare name (A3T's Memory tab saves one) is looked up in `default`, then in
         // `a3t`, as agent MCP servers are.
@@ -199,7 +219,7 @@ impl AgentMemory {
                 Err(_) => resolve_adb(storage, &format!("a3t/{resource}")).await?,
             },
         };
-        Ok(Self { ep, namespace: namespace.to_string(), session_id: session_id.to_string() })
+        Ok(Self { ep, namespace: namespace.to_string(), session_id: session_id.to_string(), owner: owner.to_string() })
     }
 
     async fn query(&self, aql: &str) -> Vec<Value> {
@@ -265,6 +285,7 @@ impl AgentMemory {
             .into_iter()
             // Entity stubs (key and name only) say nothing on their own.
             .filter(|r| fact_ends(r).is_some() || r.pointer("/data/content").is_some())
+            .filter(|r| self.visible(r))
             .filter(|r| key(r).is_some_and(|k| seen.insert(k)))
             .map(|r| (weight(&r), r))
             .filter(|(w, _)| *w >= min_weight)
@@ -301,6 +322,8 @@ impl AgentMemory {
                     facts
                 }
             };
+            // Reflected facts are their owner's (F-L3).
+            out.facts.retain(|r| self.visible(r));
             rerank(&mut out.facts);
             let related = tiers.semantic.related.unwrap_or(RELATED) as usize;
             if related > 0 && !out.facts.is_empty() {
@@ -308,20 +331,67 @@ impl AgentMemory {
                 out.related = self.related(&out.facts, related, min).await;
             }
         }
-        if tiers.procedural_read() {
-            // Matched here: ADB's `PATTERN` takes a bound variable only (limitations S7),
-            // and procedures carry no namespace yet.
-            let procs = self.query("RECALL FROM PROCEDURAL ALL LIMIT 500").await;
-            out.procedure = procs
-                .into_iter()
-                .map(|p| {
-                    let pattern = p.pointer("/data/pattern").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                    (overlap(message, &pattern), p)
-                })
-                .filter(|(s, _)| *s > 0.0)
-                .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        if tiers.procedural_read() && !message.trim().is_empty() {
+            // ADB matches (F-L2): the best procedure at or above the suggestion
+            // threshold, scored in `metadata.confidence`. Procedures carry no
+            // namespace yet.
+            let aql = format!("RECALL FROM PROCEDURAL PATTERN $m THRESHOLD {PROCEDURE_SUGGESTS:?} LIMIT 1");
+            out.procedure = match adb_query(&self.ep, &aql, Some(&serde_json::json!({ "m": message }))).await {
+                Ok(r) => records(&r).into_iter().next().map(|p| {
+                    let score = p.pointer("/metadata/confidence").and_then(|v| v.as_f64());
+                    // An ADB from before the score: the same overlap, computed here.
+                    let pattern = p.pointer("/data/pattern").and_then(|v| v.as_str()).unwrap_or_default();
+                    (score.unwrap_or_else(|| overlap(message, pattern)), p)
+                }),
+                Err(e) => {
+                    warn!(error = %e, "agent memory: procedure match failed; continuing without it");
+                    None
+                }
+            };
         }
         out
+    }
+
+    /// Whether `r` may reach this session's prompt: not another owner's (F-L3).
+    fn visible(&self, r: &Value) -> bool {
+        r.pointer("/data/owner").and_then(|o| o.as_str()).is_none_or(|o| o == self.owner)
+    }
+
+    /// The entity key of the session's user in reflected facts.
+    fn user_key(&self) -> String {
+        let id: String = self.owner.chars().map(|c| if c.is_alphanumeric() || "-_.@".contains(c) { c } else { '-' }).collect();
+        format!("user:{}", if id.is_empty() { "anonymous" } else { &id })
+    }
+
+    /// Store the facts a reflection found (F-L3): `user` as a subject or object is
+    /// the session's user. Returns how many were stored.
+    pub async fn store_reflection(&self, facts: &[Reflected]) -> usize {
+        let ns = aql_str(&self.namespace);
+        let user = self.user_key();
+        let end = |k: &str| if k == "user" { user.clone() } else { k.to_string() };
+        let mut stored = 0;
+        for f in facts.iter().take(REFLECT_MAX) {
+            let mut fields = vec![
+                format!("subject = {}", aql_str(&end(&f.subject))),
+                format!("predicate = {}", aql_str(&f.predicate)),
+            ];
+            match (&f.object, &f.value) {
+                (Some(o), _) => fields.push(format!("object = {}", aql_str(&end(o)))),
+                (None, Some(v)) => fields.push(format!("value = {}", aql_str(v))),
+                (None, None) => continue,
+            }
+            if let Some(c) = &f.content {
+                fields.push(format!("content = {}", aql_str(c)));
+            }
+            fields.push(format!("confidence = {:?}", f.confidence.clamp(0.0, 1.0)));
+            fields.push(format!("source = \"reflection\", owner = {}, session_id = {}", aql_str(&self.owner), aql_str(&self.session_id)));
+            let aql = format!("STORE INTO SEMANTIC FACT ({}) NAMESPACE {ns}", fields.join(", "));
+            match adb_query(&self.ep, &aql, None).await {
+                Ok(_) => stored += 1,
+                Err(e) => warn!(error = %e, "agent memory: a reflected fact was not stored"),
+            }
+        }
+        stored
     }
 
     /// Store the turn: the user message in WORKING, the reply in EPISODIC.
@@ -348,7 +418,97 @@ impl AgentMemory {
     }
 }
 
+/// A fact a reflection found (F-L3).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Reflected {
+    pub subject: String,
+    pub predicate: String,
+    #[serde(default)]
+    pub object: Option<String>,
+    #[serde(default, deserialize_with = "text_value")]
+    pub value: Option<String>,
+    /// The fact in a sentence (what the prompt shows when it is recalled).
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+
+fn default_confidence() -> f64 {
+    0.8
+}
+
+/// A value as text: models answer `"value": 36` as often as `"value": "36"`.
+fn text_value<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s),
+        Some(v) => Some(v.to_string()),
+    })
+}
+
+/// The reflection's system prompt (F-L3).
+pub const REFLECT_PROMPT: &str = "You maintain an assistant's long-term memory. From the conversation, \
+pick out lasting facts the USER stated or confirmed in the last exchange: about themselves, their work, \
+preferences, plans, decisions and the things they deal with. Leave out small talk, questions, guesses, \
+the assistant's own suggestions, and anything only true for this moment. \
+Answer with JSON only: {\"facts\": [{\"subject\": \"user\", \"predicate\": \"lives_in\", \"object\": \"city:lisbon\", \
+\"content\": \"The user lives in Lisbon\", \"confidence\": 0.9}]}. Use \"user\" for the user; other subjects \
+and objects are keys like \"org:acme\" or \"person:dana\" (lowercase, reuse a known key when it names the same thing); \
+predicates are snake_case verbs; use \"value\" instead of \"object\" for a number, date or free text. \
+No lasting facts: {\"facts\": []}.";
+
+/// The reflection's user message: the exchange, a little context before it, and
+/// the entity keys memory already knows.
+pub fn reflection_input(context: &[(String, String)], user: &str, reply: &str, known: &[String]) -> String {
+    let mut s = String::new();
+    if !context.is_empty() {
+        s.push_str("Earlier:\n");
+        for (role, text) in context {
+            s.push_str(&format!("{role}: {}\n", text.chars().take(1_000).collect::<String>()));
+        }
+    }
+    s.push_str(&format!("\nLast exchange:\nuser: {user}\nassistant: {}\n", reply.chars().take(2_000).collect::<String>()));
+    if !known.is_empty() {
+        s.push_str(&format!("\nKnown keys: {}\n", known.join(", ")));
+    }
+    s
+}
+
+/// The facts in a reflection's answer: the first JSON object in it (models wrap it
+/// in prose or code fences), entries without subject or predicate dropped.
+pub fn parse_reflection(answer: &str) -> Vec<Reflected> {
+    #[derive(Deserialize)]
+    struct Answer {
+        #[serde(default)]
+        facts: Vec<Value>,
+    }
+    let (Some(start), Some(end)) = (answer.find('{'), answer.rfind('}')) else { return Vec::new() };
+    let Some(json) = answer.get(start..=end) else { return Vec::new() };
+    let Ok(a) = serde_json::from_str::<Answer>(json) else { return Vec::new() };
+    a.facts
+        .into_iter()
+        .filter_map(|f| serde_json::from_value::<Reflected>(f).ok())
+        .filter(|f| !f.subject.trim().is_empty() && !f.predicate.trim().is_empty() && (f.object.is_some() || f.value.is_some()))
+        .collect()
+}
+
 impl Recalled {
+    /// The entity keys of the recalled facts, for a reflection to reuse.
+    pub fn known_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self
+            .facts
+            .iter()
+            .chain(self.related.iter().map(|(_, r)| r))
+            .filter_map(fact_ends)
+            .flat_map(|(s, o)| std::iter::once(s).chain(o))
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys.truncate(30);
+        keys
+    }
+
     /// The answer of a procedure that matches the message well enough (F4).
     pub fn procedure_answer(&self) -> Option<String> {
         let (score, p) = self.procedure.as_ref()?;
@@ -399,6 +559,18 @@ mod tests {
     fn overlap_is_jaccard_on_words() {
         assert!((overlap("please reset my password now", "reset my password") - 0.6).abs() < 1e-9);
         assert_eq!(overlap("", ""), 0.0);
+    }
+
+    #[test]
+    fn reflections_parse_from_wrapped_json() {
+        let a = "Sure:\n```json\n{\"facts\": [{\"subject\": \"user\", \"predicate\": \"lives_in\", \"object\": \"city:lisbon\"}, \
+                 {\"subject\": \"user\", \"predicate\": \"age\", \"value\": 36, \"confidence\": 0.6}, {\"subject\": \"user\"}]}\n```";
+        let f = parse_reflection(a);
+        assert_eq!(f.len(), 2, "{f:?}");
+        assert_eq!((f[0].object.as_deref(), f[0].confidence), (Some("city:lisbon"), 0.8));
+        assert_eq!((f[1].value.as_deref(), f[1].confidence), (Some("36"), 0.6));
+        assert!(parse_reflection("nothing to remember").is_empty());
+        assert!(parse_reflection("{\"facts\": []}").is_empty());
     }
 
     #[test]
