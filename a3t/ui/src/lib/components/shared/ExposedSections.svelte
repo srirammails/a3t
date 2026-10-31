@@ -8,11 +8,12 @@
   import { mcpCall, canvasApi, shareApi } from '$lib/services/api';
   import { exposedProjects, getProject, getProjects, roleIn, type ExposedKind } from '$lib/stores/context.svelte.ts';
   import { contextRev_, bumpContext } from '$lib/stores/apps.svelte.ts';
+  import { navigateTo } from '$lib/stores/panels.svelte.ts';
 
   type Kind = 'flow' | 'resource' | 'trigger' | 'canvas' | 'template' | 'agent';
   let { kind, noun }: { kind: Kind; noun: string } = $props();
 
-  type Item = { key: string; name: string; namespace: string; sub: string; cloneKind?: 'flow' | 'resource' | 'trigger'; cloneRef?: string };
+  type Item = { key: string; name: string; namespace: string; sub: string; cloneKind?: 'flow' | 'resource' | 'trigger'; cloneRef?: string; templateId?: string };
   let items = $state<Item[]>([]);
   let message = $state('');
 
@@ -60,7 +61,7 @@
       const names = new Set(exposed.map((p) => p.name));
       for (const t of r.ok ? rows(r.data, 'templates') : []) {
         const ns = (t.spec_yaml ?? '').match(/^\s+namespace:\s*['"]?([\w.-]+)/m)?.[1];
-        if (ns && names.has(ns)) out.push({ key: t.id, name: t.name, namespace: ns, sub: `v${t.version ?? '1.0.0'}` });
+        if (ns && names.has(ns)) out.push({ key: t.id, name: t.name, namespace: ns, sub: `v${t.version ?? '1.0.0'}`, templateId: t.id });
       }
     }
     items = out;
@@ -104,9 +105,9 @@
           tags={[k]}
           meta=""
           project={it.namespace}
-          actionLabel={it.cloneKind ? (canClone ? `Clone into ${target}` : 'Select a project of yours to clone') : ''}
+          actionLabel={it.templateId ? '+ Create agent' : it.cloneKind ? (canClone ? `Clone into ${target}` : 'Select a project of yours to clone') : ''}
           onclick={() => {}}
-          onaction={it.cloneKind && canClone ? () => clone(it) : undefined}
+          onaction={it.templateId ? () => navigateTo('agents', 'Agents', { createFromTemplate: it.templateId }) : it.cloneKind && canClone ? () => clone(it) : undefined}
         />
       {/each}
     </div>

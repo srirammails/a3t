@@ -77,6 +77,7 @@
   import { can, canAny, currentUser } from '$lib/stores/auth';
   import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { onMount } from 'svelte';
+  import { contextRev_ } from '$lib/stores/apps.svelte.ts';
 
   const canCreate = can('create', 'template');
   // A viewer may open a template read-only but must not save it.
@@ -251,6 +252,16 @@ do:
       error = res.error ?? 'Delete failed';
     }
   }
+
+  // A publish (or another project) changes what is listed: reload, as the
+  // other app pages do.
+  let loadedRev = contextRev_();
+  $effect(() => {
+    const rev = contextRev_();
+    if (rev === loadedRev) return;
+    loadedRev = rev;
+    void loadTemplates();
+  });
 
   onMount(() => {
     loadTemplates();
