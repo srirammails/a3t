@@ -97,6 +97,12 @@ async fn users_orgs_and_projects() {
     w.refused("usr-ann", DEV, "a3t-orgs", json!({ "action": "set_member", "org": "acme", "user_id": "usr-ann", "role": "admin" }), "admin role").await;
     let orgs = w.ok("usr-ann", DEV, "a3t-orgs", json!({ "action": "list" })).await;
     assert_eq!(orgs["orgs"], json!([]), "ann is in no org");
+    // The runtime policy: the org's admins set it; a plain member can't.
+    w.ok("usr-bob", DEV, "a3t-orgs", json!({ "action": "set_runtime", "org": "acme", "runtime": "isolated" })).await;
+    w.refused("usr-carl", DEV, "a3t-orgs", json!({ "action": "set_runtime", "org": "acme", "runtime": "shared" }), "admin role").await;
+    w.refused("usr-bob", DEV, "a3t-orgs", json!({ "action": "set_runtime", "org": "acme", "runtime": "anywhere" }), "isolated or shared").await;
+    let acme = w.ok("usr-bob", DEV, "a3t-orgs", json!({ "action": "list" })).await;
+    assert_eq!(acme["orgs"][0]["runtime"], "isolated", "{acme}");
     // A superadmin may create projects in every org, as admin — even one they aren't in.
     w.ok("usr-root2", SUPER, "a3t-orgs", json!({ "action": "create", "org": "globex" })).await;
     let owners = w.ok("usr-root", SUPER, "a3t-projects", json!({ "action": "list" })).await;

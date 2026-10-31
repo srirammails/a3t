@@ -1,6 +1,6 @@
 //! call:registry — registry operations a flow can't do through other tasks.
 //!
-//! `usage` counts what a namespace holds. `move_namespace` moves every flow, resource and trigger
+//! `visible` keeps the items the caller may see. `usage` counts what a namespace holds. `move_namespace` moves every flow, resource and trigger
 //! from one namespace to another and rewrites the references inside them
 //! (`<from>/name` → `<to>/name`, and `document.namespace`). The A3T project
 //! flows use it to move a project from a user to an org; *who* may move what is
@@ -202,6 +202,20 @@ impl TaskHandler for RegistryHandler {
                     .await
                     .map(|v| TaskResult::new(v))
                     .map_err(|e| RuntimeError::task_failed(&task.name, e))
+            }
+            // The rows the caller may see: `items` (each with `namespace`, and
+            // `name` / `type` / `created_by`), `kind` = agent | flow | resource |
+            // trigger. Flows that list platform tables (a3t-agents) filter with it.
+            "visible" => {
+                use flowr_policy::namespace::ItemKind;
+                let kind = match s("kind").as_str() {
+                    "flow" => ItemKind::Flow,
+                    "resource" => ItemKind::Resource,
+                    "trigger" => ItemKind::Trigger,
+                    _ => ItemKind::Agent,
+                };
+                let items = with.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                Ok(TaskResult::new(Value::Array(crate::access::filter_items(&ctx.principal, kind, items).await)))
             }
             // How much a namespace holds; the delete-project flow refuses a non-empty one.
             "usage" => {

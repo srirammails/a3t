@@ -38,7 +38,7 @@ do:
           op: read
           resource:
             type: Agent
-    then: end
+    then: only-visible
 - get:
     call: lancedb
     with:
@@ -54,7 +54,7 @@ do:
           resource:
             type: Agent
             id: ${ .input.id }
-    then: end
+    then: only-visible
 - create:
     set:
       _ag_id: ${ .input.data.id }
@@ -172,4 +172,13 @@ do:
           resource:
             type: Agent
             id: ${ .input.id }
+    then: end
+# Only the agents the caller may see: their projects' (and, for users' agents
+# from before projects, org default's). Both list and get end here.
+- only-visible:
+    call: registry
+    with:
+      operation: visible
+      kind: agent
+      items: ${ . }
     then: end

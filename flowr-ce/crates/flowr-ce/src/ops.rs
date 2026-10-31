@@ -133,6 +133,18 @@ fn ledger() -> &'static RwLock<Ledger> {
 /// Read the ledger and runtime states from storage into memory. Called at worker
 /// start and whenever the console asks for the overview, which keeps the copy in
 /// step with edits made through the generic registry API.
+/// A deployment by id, from the ledger.
+pub async fn deployment_by_id(storage: &dyn StorageBackend, id: &str) -> Option<Deployment> {
+    load(storage).await;
+    ledger().read().unwrap().deployments.get(id).cloned()
+}
+
+/// A runtime pool by name, from the ledger.
+pub async fn runtime_by_name(storage: &dyn StorageBackend, name: &str) -> Option<RuntimeSpec> {
+    load(storage).await;
+    ledger().read().unwrap().runtimes.get(name).cloned()
+}
+
 pub async fn load(storage: &dyn StorageBackend) {
     let mut deployments = HashMap::new();
     match storage.resources().list(LEDGER_NS).await {
@@ -620,7 +632,9 @@ async fn place_among(
 ) -> Option<(RuntimeSpec, String, String)> {
     let (fns, fname) = d.flow_ref.split_once('/')?;
     let spec = crate::canvas::resolve_canvas(storage, fns, fname).await.ok()?;
-    let placed = flowr_types::canvas::select_runtime(&spec.placement, runtimes)?.clone();
+    // Only runtimes the runtime policy allows this flow on.
+    let allowed = crate::access::eligible_runtimes(fns, fname, runtimes.to_vec()).await;
+    let placed = flowr_types::canvas::select_runtime(&spec.placement, &allowed)?.clone();
     let ns = if spec.placement.namespace.is_empty() { placed.namespace.clone() } else { spec.placement.namespace.clone() };
     Some((placed, ns, d.mode.clone()))
 }
@@ -1319,11 +1333,23 @@ pub fn ops_router(storage: Arc<dyn StorageBackend>) -> Router {
         .with_state(Arc::new(OpsState { storage }))
 }
 
-async fn http_overview(State(s): State<Arc<OpsState>>) -> impl IntoResponse {
-    Json(overview(&*s.storage).await)
+async fn http_overview(
+    State(s): State<Arc<OpsState>>,
+    principal: Option<axum::Extension<flowr_policy::Principal>>,
+) -> impl IntoResponse {
+    let who = principal.map(|axum::Extension(p)| p).unwrap_or_else(|| flowr_policy::Principal::service("ops"));
+    Json(crate::access::filter_overview(&who, overview(&*s.storage).await).await)
 }
 
-async fn http_probe(State(s): State<Arc<OpsState>>, Path(id): Path<String>) -> impl IntoResponse {
+async fn http_probe(
+    State(s): State<Arc<OpsState>>,
+    Path(id): Path<String>,
+    principal: Option<axum::Extension<flowr_policy::Principal>>,
+) -> axum::response::Response {
+    let who = principal.map(|axum::Extension(p)| p).unwrap_or_else(|| flowr_policy::Principal::service("ops"));
+    if let Some(denied) = crate::access::gate_ce_tool(&s.storage, &who, "probe_deployment", &json!({ "deployment": id })).await {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": crate::access::result_text(&denied) }))).into_response();
+    }
     match probe(&*s.storage, &id).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),
@@ -1341,6 +1367,11 @@ async fn http_run(
     let Some(axum::Extension(principal)) = principal else {
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "authentication required" }))).into_response();
     };
+    // Projects and runtime ownership: only your deployments; shared runtimes are
+    // superadmin's to control, an org's own runtime its admins'.
+    if let Some(denied) = crate::access::gate_ce_tool(&s.storage, &principal, tool, &args).await {
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": crate::access::result_text(&denied) }))).into_response();
+    }
     if let Some((req, ..)) = ops_request(&principal, tool, &args) {
         let decision = flowr_policy::policy_hook().check(&req).await;
         flowr_policy::audit::record(&req, &decision);

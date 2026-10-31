@@ -64,7 +64,7 @@
   let dDesc = $state('');
   let dPrivate = $state(false);
   let dMembers = $state<ProjectMember[]>([]);
-  let dPolicy = $state<Record<string, boolean>>({});
+  let dPolicy = $state<Record<string, any>>({});
   // Members
   let directory = $state<DirectoryUser[]>([]);
   let addWho = $state('');
@@ -424,6 +424,18 @@
 
     {:else if tab === 'policy'}
       <div class="pj-form">
+        <h4>Runtime</h4>
+        <label><span>Where this project's flows run</span>
+          <select value={dPolicy.runtime ?? ''} disabled={!canEdit}
+                  onchange={(e) => { const v = e.currentTarget.value; dPolicy = { ...dPolicy }; if (v) dPolicy.runtime = v; else delete dPolicy.runtime; }}>
+            <option value="">{info.owner_kind === 'org' ? "The organisation's setting" : 'Shared (default)'}</option>
+            <option value="isolated">Isolated — only on {info.owner_kind === 'org' ? `${info.owner}'s own runtimes` : 'its own runtime'}</option>
+            <option value="shared">Shared runtimes</option>
+          </select>
+          <em>{info.owner_kind === 'org'
+            ? `Isolated runs only on runtimes labelled a3t.io/org=${info.owner}; never on another org's.`
+            : `Isolated runs only on a runtime labelled a3t.io/project=${info.namespace}.`} Enforced by FlowR when a flow is deployed.</em>
+        </label>
         <h4>Project rules</h4>
         {#each POLICY_PRESETS as rule}
           <label class="pj-check">

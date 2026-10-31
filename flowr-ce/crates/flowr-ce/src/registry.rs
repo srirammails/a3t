@@ -470,7 +470,9 @@ struct ResourcesQuery {
 async fn list_resources(
     State(state): State<Arc<RegistryState>>,
     Query(query): Query<ResourcesQuery>,
+    principal: Option<Extension<Principal>>,
 ) -> impl IntoResponse {
+    let who = caller(principal);
     let mut all: Vec<Value> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for ns in &["system", "a3t", "default"] {
@@ -478,6 +480,9 @@ async fn list_resources(
             for r in &resources {
                 let key = format!("{}/{}", r.namespace, r.name);
                 if !seen.insert(key) { continue; }
+                if !crate::access::can_read_item(&who, flowr_policy::namespace::ItemKind::Resource, &r.namespace, &r.name, &r.type_ref).await {
+                    continue;
+                }
                 if query.type_ref.as_ref().map_or(true, |t| r.type_ref == *t) {
                     all.push(json!({
                         "name": r.name,
@@ -523,10 +528,14 @@ fn resource_json(r: &StorageResource) -> Value {
 async fn get_resource(
     State(state): State<Arc<RegistryState>>,
     Path((ns, name)): Path<(String, String)>,
+    principal: Option<Extension<Principal>>,
 ) -> impl IntoResponse {
+    let who = caller(principal);
     match state.storage.resources().get(&ns, &name).await {
-        Ok(r) => Json(resource_json(&r)).into_response(),
-        Err(_) => (
+        Ok(r) if crate::access::can_read_item(&who, flowr_policy::namespace::ItemKind::Resource, &r.namespace, &r.name, &r.type_ref).await =>
+            Json(resource_json(&r)).into_response(),
+        // Not there, or in a project the caller can't see: the same answer.
+        _ => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": format!("resource '{}/{}' not found", ns, name) })),
         )
@@ -542,6 +551,9 @@ async fn create_resource(
     Json(body): Json<ResourceBody>,
 ) -> impl IntoResponse {
     let who = caller(principal);
+    if let Err(resp) = crate::access::rest_write(&who, &body.namespace).await {
+        return resp.into_response();
+    }
     if let Err(resp) = authorize_resource_write(
         &who,
         flowr_policy::actions::resource_create(),
@@ -589,6 +601,10 @@ async fn update_resource(
     };
 
     let who = caller(principal);
+    if let Err(resp) = crate::access::rest_write(&who, &crate::access::effective_namespace(
+        flowr_policy::namespace::ItemKind::Resource, &ns, &name, &type_ref, "")).await {
+        return resp.into_response();
+    }
     if let Err(resp) = authorize_resource_write(
         &who,
         flowr_policy::actions::resource_update(),
@@ -628,6 +644,10 @@ async fn delete_resource(
 
     // Registry resource? (LLM/MCP/db/secret/…)
     if let Ok(r) = state.storage.resources().get(&ns, &name).await {
+        if let Err(resp) = crate::access::rest_write(&who, &crate::access::effective_namespace(
+            flowr_policy::namespace::ItemKind::Resource, &ns, &name, &r.type_ref, "")).await {
+            return resp.into_response();
+        }
         if let Err(resp) = authorize_resource_write(
             &who,
             flowr_policy::actions::resource_delete(),
@@ -687,6 +707,10 @@ async fn delete_resource(
     // `delete_flow` tool is Cedar-blocked for agents/LLMs). Gate it as a
     // `resource:delete` on a `workflow` — permitted for Admin/SecurityAdmin.
     if state.storage.workflows().get(&ns, &name).await.is_ok() {
+        if let Err(resp) = crate::access::rest_write(&who, &crate::access::effective_namespace(
+            flowr_policy::namespace::ItemKind::Flow, &ns, &name, "", "")).await {
+            return resp.into_response();
+        }
         if let Err(resp) = authorize_resource_write(
             &who,
             flowr_policy::actions::resource_delete(),

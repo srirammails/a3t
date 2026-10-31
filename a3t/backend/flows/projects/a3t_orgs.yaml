@@ -8,7 +8,10 @@ document:
       Organisations and their members. A user is independent and can be in
       several orgs, as member, admin or securityadmin. Superadmin creates and
       deletes orgs; superadmin or the org's admins manage its members.
-      Input: { action: list | create | delete | set_member | remove_member, ... }.
+      Input: { action: list | create | delete | set_member | remove_member | set_runtime, ... }.
+      Runtime policy (set_runtime { org, runtime: isolated | shared }): an
+      isolated org's flows run only on its own runtimes (label a3t.io/org);
+      shared ones on the platform's shared runtimes. FlowR enforces it at placement.
       Output: { ok, orgs? , error? }. The caller is $context._principal.
 do:
 - whoami:
@@ -61,6 +64,7 @@ do:
              | select($context._super or $mine != null)
              | { id: $o.id, handle: $o.slug, display_name: $o.name, created_at: $o.created_at,
                  my_role: $mine,
+                 runtime: ((($o.settings // "{}") | fromjson).runtime // "shared"),
                  can_admin: ($context._super or $mine == "admin"),
                  members: ($m | map({ user_id, email, name, role })) } ] }
       _target: '${ $context._orgs | map(select(.slug == ($context._args.org // ""))) | .[0] // null }'
@@ -80,6 +84,9 @@ do:
     - remove-member:
         when: '${ $context._args.action == "remove_member" }'
         then: member-check
+    - set-runtime:
+        when: '${ $context._args.action == "set_runtime" }'
+        then: runtime-check
     - default:
         then: list
 - list:
@@ -307,3 +314,38 @@ do:
 - member-done:
     set:
       ok: true
+    then: end
+
+# ── runtime policy (superadmin or the org's admins) ──
+- runtime-check:
+    switch:
+    - missing:
+        when: '${ $context._target == null }'
+        then: no-org
+    - not-admin:
+        when: '${ (($context._view | map(select(.id == $context._target.id)) | .[0]) // {}).can_admin != true }'
+        then: need-admin
+    - bad-value:
+        when: '${ ["isolated", "shared"] | index($context._args.runtime // "") == null }'
+        then: bad-runtime
+    - default:
+        then: runtime-write
+- bad-runtime:
+    set:
+      ok: false
+      error: The runtime policy is isolated or shared.
+    then: end
+- runtime-write:
+    call: lancedb
+    with:
+      operation: update
+      table: orgs
+      filter: id = "${ $context._target.id }"
+      values:
+        settings: '${ ((($context._target.settings // "{}") | fromjson) + { runtime: $context._args.runtime }) | tojson }'
+        updated_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+- runtime-done:
+    set:
+      ok: true
+      runtime: '${ $context._args.runtime }'

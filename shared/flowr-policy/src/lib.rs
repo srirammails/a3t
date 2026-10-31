@@ -17,6 +17,7 @@
 //!   strings assembled at call sites (§5.3).
 
 pub mod grants;
+pub mod namespace;
 pub mod actions;
 pub mod audit;
 pub mod op_policy;

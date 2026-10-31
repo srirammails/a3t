@@ -36,7 +36,17 @@
   interface Rt {
     runtime: { name: string; namespace: string; labels: Record<string, string>; url?: string; default?: boolean };
     state: 'active' | 'hibernated' | 'paused'; pausedResponse: number; deployments: Row[];
+    /// From the server: whether you may restart / pause / terminate it. A shared
+    /// runtime is superadmin's; an org's own (label a3t.io/org) its admins'.
+    canControl?: boolean;
   }
+  /// Whose runtime it is: an org's own, one project's, or shared by everyone.
+  function ownerOf(rt: Rt): string {
+    const l = rt.runtime.labels ?? {};
+    return l['a3t.io/org'] ? `org ${l['a3t.io/org']}` : l['a3t.io/project'] ? `project ${l['a3t.io/project']}` : 'shared';
+  }
+  /// The server's answer when it gives one; before that, the old admin rule.
+  const controls = (rt: Rt) => rt.canControl ?? isAdmin;
 
   // ── What is selected in the side tree ──
   const selectedId: string = getActivePanel()?.props?.selectedId ?? '';
@@ -87,7 +97,7 @@
     busy = '';
     terminating = null;
     if (res.ok) flash('ok', res.data?.note || `Runtime ${name} terminated`);
-    else flash('err', res.status === 403 ? 'Only an admin can terminate a runtime.' : res.error || 'Failed');
+    else flash('err', res.status === 403 ? (res.error || 'You may not control this runtime.') : res.error || 'Failed');
     bumpContext();
     if (res.ok && !res.data?.recreated) { navigateTo('runtime', 'Runtimes'); return; }
     await load();
@@ -475,19 +485,20 @@
 {#snippet runtimeActions(rt: Rt)}
   <label class="pr" title="What a trigger caller gets while a deployment here is paused. A canvas can override it.">
     While paused, callers get
-    <select disabled={!isAdmin} value={rt.pausedResponse}
+    <select disabled={!controls(rt)} value={rt.pausedResponse}
       onchange={(e) => setPausedResponse(rt, Number((e.target as HTMLSelectElement).value) as 503 | 404)}>
       <option value={503}>503 Unavailable</option>
       <option value={404}>404 Not found</option>
     </select>
   </label>
-  {#if isAdmin}
+  <span class="owner-tag" title="Shared runtimes run every org's work that isn't isolated; only superadmin controls them. An org's own runtime is its admins'.">{ownerOf(rt)}</span>
+  {#if controls(rt)}
     {#if rt.state !== 'active'}<button class="btn sm runtime" disabled={!!busy} onclick={() => runtimeAct(rt, 'resume')}>Resume runtime</button>{/if}
     {#if rt.state === 'active'}<button class="btn sm" disabled={!!busy} onclick={() => runtimeAct(rt, 'hibernate')}>Hibernate</button>{/if}
     {#if rt.state !== 'paused'}<button class="btn sm outline-danger" disabled={!!busy} onclick={() => runtimeAct(rt, 'pause')}>Pause runtime</button>{/if}
     <button class="btn sm ghost text-danger" disabled={!!busy} onclick={() => openTerminate(rt)} title="Kill this runtime's container and reschedule what runs on it">Terminate</button>
   {:else}
-    <span class="muted small">Runtime state is changed by an admin.</span>
+    <span class="muted small">{ownerOf(rt) === 'shared' ? 'A shared runtime is controlled by superadmin.' : "Controlled by the org's admins."}</span>
   {/if}
 {/snippet}
 
@@ -762,4 +773,5 @@
   .plan td { padding: 6px; border-bottom: 1px solid var(--divider, var(--border)); vertical-align: top; }
   .plan tr.isolated td { background: var(--warn-bg, #fff8e6); }
   .modal-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .owner-tag { font-family: var(--font-mono); font-size: 10.5px; padding: 2px 8px; border-radius: 10px; background: var(--bg-subtle); color: var(--text-3); border: 1px solid var(--border); }
 </style>

@@ -63,6 +63,17 @@
     void loadProjects(true);
   }
 
+  async function setRuntime(o: OrgInfo, runtime: 'isolated' | 'shared') {
+    busy = true;
+    const res = await orgsApi.setRuntime(o.handle, runtime);
+    busy = false;
+    if (!res.ok) { say(res.error ?? 'Could not change the runtime policy'); await refresh(); return; }
+    say(runtime === 'isolated'
+      ? `${o.handle} now runs only on its own runtimes (label a3t.io/org=${o.handle}). Deployments elsewhere fail until it has one.`
+      : `${o.handle} runs on the shared runtimes.`, true);
+    await refresh();
+  }
+
   async function addMember() {
     if (!org) return;
     const q = addWho.trim().toLowerCase();
@@ -117,13 +128,19 @@
     <p class="dim">{isSuper ? 'No organisations yet.' : "You aren't in any organisation."}</p>
   {:else}
     <table class="tbl">
-      <thead><tr><th>Organisation</th><th>Members</th><th>Your role</th><th></th></tr></thead>
+      <thead><tr><th>Organisation</th><th>Members</th><th>Your role</th><th title="Isolated: its flows run only on its own runtimes (label a3t.io/org). Shared: on the platform's shared runtimes.">Runtime</th><th></th></tr></thead>
       <tbody>
         {#each orgs as o (o.id)}
           <tr class:sel={o.handle === selected}>
             <td><button class="link" onclick={() => (selected = o.handle === selected ? '' : o.handle)}>{o.display_name}</button><div class="dim mono">{o.handle}</div></td>
             <td>{o.members.length}</td>
             <td>{o.my_role ?? (isSuper ? 'superadmin' : '—')}</td>
+            <td>
+              <select value={o.runtime ?? 'shared'} disabled={!o.can_admin || busy} onchange={(e) => setRuntime(o, e.currentTarget.value as 'isolated' | 'shared')}>
+                <option value="shared">Shared</option>
+                <option value="isolated">Isolated</option>
+              </select>
+            </td>
             <td class="right">
               {#if o.can_admin}<button class="btn" onclick={() => (selected = o.handle)}>Members</button>{/if}
               {#if isSuper}<button class="btn danger" onclick={() => remove(o)} disabled={busy || o.id === 'org-default'} title={o.id === 'org-default' ? "The default organisation can't be deleted" : ''}>Delete</button>{/if}

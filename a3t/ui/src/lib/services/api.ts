@@ -277,8 +277,9 @@ export type ProjectInfo = {
   description?: string;
   private: boolean;
   members: ProjectMember[];
-  /// Project rules on top of the org baseline (Projects → Policy), by preset key.
-  policy: Record<string, boolean>;
+  /// Project rules on top of the org baseline (Projects → Policy): preset keys,
+  /// and `runtime` (isolated | shared; unset = the org's setting).
+  policy: Record<string, any>;
   environments: string[];
   created_by?: string;
   created_at?: string;
@@ -291,6 +292,8 @@ export type OrgRole = 'member' | 'admin' | 'securityadmin';
 export type OrgInfo = {
   id: string; handle: string; display_name: string; created_at?: string;
   my_role: OrgRole | null; can_admin: boolean;
+  /// Where the org's flows run: its own runtimes only, or the shared ones.
+  runtime: 'isolated' | 'shared';
   members: { user_id: string; email?: string; name?: string; role: OrgRole }[];
 };
 export type ProfileInfo = { handle: string; user_id: string; email?: string; name?: string };
@@ -333,6 +336,7 @@ export const orgsApi = {
   setMember: (org: string, user: { user_id: string; email?: string; name?: string }, role: OrgRole) =>
     projectFlow('a3t-orgs', { action: 'set_member', org, role, ...user }),
   removeMember: (org: string, user_id: string) => projectFlow('a3t-orgs', { action: 'remove_member', org, user_id }),
+  setRuntime: (org: string, runtime: 'isolated' | 'shared') => projectFlow('a3t-orgs', { action: 'set_runtime', org, runtime }),
 };
 
 /// Everyone who can be added to an org or project: local users and, in EE, the

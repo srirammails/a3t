@@ -591,7 +591,7 @@ pub(crate) async fn placement_target(
     if let Some(rt) = runtime_override.filter(|r| !r.is_empty()) {
         spec.placement.runtime = Some(rt.to_string());
     }
-    let runtimes = collect_runtimes(storage).await;
+    let runtimes = policy_runtimes(storage, &spec, ns, name).await;
     let placed = select_runtime(&spec.placement, &runtimes)?.clone();
     let effective_ns = if !spec.placement.namespace.is_empty() {
         spec.placement.namespace.clone()
@@ -621,7 +621,7 @@ async fn gate_placement(
         // deploy path report that in its own words rather than as a denial.
         Err(_) => return Ok(()),
     };
-    let runtimes = collect_runtimes(storage).await;
+    let runtimes = policy_runtimes(storage, &spec, ns, name).await;
     let placed = select_runtime(&spec.placement, &runtimes);
     let effective_ns = if !spec.placement.namespace.is_empty() {
         spec.placement.namespace.clone()
@@ -733,6 +733,14 @@ pub(crate) async fn resolve_canvas(storage: &dyn StorageBackend, ns: &str, name:
 ///
 /// Deliberately not axum-coupled: the MCP tool path needs the same answer as the
 /// HTTP route, and duplicating the resolution is how the two drift apart.
+/// The runtimes this canvas's flow may be placed on: the runtime policy
+/// (`access::eligible_runtimes`) — an isolated org or project runs only on its
+/// own runtimes, and nothing runs on another org's.
+async fn policy_runtimes(storage: &dyn StorageBackend, spec: &flowr_types::canvas::CanvasSpec, ns: &str, name: &str) -> Vec<RuntimeSpec> {
+    let (fns, fname) = spec.flow_ref.split_once('/').unwrap_or((ns, name));
+    crate::access::eligible_runtimes(fns, fname, collect_runtimes(storage).await).await
+}
+
 pub(crate) async fn compute_placement(
     storage: &dyn StorageBackend,
     ns: &str,
@@ -762,7 +770,7 @@ pub(crate) async fn compute_placement_with(
         return Err(format!("invalid canvas: {}", errs.join("; ")));
     }
 
-    let runtimes = collect_runtimes(storage).await;
+    let runtimes = policy_runtimes(storage, &spec, ns, name).await;
     let placed = select_runtime(&spec.placement, &runtimes);
     let effective_ns = if !spec.placement.namespace.is_empty() {
         spec.placement.namespace.clone()
@@ -782,8 +790,12 @@ pub(crate) async fn compute_placement_with(
     }))
 }
 
-async fn list_runtimes(State(state): State<Arc<CanvasState>>) -> impl IntoResponse {
-    let runtimes = collect_runtimes(&*state.storage).await;
+async fn list_runtimes(
+    State(state): State<Arc<CanvasState>>,
+    principal: Option<axum::Extension<flowr_policy::Principal>>,
+) -> impl IntoResponse {
+    let who = principal.map(|axum::Extension(p)| p).unwrap_or_else(|| flowr_policy::Principal::service("canvas"));
+    let runtimes = crate::access::filter_runtimes(&who, collect_runtimes(&*state.storage).await).await;
     Json(json!({ "count": runtimes.len(), "runtimes": runtimes }))
 }
 

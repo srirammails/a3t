@@ -6,6 +6,7 @@
 //! The FlowR EE binary can merge additional routes (UI, etc.) before serving.
 
 pub(crate) mod server;
+pub mod access;
 pub mod approval;
 pub mod token_stream;
 pub mod canvas;
@@ -1453,6 +1454,11 @@ pub(crate) async fn handle_agent_tool_call(
 ) -> Option<CallToolResult> {
     let args = arguments.clone().unwrap_or(json!({}));
 
+    // Projects: only the namespaces, runtimes and deployments the caller may use.
+    if let Some(denied) = crate::access::gate_ce_tool(storage, principal, name, &args).await {
+        return Some(denied);
+    }
+
     // ── Target decisions for direct MCP callers ──
     // `flow:deploy` on the Runtime and `resource:create` for a new pool. There is
     // no approver on this path, so an Ask degrades to a denial.
@@ -1501,6 +1507,7 @@ pub(crate) async fn handle_agent_tool_call(
             }
         }
         return match crate::ops::dispatch(storage.as_ref(), principal.id(), name, &args).await {
+            Some(Ok(v)) if name == "list_deployments" => Some(CallToolResult::json(crate::access::filter_overview(principal, v).await)),
             Some(Ok(v)) => Some(CallToolResult::json(v)),
             Some(Err(e)) => Some(CallToolResult::error(e)),
             None => None,
@@ -1549,9 +1556,8 @@ pub(crate) async fn handle_agent_tool_call(
             ));
         }
         "list_runtimes" => {
-            return Some(CallToolResult::json(
-                crate::canvas::op_list_runtimes(storage.as_ref()).await,
-            ));
+            let runtimes = crate::access::filter_runtimes(principal, crate::canvas::collect_runtimes(storage.as_ref()).await).await;
+            return Some(CallToolResult::json(json!({ "count": runtimes.len(), "runtimes": runtimes })));
         }
         "get_canvas" => {
             let Some(n) = args.get("name").and_then(|v| v.as_str()) else {
@@ -1674,7 +1680,7 @@ pub(crate) async fn handle_agent_tool_call(
         "list_agent_templates" => Some(mcp_list_agent_templates(storage, &args).await),
         "get_agent_template" => Some(mcp_get_agent_template(storage, &args).await),
         "create_agent" => Some(mcp_create_agent(storage, principal, &args).await),
-        "list_agents" => Some(mcp_list_agents(storage, &args).await),
+        "list_agents" => Some(mcp_list_agents(storage, principal, &args).await),
         "get_agent" => Some(mcp_get_agent(storage, &args).await),
         "delete_agent" => Some(mcp_delete_agent(storage, &args).await),
         "send_message" => Some(mcp_send_message(storage, principal, &args).await),
@@ -1951,7 +1957,7 @@ async fn mcp_create_agent(
 /// console passes to the `a3t-agents` CRUD flow.
 const DEFAULT_ORG: &str = "org-default";
 
-async fn mcp_list_agents(storage: &Arc<dyn StorageBackend>, args: &Value) -> CallToolResult {
+async fn mcp_list_agents(storage: &Arc<dyn StorageBackend>, principal: &Principal, args: &Value) -> CallToolResult {
     // Reads the SAME table the console's a3t-agents flow reads. This used to scan
     // the state key `agent:registry`, which nothing ever writes, so the tool
     // answered "no agents" while the console listed several.
@@ -1960,7 +1966,10 @@ async fn mcp_list_agents(storage: &Arc<dyn StorageBackend>, args: &Value) -> Cal
     match crate::handlers::call_lancedb::query_platform_table(
         storage.as_ref(), "agent_configs", Some(filter), 200).await
     {
-        Ok(rows) => CallToolResult::json(json!({"agents": rows, "count": rows.len()})),
+        Ok(rows) => {
+            let rows = crate::access::filter_items(principal, flowr_policy::namespace::ItemKind::Agent, rows).await;
+            CallToolResult::json(json!({"agents": rows, "count": rows.len()}))
+        }
         Err(e) => CallToolResult::error(format!("Failed to list agents: {}", e)),
     }
 }

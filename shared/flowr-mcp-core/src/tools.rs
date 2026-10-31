@@ -1382,14 +1382,19 @@ pub async fn dispatch_tool_call(
 ) -> CallToolResult {
     let args = arguments.unwrap_or(json!({}));
 
+    // Projects: a caller sees and changes only the namespaces it may.
+    if let Some(denied) = crate::ns_gate::check(storage, principal, name, &args).await {
+        return denied;
+    }
+
     match name {
         // Task documentation
         "list_task_types" => list_task_types(&args).await,
         "get_task_type" => get_task_type(&args).await,
 
         // Flow CRUD
-        "list_flows" => list_flows(storage, &args).await,
-        "list_projects" => list_projects(storage).await,
+        "list_flows" => list_flows(storage, principal, &args).await,
+        "list_projects" => list_projects(storage, principal).await,
         "get_flow" => get_flow(storage, &args).await,
         "propose_flow" => propose_flow(&args),
         "propose_edit" => propose_edit(&args),
@@ -1400,14 +1405,14 @@ pub async fn dispatch_tool_call(
         // Execution
         "execute_flow" => execute_flow(storage, principal, &args).await,
         "get_execution_status" => get_execution_status(storage, &args).await,
-        "list_executions" => list_executions(storage, &args).await,
+        "list_executions" => list_executions(storage, principal, &args).await,
 
         // State
         "get_state" => get_state(storage, &args).await,
         "set_state" => set_state(storage, &args).await,
 
         // Resources
-        "list_resources" => list_resources(storage, &args).await,
+        "list_resources" => list_resources(storage, principal, &args).await,
         "get_resource" => get_resource(storage, &args).await,
         "list_mcp_tools" => list_mcp_tools(storage, &args).await,
         "create_resource" => create_resource(storage, &args).await,
@@ -1415,7 +1420,7 @@ pub async fn dispatch_tool_call(
         "list_resource_types" => list_resource_types(storage, &args).await,
 
         // Triggers
-        "list_triggers" => list_triggers(storage, &args).await,
+        "list_triggers" => list_triggers(storage, principal, &args).await,
         "get_trigger" => get_trigger(storage, &args).await,
         "create_trigger" => create_trigger(storage, &args).await,
         "update_trigger" => update_trigger(storage, &args).await,
@@ -1804,11 +1809,19 @@ async fn get_task_type(args: &Value) -> CallToolResult {
 // Flow CRUD Tools
 // ============================================================================
 
-async fn list_flows(storage: &dyn StorageBackend, args: &Value) -> CallToolResult {
+async fn list_flows(storage: &dyn StorageBackend, principal: &flowr_policy::Principal, args: &Value) -> CallToolResult {
     let namespace = args.get("namespace").and_then(|v| v.as_str()).unwrap_or("default");
 
     match storage.workflows().list(namespace).await {
-        Ok(workflows) => {
+        Ok(all) => {
+            // In a platform namespace, users' flows from before projects are their
+            // project's; leave out the ones the caller can't see.
+            let mut workflows = Vec::new();
+            for w in all {
+                if crate::ns_gate::can_read(principal, flowr_policy::namespace::ItemKind::Flow, &w.namespace, &w.name, "", "").await {
+                    workflows.push(w);
+                }
+            }
             if workflows.is_empty() {
                 return CallToolResult::text("No workflows found.".to_string());
             }
@@ -1840,7 +1853,7 @@ pub const PLATFORM_NAMESPACES: &[&str] = &["a3t", "system"];
 
 /// Every namespace in the registry, as a project: the union of the namespaces
 /// holding flows, resources and triggers, plus `default`, with each one's counts.
-async fn list_projects(storage: &dyn StorageBackend) -> CallToolResult {
+async fn list_projects(storage: &dyn StorageBackend, principal: &flowr_policy::Principal) -> CallToolResult {
     let mut names: std::collections::BTreeSet<String> = ["default".to_string()].into();
     for ns in PLATFORM_NAMESPACES { names.insert(ns.to_string()); }
     match storage.workflows().namespaces().await {
@@ -1855,7 +1868,11 @@ async fn list_projects(storage: &dyn StorageBackend) -> CallToolResult {
     names.extend(triggers.iter().filter_map(|t| t.get("namespace").and_then(|v| v.as_str())).map(String::from));
 
     let mut projects = Vec::new();
+    let guard = flowr_policy::namespace::namespace_guard();
     for ns in names.iter().filter(|n| !n.is_empty()) {
+        if guard.access(principal, ns).await == flowr_policy::namespace::NsAccess::None {
+            continue;
+        }
         let flows = storage.workflows().list(ns).await.map(|f| f.len()).unwrap_or(0);
         let resources = storage.resources().list(ns).await.map(|r| r.len()).unwrap_or(0);
         let trigger_count = triggers.iter().filter(|t| t.get("namespace").and_then(|v| v.as_str()) == Some(ns)).count();
@@ -2175,7 +2192,7 @@ async fn get_execution_status(storage: &dyn StorageBackend, args: &Value) -> Cal
     }
 }
 
-async fn list_executions(storage: &dyn StorageBackend, args: &Value) -> CallToolResult {
+async fn list_executions(storage: &dyn StorageBackend, principal: &flowr_policy::Principal, args: &Value) -> CallToolResult {
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
     let namespace = args.get("namespace").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
     let name = args.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
@@ -2189,7 +2206,15 @@ async fn list_executions(storage: &dyn StorageBackend, args: &Value) -> CallTool
     };
 
     match result {
-        Ok(mut execs) => {
+        Ok(all) => {
+            // Only runs the caller may see: its projects' runs, and its own runs
+            // of platform flows (chats carry other people's conversations).
+            let mut execs = Vec::new();
+            for e in all {
+                if crate::ns_gate::can_see_run(principal, &e).await {
+                    execs.push(e);
+                }
+            }
             execs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
             execs.truncate(limit);
             let rows: Vec<Value> = execs.iter().map(|s| json!({
@@ -2272,12 +2297,18 @@ async fn set_state(storage: &dyn StorageBackend, args: &Value) -> CallToolResult
 // Resource Tools
 // ============================================================================
 
-async fn list_resources(storage: &dyn StorageBackend, args: &Value) -> CallToolResult {
+async fn list_resources(storage: &dyn StorageBackend, principal: &flowr_policy::Principal, args: &Value) -> CallToolResult {
     let namespace = args.get("namespace").and_then(|v| v.as_str()).unwrap_or("default");
     let type_filter = args.get("type_ref").and_then(|v| v.as_str());
 
     match storage.resources().list(namespace).await {
-        Ok(resources) => {
+        Ok(all) => {
+            let mut resources = Vec::new();
+            for r in all {
+                if crate::ns_gate::can_read(principal, flowr_policy::namespace::ItemKind::Resource, &r.namespace, &r.name, &r.type_ref, "").await {
+                    resources.push(r);
+                }
+            }
             let filtered: Vec<_> = resources
                 .iter()
                 .filter(|r| type_filter.map_or(true, |t| r.type_ref == t))
@@ -2641,12 +2672,20 @@ async fn list_resource_types(storage: &dyn StorageBackend, args: &Value) -> Call
 // Trigger Tools
 // ============================================================================
 
-async fn list_triggers(storage: &dyn StorageBackend, args: &Value) -> CallToolResult {
+async fn list_triggers(storage: &dyn StorageBackend, principal: &flowr_policy::Principal, args: &Value) -> CallToolResult {
     let namespace = args.get("namespace").and_then(|v| v.as_str());
     let target_flow = args.get("target_flow").and_then(|v| v.as_str());
 
     match storage.triggers().list(namespace).await {
-        Ok(triggers) => {
+        Ok(all) => {
+            let mut triggers = Vec::new();
+            for t in all {
+                let ns = t.get("namespace").and_then(|v| v.as_str()).unwrap_or("default").to_string();
+                let name = t.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                if crate::ns_gate::can_read(principal, flowr_policy::namespace::ItemKind::Trigger, &ns, &name, "", "").await {
+                    triggers.push(t);
+                }
+            }
             // Optionally filter by target flow name
             let filtered: Vec<_> = if let Some(flow_name) = target_flow {
                 triggers

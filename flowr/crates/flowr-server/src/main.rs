@@ -156,6 +156,13 @@ async fn main() -> anyhow::Result<()> {
         "features": if cfg!(feature = "ee") { serde_json::json!(["cedar"]) } else { serde_json::json!([]) },
     }));
     info!(policy_hook = %effective_hook, edition = %edition, "AESOP policy hook installed");
+    // Projects: with policy enforcing, a caller sees and changes only the
+    // namespaces (projects), runs and runtimes it may — the rules of the A3T
+    // project flows, enforced at every boundary.
+    if enforcing {
+        flowr_ce::access::install(storage.clone());
+        info!("namespace guard installed (projects enforced)");
+    }
 
     info!("FlowR initialized successfully");
 
@@ -485,15 +492,30 @@ fn install_policy_hook(
 /// `GET /security/audit` (E2 #1) — the decision audit log (JWT-protected).
 /// `?limit=N` (default 100), `?denials_only=true` for the security-relevant subset.
 async fn audit_handler(
+    principal: Option<axum::Extension<flowr_policy::Principal>>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let limit = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(100);
     let denials_only = params.get("denials_only").map(|s| s == "true").unwrap_or(false);
-    let records = if denials_only {
-        flowr_policy::audit::recent_denials(limit)
+    // The decision log names everyone's actions across every org. Platform
+    // InfoSec (SuperAdmin / SecurityAdmin) reads all of it; anyone else only the
+    // decisions about themselves (or agents acting for them).
+    let who = principal.map(|axum::Extension(p)| p);
+    let infosec = who.as_ref().is_some_and(|p| p.roles().iter().any(|r| r == "SuperAdmin" || r == "SecurityAdmin"));
+    let me = who.as_ref().and_then(|p| flowr_policy::namespace::acting_user(p).map(str::to_string));
+    let over = if infosec { limit } else { limit.saturating_mul(20).max(2000) };
+    let all = if denials_only {
+        flowr_policy::audit::recent_denials(over)
     } else {
-        flowr_policy::audit::recent(limit)
+        flowr_policy::audit::recent(over)
     };
+    let mut records: Vec<_> = all.into_iter().filter(|r| {
+        infosec || me.as_deref().is_some_and(|m| {
+            let v = serde_json::to_value(r).unwrap_or_default();
+            v.get("principal_id").and_then(|x| x.as_str()) == Some(m) || v.get("on_behalf_of").and_then(|x| x.as_str()) == Some(m)
+        })
+    }).collect();
+    records.truncate(limit);
     axum::Json(serde_json::json!({ "count": records.len(), "records": records }))
 }
 
