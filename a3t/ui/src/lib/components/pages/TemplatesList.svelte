@@ -12,6 +12,7 @@
   import AppHome from '$lib/shell/AppHome.svelte';
   import FoldSection from '$lib/components/shared/FoldSection.svelte';
   import ProjectPill from '$lib/components/shared/ProjectPill.svelte';
+  import { inContext } from '$lib/stores/context.svelte.ts';
 
   // Stacked sub-editors (unlimited depth)
   interface SubEditor { type: string; data?: any; closing?: boolean }
@@ -243,10 +244,12 @@ do:
   // Collapsible sections
   let sections = $state({ platform: true, my: true, training: true, community: false });
 
-  let platformTemplates = $derived(allTemplates.filter(t => t.source === 'platform'));
-  let myTemplates = $derived(allTemplates.filter(t => t.source === 'my'));
-  let trainingTemplates = $derived(allTemplates.filter(t => t.source === 'training'));
-  let communityTemplates = $derived(allTemplates.filter(t => t.source === 'community'));
+  /// The selected project's templates only (all of them under "All projects").
+  let inView = $derived(allTemplates.filter(t => inContext(t.namespace, 'shared')));
+  let platformTemplates = $derived(inView.filter(t => t.source === 'platform'));
+  let myTemplates = $derived(inView.filter(t => t.source === 'my'));
+  let trainingTemplates = $derived(inView.filter(t => t.source === 'training'));
+  let communityTemplates = $derived(inView.filter(t => t.source === 'community'));
 
   let tplSections = $derived([
     { key: 'my', label: 'My Templates', hint: 'Yours to edit', items: myTemplates },
