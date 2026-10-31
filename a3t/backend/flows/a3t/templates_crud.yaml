@@ -127,7 +127,7 @@ do:
     then: end
 - create-exists:
     set:
-      error: Template with this name already exists
+      error: '${ $context._cr_name + " " + $context._cr_version + " is already released in " + (if $context._cr_ns == "" then "this project" else $context._cr_ns end) + " — a release is never replaced. Give it a new version to release a change." }'
       name: ${ $context._cr_name }
     then: end
 - create-insert:
