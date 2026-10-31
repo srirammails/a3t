@@ -6,7 +6,7 @@
   /// here on purpose; choosing something from these lists is what reveals it, with
   /// that item selected.
   import { navigateToDetail } from '$lib/stores/panels.svelte.ts';
-  import { APP_CONTEXT, contextLabel, trackOpen, getPins, isPinned, setPins } from '$lib/stores/apps.svelte.ts';
+  import { APP_CONTEXT, contextLabel, trackOpen, getPins, isPinned, setPins, contextRev_ } from '$lib/stores/apps.svelte.ts';
   import { loadAppItems, type AppItem } from './appItems';
   import { setPin } from '$lib/services/api';
 
@@ -44,8 +44,9 @@
   const missingPins = $derived(pinnedIds.filter((id) => !items.some((i) => i.id === id)).length);
 
   $effect(() => {
-    const t = appType;
-    const src = APP_CONTEXT[t]?.source;
+    // Reload when the project or "show platform" changes, not only the app.
+    const t = `${appType}|${contextRev_()}`;
+    const src = APP_CONTEXT[appType]?.source;
     if (!src) { items = []; loading = false; return; }
     if (loadedFor === t) return;
     loadedFor = t;

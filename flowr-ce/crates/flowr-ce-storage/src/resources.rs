@@ -288,6 +288,10 @@ impl ResourceStore for LanceResourceStore {
         Ok(Resource::new(name, type_ref, config).with_namespace(namespace))
     }
 
+    async fn namespaces(&self) -> FlowResult<Vec<String>> {
+        crate::workflows::distinct_namespaces(&*self.conn.read().await, RESOURCES_TABLE).await
+    }
+
     async fn list(&self, namespace: &str) -> FlowResult<Vec<Resource>> {
         let conn = self.conn.read().await;
 

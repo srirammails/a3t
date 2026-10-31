@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { inContext, namespacesFor } from '$lib/stores/context.svelte.ts';
+  import { contextRev_ } from '$lib/stores/apps.svelte.ts';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { API_BASE } from '$lib/config';
@@ -156,14 +158,26 @@
       let d: any = res.data;
       if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = []; } }
       // list_triggers returns { count, triggers: [...] }
-      triggers = Array.isArray(d) ? d : (d?.triggers ?? d?.rows ?? []);
+      const all: Trigger[] = Array.isArray(d) ? d : (d?.triggers ?? d?.rows ?? []);
+      triggers = all.filter((t: any) => inContext(t.namespace));
     } else triggers = [];
     loading = false;
   }
 
+  // A different project (or "show platform") is a different list.
+  let loadedRev = contextRev_();
+  $effect(() => {
+    const rev = contextRev_();
+    if (rev === loadedRev) return;
+    loadedRev = rev;
+    void loadTriggers();
+  });
+
+
   async function loadFlows() {
     const all: FlowSummary[] = [];
-    for (const ns of ['system', 'a3t', 'default']) {
+    // Targets may be platform flows (an agent's chat wrapper), so the shared set.
+    for (const ns of namespacesFor('shared')) {
       const res = await mcpCall('list_flows', { namespace: ns });
       if (res.ok && res.data) {
         const raw = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;

@@ -318,4 +318,61 @@ impl WorkflowStore for LanceWorkflowStore {
             Err(e) => Err(e),
         }
     }
+
+    async fn namespaces(&self) -> FlowResult<Vec<String>> {
+        distinct_namespaces(&*self.conn.read().await, TABLE_NAME).await
+    }
+}
+
+/// The distinct values of a table's `namespace` column, sorted.
+pub(crate) async fn distinct_namespaces(conn: &Connection, table: &str) -> FlowResult<Vec<String>> {
+    let table = conn
+        .open_table(table)
+        .execute()
+        .await
+        .map_err(|e| FlowError::Storage(format!("Failed to open {table} table: {e}")))?;
+    let batches: Vec<RecordBatch> = table
+        .query()
+        .select(lancedb::query::Select::columns(&["namespace"]))
+        .execute()
+        .await
+        .map_err(|e| FlowError::Storage(format!("Failed to query namespaces: {e}")))?
+        .try_collect()
+        .await
+        .map_err(|e| FlowError::Storage(format!("Failed to collect namespaces: {e}")))?;
+    let mut out = std::collections::BTreeSet::new();
+    for batch in &batches {
+        if let Some(col) = batch.column_by_name("namespace").and_then(|c| c.as_any().downcast_ref::<StringArray>()) {
+            out.extend((0..col.len()).filter(|&i| col.is_valid(i)).map(|i| col.value(i).to_string()));
+        }
+    }
+    Ok(out.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use flowr_storage::StorageBackend;
+    use flowr_types::{Resource, WorkflowRecord};
+
+    use crate::LanceStorage;
+
+    fn flow(namespace: &str, name: &str) -> WorkflowRecord {
+        WorkflowRecord::from_yaml(&format!(
+            "document:\n  dsl: 1.0.3\n  namespace: {namespace}\n  name: {name}\n  version: 1.0.0\ndo:\n- a:\n    set:\n      x: 1\n"
+        ))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn namespaces_are_distinct_and_sorted() {
+        let storage = LanceStorage::in_memory().await.unwrap();
+        storage.init().await.unwrap();
+        for (ns, name) in [("orders", "a"), ("a3t", "b"), ("orders", "c")] {
+            storage.workflows().register(flow(ns, name)).await.unwrap();
+        }
+        storage.resources().create(Resource::new("db", "lancedb", serde_json::json!({})).with_namespace("billing")).await.unwrap();
+
+        assert_eq!(storage.workflows().namespaces().await.unwrap(), ["a3t", "orders"]);
+        assert_eq!(storage.resources().namespaces().await.unwrap(), ["billing"]);
+    }
 }

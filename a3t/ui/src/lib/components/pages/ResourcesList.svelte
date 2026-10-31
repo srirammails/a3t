@@ -17,6 +17,8 @@
   import { navigateTo, getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { can, currentUser } from '$lib/stores/auth';
   import { onMount } from 'svelte';
+  import { namespacesFor } from '$lib/stores/context.svelte.ts';
+  import { contextRev_ } from '$lib/stores/apps.svelte.ts';
   import * as YAML from 'yaml';
 
   const canCreate = can('create', 'resource');
@@ -378,7 +380,8 @@ do:
 
   // ── Fetch ──
   async function fetchAllResources() {
-    const namespaces = ['default', 'a3t', 'system'];
+    // Resources include the platform's shared ones (LLMs, ADB, MCP); flows are the project's.
+    const namespaces = namespacesFor('shared');
     const results: Resource[] = [];
 
     // Fetch resources
@@ -399,7 +402,7 @@ do:
     }
 
     // Fetch workflows and show them under "flows" category
-    for (const ns of namespaces) {
+    for (const ns of namespacesFor('owned')) {
       const res = await flowsMcp.list(ns);
       const data = res?.data;
       if (data?.workflows) {
@@ -423,6 +426,15 @@ do:
       allResources = await fetchAllResources();
     } catch (e) { error = String(e); }
     finally { loading = false; }
+  });
+
+  // A different project (or "show platform") is a different list.
+  let loadedRev = contextRev_();
+  $effect(() => {
+    const rev = contextRev_();
+    if (rev === loadedRev) return;
+    loadedRev = rev;
+    fetchAllResources().then((r) => { allResources = r; }).catch((e) => { error = String(e); });
   });
 
   // ── Actions ──

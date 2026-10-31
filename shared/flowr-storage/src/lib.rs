@@ -96,6 +96,12 @@ pub trait WorkflowStore: Send + Sync {
 
     /// Check if a workflow exists
     async fn exists(&self, namespace: &str, name: &str) -> FlowResult<bool>;
+
+    /// Every namespace that holds a workflow. Stores that can't enumerate
+    /// namespaces return none, and callers fall back to the ones they know.
+    async fn namespaces(&self) -> FlowResult<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Resource configuration storage
@@ -118,6 +124,11 @@ pub trait ResourceStore: Send + Sync {
 
     /// List all resources in a namespace
     async fn list(&self, namespace: &str) -> FlowResult<Vec<Resource>>;
+
+    /// Every namespace that holds a resource; none if the store can't tell.
+    async fn namespaces(&self) -> FlowResult<Vec<String>> {
+        Ok(Vec::new())
+    }
 
     /// Update a resource
     async fn update(

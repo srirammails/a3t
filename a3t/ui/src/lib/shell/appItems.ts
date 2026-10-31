@@ -7,6 +7,7 @@
 
 import { mcpCall, fetchChatSessions, opsApi, canvasApi } from '$lib/services/api';
 import { RESOURCE_CATEGORIES, categorize } from '$lib/core/resources/categories';
+import { namespacesFor, inContext, canvasKind, type ListKind } from '$lib/stores/context.svelte.ts';
 
 export type AppItem = {
   /// What navigation addresses. For chat this is the *client* conversation id,
@@ -33,9 +34,8 @@ export type AppItem = {
   depth?: number;
 };
 
-/// The page merges these namespaces, so anything counting or listing across the
-/// registry must use the same set — querying without one returns only `default`.
-const NAMESPACES = ['default', 'a3t', 'system'];
+// Which namespaces a list loads comes from the working context (project + "show
+// platform"), so every list agrees — querying without one returns only `default`.
 
 /// Server session ids are "<agent>:<clientId>"; the agent half is often empty.
 /// Never drop an entry over a missing prefix — that bug hid every conversation.
@@ -114,7 +114,18 @@ export function groupByNamespace(items: AppItem[]): { ns: string; items: AppItem
     .map(([ns, items]) => ({ ns, items }));
 }
 
+/// Lists that come back whole (not per namespace) and are filtered to the context.
+const FILTERED: Record<string, ListKind> = {
+  agents: 'owned', templates: 'shared', triggers: 'owned', executions: 'owned',
+};
+
 export async function loadAppItems(source: string): Promise<AppItem[]> {
+  const items = await loadAll(source);
+  const kind = FILTERED[source];
+  return kind ? items.filter((i) => inContext(i.namespace, kind)) : items;
+}
+
+async function loadAll(source: string): Promise<AppItem[]> {
   if (source === 'sessions') {
     const remote = await fetchChatSessions();
     return remote.map((s) => ({
@@ -127,7 +138,7 @@ export async function loadAppItems(source: string): Promise<AppItem[]> {
 
   if (source === 'flows') {
     const out: AppItem[] = [];
-    for (const ns of NAMESPACES) {
+    for (const ns of namespacesFor('owned')) {
       const res = await mcpCall('list_flows', { namespace: ns });
       if (!res.ok) continue;
       for (const r of rows(res.data, 'workflows', 'flows')) {
@@ -150,7 +161,7 @@ export async function loadAppItems(source: string): Promise<AppItem[]> {
     // Fixed categories, always all shown — a zero is information. Counts come from
     // the same two sources the Resources page merges.
     const counts: Record<string, number> = {};
-    for (const ns of NAMESPACES) {
+    for (const ns of namespacesFor('shared')) {
       const res = await mcpCall('list_resources', { namespace: ns });
       if (!res.ok) continue;
       for (const r of rows(res.data, 'resources')) {
@@ -159,7 +170,7 @@ export async function loadAppItems(source: string): Promise<AppItem[]> {
       }
     }
     let flowCount = 0;
-    for (const ns of NAMESPACES) {
+    for (const ns of namespacesFor('owned')) {
       const fl = await mcpCall('list_flows', { namespace: ns });
       if (fl.ok) flowCount += rows(fl.data, 'workflows', 'flows').length;
     }
@@ -201,7 +212,7 @@ export async function loadAppItems(source: string): Promise<AppItem[]> {
   if (source === 'canvases') {
     const res = await canvasApi.list();
     if (!res.ok) throw new Error(res.error || 'Could not load canvases');
-    return rows(res.data, 'resources').map((r: any) => {
+    return rows(res.data, 'resources').filter((r: any) => inContext(r.namespace, canvasKind(r))).map((r: any) => {
       const c = r.config ?? {};
       return {
         id: r.name, label: r.name, namespace: r.namespace || undefined,

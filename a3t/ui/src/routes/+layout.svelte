@@ -15,6 +15,7 @@
   import { getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { untrack } from 'svelte';
   import { navigateTo, initFromUrl, setupPopState } from '$lib/stores/panels.svelte.ts';
+  import { initContext } from '$lib/stores/context.svelte.ts';
   import { messages } from '$lib/core/status/messages';
   import { initAuth, isAuthenticated } from '$lib/stores/auth';
   import { initEditorContext } from '$lib/editor/context';
@@ -94,6 +95,8 @@
     if (hasSession) {
       // Restore from URL, else land on Chat — Dashboard is hidden from the menu,
       // so defaulting there would open a page the rail cannot get back to.
+      // The project comes first: the panels read the rest of the same URL.
+      initContext();
       const restored = initFromUrl();
       if (!restored) {
         navigateTo('chat', 'AI Chat');

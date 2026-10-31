@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { inContext } from '$lib/stores/context.svelte.ts';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   // Executions — the run history persisted in the storage backend. Lists recent
   // workflow instances (list_executions), with a detail drawer per run
@@ -41,7 +42,8 @@
     loading = false;
   }
 
-  let shown = $derived(fStatus === 'all' ? rows : rows.filter(r => r.status?.toLowerCase() === fStatus));
+  let shown = $derived(rows.filter(r => inContext((r as any).namespace)
+    && (fStatus === 'all' || r.status?.toLowerCase() === fStatus)));
 
   async function openDetail(r: Exec) {
     selected = r; detail = r; detailLoading = true;

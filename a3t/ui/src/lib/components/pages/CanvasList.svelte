@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { inContext, canvasKind } from '$lib/stores/context.svelte.ts';
+  import { contextRev_ } from '$lib/stores/apps.svelte.ts';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   // Canvas = per-flow deployment config (Option 1). Agents-style list of
@@ -43,7 +45,7 @@
       }
     }
     if (cv.ok) {
-      canvases = (Array.isArray(cv.data) ? cv.data : (cv.data?.resources ?? [])).map((r: any) => {
+      canvases = (Array.isArray(cv.data) ? cv.data : (cv.data?.resources ?? [])).filter((r: any) => inContext(r.namespace, canvasKind(r))).map((r: any) => {
         const cfg = r.config ?? {};
         const placement = cfg.placement ?? {};
         const placed = resolveRuntime(placement);
@@ -64,6 +66,16 @@
     }
     loading = false;
   }
+
+
+  // A different project (or "show platform") is a different list.
+  let loadedRev = contextRev_();
+  $effect(() => {
+    const rev = contextRev_();
+    if (rev === loadedRev) return;
+    loadedRev = rev;
+    void load();
+  });
   onMount(async () => {
     await load();
     // Deep-link from an agent's "Edit canvas" → open the designer on that canvas.

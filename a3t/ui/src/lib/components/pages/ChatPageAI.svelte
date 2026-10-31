@@ -1,6 +1,7 @@
 <script lang="ts">
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import { setActiveSelection, getActivePanel, navigateToDetail } from '$lib/stores/panels.svelte.ts';
+  import { splitContextPath } from '$lib/stores/context.svelte.ts';
   // Same layout as the original chat (conversation sidebar + main pane); the
   // message engine underneath is @ai-sdk/svelte's `Chat` talking to POST /chat,
   // which serves the AI SDK UI Message Stream v1 protocol from Rust.
@@ -51,7 +52,7 @@
   /// Session id from /chat/<session>, so a URL is shareable and survives reload.
   function sessionFromUrl(): string | null {
     if (typeof window === 'undefined') return null;
-    const seg = window.location.pathname.split('/').filter(Boolean);
+    const seg = splitContextPath(window.location.pathname).rest.split('/').filter(Boolean);
     return seg[0] === 'chat' && seg[1] ? decodeURIComponent(seg[1]) : null;
   }
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { namespacesFor } from '$lib/stores/context.svelte.ts';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { execFlow, mcpCall, canvasApi } from '$lib/services/api';
@@ -134,7 +135,7 @@
 
   async function loadRegistry() {
     const llm: any[] = [], mcp: any[] = [], fl: any[] = [];
-    for (const ns of ['a3t', 'default', 'system']) {
+    for (const ns of namespacesFor('shared')) {
       const r = await mcpCall('list_resources', { namespace: ns });
       for (const res of (r.data?.resources ?? [])) {
         const ref = `${res.namespace ?? ns}/${res.name}`;

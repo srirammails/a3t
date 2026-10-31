@@ -2,6 +2,8 @@
 // Each navigation updates both panel state and browser URL.
 // On load, URL is read to restore state.
 
+import { contextPrefix, splitContextPath, contextFromUrl } from './context.svelte.ts';
+
 export interface PanelDef {
   id: string;
   type: string;
@@ -64,7 +66,7 @@ function updateUrl(type: string, props: Record<string, any> = {}) {
   if (typeof window === 'undefined') return;
   const basePath = TYPE_TO_PATH[type] ?? `/${type}`;
   const itemId = props.selectedId ?? props.id;
-  const url = itemId ? `${basePath}/${encodeURIComponent(itemId)}` : basePath;
+  const url = contextPrefix() + (itemId ? `${basePath}/${encodeURIComponent(itemId)}` : basePath);
 
   if (window.location.pathname !== url) {
     window.history.pushState({ type, props }, '', url);
@@ -141,7 +143,8 @@ export function getActivePanel(): PanelDef | null {
 
 function parseCurrentUrl(): { type: string; title: string; props: Record<string, any> } | null {
   if (typeof window === 'undefined') return null;
-  const path = window.location.pathname;
+  // `/p/<project>/chat/…` — the project is the context store's; the rest is ours.
+  const path = splitContextPath(window.location.pathname).rest;
   const segments = path.split('/').filter(Boolean);
 
   // /templates/a3t-chat-agent → type=templates, id=a3t-chat-agent
@@ -177,6 +180,7 @@ export function setupPopState() {
   if (typeof window === 'undefined') return;
 
   window.addEventListener('popstate', () => {
+    contextFromUrl();
     const route = parseCurrentUrl();
     if (route) {
       counter++;

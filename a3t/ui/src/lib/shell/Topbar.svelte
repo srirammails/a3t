@@ -24,6 +24,7 @@
   }
   import AppPalette from './AppPalette.svelte';
   import ActiveApps from './ActiveApps.svelte';
+  import ProjectSwitcher from './ProjectSwitcher.svelte';
   import { getActivePanel } from '$lib/stores/panels.svelte.ts';
 
   let activeType = $derived(getActivePanel()?.type ?? '');
@@ -41,6 +42,7 @@
   <nav class="hdr-menus">
     <AppPalette {activeType} />
     <ActiveApps {activeType} />
+    <ProjectSwitcher />
   </nav>
 
   <span style="flex: 1;"></span>

@@ -191,6 +191,14 @@ async fn rows(db: &dyn PlatformDb, table: &str, filter: &str) -> FlowResult<Vec<
     Ok(batches_to_json(&batches))
 }
 
+/// A table's distinct namespaces, sorted.
+async fn namespaces(db: &dyn PlatformDb, table: &str) -> FlowResult<Vec<String>> {
+    let batches: Vec<RecordBatch> = db.query(table, None, ALL).await.map_err(storage_err)?;
+    let rows = batches_to_json(&batches);
+    let set: std::collections::BTreeSet<String> = column(&rows, "namespace").filter(|n| !n.is_empty()).map(String::from).collect();
+    Ok(set.into_iter().collect())
+}
+
 async fn insert(db: &dyn PlatformDb, table: &str, row: Value) -> FlowResult<()> {
     db.insert(table, &[row]).await.map(|_| ()).map_err(storage_err)
 }
@@ -243,6 +251,10 @@ impl WorkflowStore for SharedWorkflows {
             Some(r) => parse_workflow(r),
             None => Err(FlowError::NotFound(format!("Workflow {namespace}/{name} version {version} not found"))),
         }
+    }
+
+    async fn namespaces(&self) -> FlowResult<Vec<String>> {
+        namespaces(&*self.db, WORKFLOWS).await
     }
 
     async fn list(&self, namespace: &str) -> FlowResult<Vec<WorkflowSummary>> {
@@ -331,6 +343,10 @@ impl ResourceStore for SharedResources {
         let rows = rows(&*self.db, RESOURCES, &flow_filter(namespace, name)).await?;
         rows.first().and_then(parse_resource)
             .ok_or_else(|| FlowError::NotFound(format!("Resource {namespace}/{name} not found")))
+    }
+
+    async fn namespaces(&self) -> FlowResult<Vec<String>> {
+        namespaces(&*self.db, RESOURCES).await
     }
 
     async fn list(&self, namespace: &str) -> FlowResult<Vec<Resource>> {

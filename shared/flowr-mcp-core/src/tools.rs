@@ -57,6 +57,12 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "list_projects".to_string(),
+            description: "List the projects (namespaces) that hold flows, resources or triggers, with their counts. \
+                          `platform` marks the platform's own namespaces (a3t, system).".to_string(),
+            input_schema: json!({"type": "object", "properties": {}}),
+        },
+        Tool {
             name: "get_flow".to_string(),
             description: "Get the full definition of a workflow.".to_string(),
             input_schema: json!({
@@ -1383,6 +1389,7 @@ pub async fn dispatch_tool_call(
 
         // Flow CRUD
         "list_flows" => list_flows(storage, &args).await,
+        "list_projects" => list_projects(storage).await,
         "get_flow" => get_flow(storage, &args).await,
         "propose_flow" => propose_flow(&args),
         "propose_edit" => propose_edit(&args),
@@ -1826,6 +1833,41 @@ async fn list_flows(storage: &dyn StorageBackend, args: &Value) -> CallToolResul
         }
         Err(e) => CallToolResult::error(format!("Failed to list workflows: {}", e)),
     }
+}
+
+/// Namespaces that belong to the platform rather than to a user's project.
+pub const PLATFORM_NAMESPACES: &[&str] = &["a3t", "system"];
+
+/// Every namespace in the registry, as a project: the union of the namespaces
+/// holding flows, resources and triggers, plus `default`, with each one's counts.
+async fn list_projects(storage: &dyn StorageBackend) -> CallToolResult {
+    let mut names: std::collections::BTreeSet<String> = ["default".to_string()].into();
+    for ns in PLATFORM_NAMESPACES { names.insert(ns.to_string()); }
+    match storage.workflows().namespaces().await {
+        Ok(n) => names.extend(n),
+        Err(e) => return CallToolResult::error(format!("Failed to list namespaces: {e}")),
+    }
+    match storage.resources().namespaces().await {
+        Ok(n) => names.extend(n),
+        Err(e) => return CallToolResult::error(format!("Failed to list namespaces: {e}")),
+    }
+    let triggers = storage.triggers().list(None).await.unwrap_or_default();
+    names.extend(triggers.iter().filter_map(|t| t.get("namespace").and_then(|v| v.as_str())).map(String::from));
+
+    let mut projects = Vec::new();
+    for ns in names.iter().filter(|n| !n.is_empty()) {
+        let flows = storage.workflows().list(ns).await.map(|f| f.len()).unwrap_or(0);
+        let resources = storage.resources().list(ns).await.map(|r| r.len()).unwrap_or(0);
+        let trigger_count = triggers.iter().filter(|t| t.get("namespace").and_then(|v| v.as_str()) == Some(ns)).count();
+        projects.push(json!({
+            "name": ns,
+            "platform": PLATFORM_NAMESPACES.contains(&ns.as_str()),
+            "flows": flows,
+            "resources": resources,
+            "triggers": trigger_count,
+        }));
+    }
+    CallToolResult::json(json!({"count": projects.len(), "projects": projects}))
 }
 
 async fn get_flow(storage: &dyn StorageBackend, args: &Value) -> CallToolResult {
