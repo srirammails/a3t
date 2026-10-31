@@ -18,7 +18,7 @@ function namespacesFor(kind, { project, showPlatform }, projects = PROJECTS) {
   const user = projects.filter((p) => !p.platform).map((p) => p.name);
   const platform = projects.filter((p) => p.platform).map((p) => p.name);
   const base = project ? [project] : user;
-  const withPlatform = showPlatform || kind === 'picker' || (kind === 'shared' && !project);
+  const withPlatform = kind === 'picker' || (showPlatform && !project);
   return withPlatform ? [...base, ...platform.filter((n) => !base.includes(n))] : base;
 }
 
@@ -58,13 +58,15 @@ const check = (n, c, extra = '') => c ? (pass++, console.log(`  PASS  ${n}`))
   const ctx = { project: '', showPlatform: false };
   check('all: owned lists every user project', eq(namespacesFor('owned', ctx), ['default', 'orders']));
   check('  system flow hidden', !inContext('system', 'owned', ctx));
-  check('  built-in templates shown under all projects', inContext('system', 'shared', ctx));
+  check('  built-in templates hidden under all projects without Show platform', !inContext('system', 'shared', ctx));
+  check('  ...and shown with it', inContext('system', 'shared', { project: '', showPlatform: true }));
   check('  unknown namespace shown (created since the list loaded)', inContext('team-x', 'owned', ctx));
 }
 // 3. Show platform brings a3t/system into owned lists, once each.
 {
   const ctx = { project: 'a3t', showPlatform: true };
-  check('platform project: no duplicate', eq(namespacesFor('owned', ctx), ['a3t', 'system']));
+  check('selecting a platform namespace shows only it', eq(namespacesFor('owned', ctx), ['a3t']));
+  check('show platform never mixes platform items into a project', eq(namespacesFor('shared', { project: 'orders', showPlatform: true }), ['orders']));
   check('show platform + all', eq(namespacesFor('owned', { project: '', showPlatform: true }), ['default', 'orders', 'a3t', 'system']));
 }
 // 3b. Items belong where they are stored: users' work saved in a3t is a3t's.
@@ -72,7 +74,8 @@ const check = (n, c, extra = '') => c ? (pass++, console.log(`  PASS  ${n}`))
   check('user template in a3t stays a3t', projectOf('a3t', 'usr-superadmin') === 'a3t');
   check('user flow in a3t stays a3t', itemProject('flow', 'a3t', { name: 'ops-ping' }) === 'a3t');
   check('a3t items hidden from a selected project', !inContext(itemProject('agent', 'a3t'), 'shared', { project: 'orders', showPlatform: false }));
-  check('a3t items shown with the platform', inContext(itemProject('agent', 'a3t'), 'shared', { project: 'orders', showPlatform: true }));
+  check('a3t items not mixed into a project even with Show platform', !inContext(itemProject('agent', 'a3t'), 'shared', { project: 'orders', showPlatform: true }));
+  check('a3t items shown under All projects with Show platform', inContext(itemProject('agent', 'a3t'), 'shared', { project: '', showPlatform: true }));
 }
 // 4. URL prefix.
 {

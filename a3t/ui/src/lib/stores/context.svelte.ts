@@ -27,8 +27,11 @@ export type Project = {
 ///  - `owned`: things a project makes and runs (flows, triggers, executions,
 ///    canvases). Platform ones only with "Show platform".
 ///  - `shared`: things every project uses from the platform (LLM / ADB / MCP
-///    resources, built-in templates, presets). Shown under "All projects"; with
-///    a project selected, a list shows that project's items only.
+///    resources, built-in templates, presets). Listed like `owned`.
+///
+/// A selected project shows only its own items. "Show platform" adds the
+/// platform's namespaces to the switcher and to "All projects" — it never mixes
+/// them into another project's lists.
 ///  - `picker`: a dropdown choosing what to use (an LLM, an MCP server, a target
 ///    flow) — always offers the platform's, whatever is selected.
 export type ListKind = 'owned' | 'shared' | 'picker';
@@ -141,7 +144,7 @@ export function namespacesFor(kind: ListKind): string[] {
   const user = projects.filter((p) => !p.platform && canSee(p)).map((p) => p.name);
   const platform = projects.filter((p) => p.platform).map((p) => p.name);
   const base = project ? [project] : user;
-  const withPlatform = showPlatform || kind === 'picker' || (kind === 'shared' && !project);
+  const withPlatform = kind === 'picker' || (showPlatform && !project);
   return withPlatform ? [...base, ...platform.filter((n) => !base.includes(n))] : base;
 }
 
