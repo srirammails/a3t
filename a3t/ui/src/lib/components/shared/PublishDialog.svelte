@@ -34,7 +34,8 @@
       res = await execFlow('a3t-templates-create', 'a3t', {
         org_id: 'org-default', user_id: $currentUser?.id ?? '', timestamp: new Date().toISOString(),
         data: { id: `tpl-${to}-${item.template.name}-${Date.now().toString(36)}`, name: item.template.name, version: item.template.version,
-                source: 'community', spec_yaml: spec, tags: item.template.tags ?? '', vertical: item.template.vertical ?? '', published: 'true' },
+                // Labelled as the target exposes it: shared / training (platform) or community.
+                source: publishTargets().find((p) => p.name === to)?.info?.policy?.exposure?.kind ?? 'community', spec_yaml: spec, tags: item.template.tags ?? '', vertical: item.template.vertical ?? '', published: 'true' },
       });
       // The CRUD flow answers a refusal as { error } rather than failing.
       if (res.ok && (res as any).data?.error) res = { ok: false, error: (res as any).data.error };
@@ -55,7 +56,11 @@
     <h3>Publish {item.label}</h3>
     <p class="pd-note">A versioned release in an exposed project. Others use or wire it — pinned to a version, or getting the active one — or clone their own copy. Your copy in <span class="mono">{item.from}</span> stays yours. To release a change, give it a new version and publish again; earlier releases stay, and Projects → Releases rolls back.</p>
     {#if targets.length === 0}
-      <p class="pd-warn">None of your projects is exposed yet. In Projects → Policy, set a project's Exposure to selected orgs or all orgs, then publish into it.</p>
+      {#if publishTargets().some((p) => p.name === item.from)}
+        <p class="pd-warn"><span class="mono">{item.from}</span> is already an exposed project — this is the release. To pass it on further, publish it into another exposed project (e.g. an a3t project exposed to all orgs); none of yours is, yet. Create one and set its Policy → Exposure.</p>
+      {:else}
+        <p class="pd-warn">None of your projects is exposed yet. In Projects → Policy, set a project's Exposure to selected orgs or all orgs, then publish into it.</p>
+      {/if}
     {:else}
       <label>Into
         <select bind:value={to}>
