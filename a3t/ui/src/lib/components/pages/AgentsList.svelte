@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ExposedSections from '$lib/components/shared/ExposedSections.svelte';
   import { namespacesFor } from '$lib/stores/context.svelte.ts';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
@@ -806,6 +807,7 @@
   <FoldSection title="Shared Agents" count={sharedAgents.length} hint="Created by others, in projects you can see">
     {@render agentCards(sharedAgents)}
   </FoldSection>
+  <ExposedSections kind="agent" noun="Agents" />
 </div>
 
 <style>

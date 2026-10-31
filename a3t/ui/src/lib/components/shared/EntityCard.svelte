@@ -15,6 +15,7 @@
     iconStyle = '',
     pinned,
     onpin,
+    onpublish,
   }: {
     icon: string;
     color: string;
@@ -33,6 +34,8 @@
     /// With `onpin`, a star to pin or unpin the item.
     pinned?: boolean;
     onpin?: () => void;
+    /// Offer "Publish" (into one of your org's exposed projects).
+    onpublish?: () => void;
   } = $props();
 </script>
 
@@ -54,10 +57,11 @@
       {#if tags.length > 0}
         <div class="ec-tags">{#each tags as tag}<span class="ec-tag">{tag}</span>{/each}</div>
       {/if}
-      {#if meta || project}
+      {#if meta || project || onpublish}
         <div class="ec-foot">
           {#if project}<ProjectPill {project} />{/if}
           {#if meta}<span class="ec-meta">{meta}</span>{/if}
+          {#if onpublish}<button class="ec-publish" onclick={(e) => { e.stopPropagation(); onpublish(); }} onkeydown={(e) => e.stopPropagation()} title="Publish a release others can read, clone and run">Publish</button>{/if}
         </div>
       {/if}
     </div>
@@ -80,6 +84,9 @@
   .ec-tag { font-family: var(--font-mono); font-size: 10px; padding: 1px 6px; border-radius: 3px; background: var(--bg-subtle); color: var(--text-3); }
   .ec-meta { font-size: 11px; color: var(--text-4); font-family: var(--font-mono); }
   .ec-foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; min-width: 0; }
+  .ec-publish { margin-left: auto; border: 1px solid var(--border); background: none; border-radius: 10px; height: 20px; padding: 0 8px;
+                font-size: 10.5px; color: var(--text-3); cursor: pointer; }
+  .ec-publish:hover { border-color: var(--spec); color: var(--spec); }
 
   .ec-pin {
     position: absolute; top: 8px; right: 8px; z-index: 1;

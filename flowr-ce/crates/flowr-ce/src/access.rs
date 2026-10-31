@@ -53,6 +53,10 @@ struct Project {
     members: Vec<(String, String)>,
     /// `isolated` | `shared` | empty (the org's setting).
     runtime: String,
+    /// Who else may use it (read, clone, run — never change): `public` = every
+    /// org; `orgs` = the org handles in `exposed_to`; empty = nobody.
+    exposure: String,
+    exposed_to: Vec<String>,
 }
 
 /// The rows the decision needs, as of `loaded`.
@@ -74,11 +78,14 @@ impl Snapshot {
         for p in projects {
             let members = serde_json::from_str::<Vec<Value>>(&s(p, "members")).unwrap_or_default()
                 .iter().map(|m| (s(m, "id"), s(m, "role"))).filter(|(id, _)| !id.is_empty()).collect();
-            let runtime = serde_json::from_str::<Value>(&s(p, "policy")).ok()
-                .and_then(|v| v.get("runtime").and_then(|r| r.as_str()).map(String::from)).unwrap_or_default();
+            let policy = serde_json::from_str::<Value>(&s(p, "policy")).unwrap_or(Value::Null);
+            let runtime = policy.get("runtime").and_then(|r| r.as_str()).unwrap_or_default().to_string();
+            let exposure = policy.get("exposure").and_then(|e| e.get("audience")).and_then(|a| a.as_str()).unwrap_or_default().to_string();
+            let exposed_to = policy.get("exposure").and_then(|e| e.get("orgs")).and_then(|o| o.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
             snap.projects.insert(s(p, "namespace"), Project {
                 owner_kind: s(p, "owner_kind"), owner: s(p, "owner"), owner_id: s(p, "owner_id"),
-                private: s(p, "private") == "true", members, runtime,
+                private: s(p, "private") == "true", members, runtime, exposure, exposed_to,
             });
         }
         for m in members {
@@ -147,6 +154,7 @@ impl Snapshot {
             _ => NsAccess::None,
         };
         let Some(p) = self.projects.get(namespace) else {
+            // (no project row: the pre-projects rule below)
             // From before projects: org default's.
             return match (super_, self.org_role(LEGACY_ORG, user)) {
                 (true, _) | (_, Some("admin" | "member")) => NsAccess::Write,
@@ -155,24 +163,41 @@ impl Snapshot {
             };
         };
         let member = p.members.iter().find(|(id, _)| id == user).map(|(_, r)| by_role(r));
-        if p.owner_kind == "user" {
+        let own = if p.owner_kind == "user" {
             if p.owner_id == user {
-                return NsAccess::Write;
+                NsAccess::Write
+            } else if p.private {
+                member.unwrap_or(NsAccess::None)
+            } else {
+                member.unwrap_or(if super_ { NsAccess::Read } else { NsAccess::None })
             }
-            if p.private {
-                return NsAccess::None;
-            }
-            return member.unwrap_or(if super_ { NsAccess::Read } else { NsAccess::None });
-        }
-        let org = match self.org_role(&p.owner_id, user) {
-            Some("admin") => NsAccess::Write,
-            Some("securityadmin") => NsAccess::Read,
-            Some(_) if !p.private => NsAccess::Read,
-            _ => NsAccess::None,
+        } else {
+            let org = match self.org_role(&p.owner_id, user) {
+                Some("admin") => NsAccess::Write,
+                Some("securityadmin") => NsAccess::Read,
+                Some(_) if !p.private => NsAccess::Read,
+                _ => NsAccess::None,
+            };
+            let sup = if super_ { NsAccess::Write } else { NsAccess::None };
+            member.unwrap_or(NsAccess::None).max(org).max(sup)
         };
-        let sup = if super_ { NsAccess::Write } else { NsAccess::None };
-        member.unwrap_or(NsAccess::None).max(org).max(sup)
+        own.max(self.exposed(p, user))
     }
+
+    /// What an exposed project gives someone outside it: read, clone and run —
+    /// never change. `public`: anyone signed in; `orgs`: members of those orgs.
+    /// The `system` org exposes to org `a3t` only — never directly to everyone;
+    /// a3t decides what it passes on.
+    fn exposed(&self, p: &Project, user: &str) -> NsAccess {
+        let system = p.owner_kind == "org" && p.owner == "system";
+        let member_of = |h: &str| self.orgs.get(h).is_some_and(|id| self.org_role(id, user).is_some());
+        match p.exposure.as_str() {
+            "public" if !system => NsAccess::Run,
+            "orgs" if p.exposed_to.iter().any(|h| (!system || h == "a3t") && member_of(h)) => NsAccess::Run,
+            _ => NsAccess::None,
+        }
+    }
+
 }
 
 pub struct ProjectGuard {
@@ -186,9 +211,17 @@ impl ProjectGuard {
     }
 
     async fn snapshot(&self) -> Arc<Snapshot> {
+        self.snapshot_for(None).await
+    }
+
+    /// The snapshot — refreshed early when it doesn't know `namespace` yet (a
+    /// project created a moment ago must not read as a stranger's for 5 s).
+    async fn snapshot_for(&self, namespace: Option<&str>) -> Arc<Snapshot> {
         {
             let (at, snap) = &*self.snapshot.read().unwrap();
-            if at.is_some_and(|t| t.elapsed() < REFRESH) {
+            let unknown = namespace.is_some_and(|ns| !PLATFORM.contains(&ns) && !snap.projects.contains_key(ns));
+            let fresh = at.is_some_and(|t| t.elapsed() < if unknown { Duration::from_millis(300) } else { REFRESH });
+            if fresh {
                 return snap.clone();
             }
         }
@@ -222,7 +255,7 @@ impl NamespaceGuard for ProjectGuard {
         let Some(user) = acting_user(principal) else {
             return NsAccess::None; // an agent acting for no one
         };
-        self.snapshot().await.decide(user, is_superadmin(principal), namespace)
+        self.snapshot_for(Some(namespace)).await.decide(user, is_superadmin(principal), namespace)
     }
 
     fn is_platform(&self, namespace: &str) -> bool {
@@ -313,6 +346,43 @@ mod tests {
             ],
             &[json!({ "id": "org-acme", "slug": "acme" })],
         )
+    }
+
+    #[test]
+    fn exposed_projects_let_their_audience_read_clone_and_run() {
+        let s = Snapshot::from_rows(
+            &[
+                json!({ "namespace": "system-guards", "owner_kind": "org", "owner": "system", "owner_id": "org-system", "private": "true", "members": "[]",
+                        "policy": "{\"exposure\":{\"audience\":\"orgs\",\"orgs\":[\"a3t\"],\"kind\":\"shared\"}}" }),
+                json!({ "namespace": "a3t-training", "owner_kind": "org", "owner": "a3t", "owner_id": "org-default", "private": "false", "members": "[]",
+                        "policy": "{\"exposure\":{\"audience\":\"public\",\"kind\":\"training\"}}" }),
+                json!({ "namespace": "acme-community", "owner_kind": "org", "owner": "acme", "owner_id": "org-acme", "private": "false", "members": "[]",
+                        "policy": "{\"exposure\":{\"audience\":\"public\"}}" }),
+            ],
+            &[
+                json!({ "org_id": "org-default", "user_id": "ops", "role": "member" }),
+                json!({ "org_id": "org-acme", "user_id": "bob", "role": "admin" }),
+            ],
+            &[json!({ "id": "org-default", "slug": "a3t" }), json!({ "id": "org-acme", "slug": "acme" }), json!({ "id": "org-system", "slug": "system" })],
+        );
+        // system's guards: exposed to org a3t only.
+        assert_eq!(s.decide("ops", false, "system-guards"), NsAccess::Run);
+        assert_eq!(s.decide("bob", false, "system-guards"), NsAccess::None);
+        // system can't go public, nor to another org than a3t.
+        let leaky = Snapshot::from_rows(
+            &[json!({ "namespace": "system-leak", "owner_kind": "org", "owner": "system", "owner_id": "org-system", "private": "false", "members": "[]",
+                      "policy": "{\"exposure\":{\"audience\":\"public\"}}" }),
+              json!({ "namespace": "system-acme", "owner_kind": "org", "owner": "system", "owner_id": "org-system", "private": "false", "members": "[]",
+                      "policy": "{\"exposure\":{\"audience\":\"orgs\",\"orgs\":[\"acme\"]}}" })],
+            &[json!({ "org_id": "org-acme", "user_id": "bob", "role": "admin" })],
+            &[json!({ "id": "org-acme", "slug": "acme" })],
+        );
+        assert_eq!(leaky.decide("bob", false, "system-leak"), NsAccess::None);
+        assert_eq!(leaky.decide("bob", false, "system-acme"), NsAccess::None);
+        // a3t's training and acme's community: everyone runs, nobody else changes.
+        assert_eq!(s.decide("bob", false, "a3t-training"), NsAccess::Run);
+        assert_eq!(s.decide("ops", false, "acme-community"), NsAccess::Run);
+        assert_eq!(s.decide("bob", false, "acme-community"), NsAccess::Write, "its owner still writes");
     }
 
     #[test]

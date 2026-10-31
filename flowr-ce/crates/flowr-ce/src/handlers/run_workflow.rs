@@ -54,6 +54,15 @@ impl TaskHandler for RunWorkflowHandler {
 
         info!(task = %task.name, namespace = %namespace, name = %name, "executing nested workflow");
 
+        // A subflow runs as its caller, so the caller must be allowed to run
+        // flows in that namespace: its own projects, the platform, or a project
+        // exposed to it. Without this a flow could call another org's private flow.
+        let guard = flowr_policy::namespace::namespace_guard();
+        if guard.enforcing() && guard.access(&ctx.principal, &namespace).await < flowr_policy::namespace::NsAccess::Run {
+            return Err(RuntimeError::task_failed(&task.name,
+                format!("no flow {namespace}/{name} that this run may use")));
+        }
+
         // Get storage from context
         let storage = ctx.storage.as_ref()
             .and_then(|s| s.downcast_ref::<Arc<dyn StorageBackend>>().cloned())

@@ -44,7 +44,7 @@ async fn one_org_admin_cannot_see_another_org() {
     let db = dir.path().join("platform.lance");
     storage.resources().create(Resource::new("a3t-platform-db", "lancedb", json!({ "db_path": db.to_str().unwrap() })).with_namespace("a3t")).await.unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a3t/backend/flows");
-    for f in ["system/a3t_projects_install.yaml", "a3t/a3t_profile.yaml", "a3t/a3t_orgs.yaml", "a3t/a3t_projects.yaml"] {
+    for f in ["system/a3t_projects_install.yaml", "a3t/a3t_profile.yaml", "a3t/a3t_orgs.yaml", "a3t/a3t_projects.yaml", "a3t/a3t_share.yaml"] {
         storage.workflows().register(WorkflowRecord::from_yaml(&std::fs::read_to_string(root.join(f)).unwrap()).unwrap()).await.unwrap();
     }
 
@@ -107,6 +107,51 @@ async fn one_org_admin_cannot_see_another_org() {
     assert!(!tool(&storage, "zed", DEV, "list_flows", json!({ "namespace": "default" })).await.0);
     // The platform stays readable and runnable.
     assert!(tool(&storage, "zed", DEV, "list_flows", json!({ "namespace": "a3t" })).await.0);
+
+    // ── Exposure: acme publishes into a community project every org can use ──
+    flow(&storage, "bob", DEV, "a3t-projects", json!({ "action": "create", "owner_kind": "org", "owner": "acme", "name": "community" })).await;
+    let refused = run_flow(&storage, "bob", "a3t-projects", json!({ "action": "update", "namespace": "acme-community",
+        "policy": { "exposure": { "audience": "public", "kind": "training" } } })).await;
+    assert_eq!(refused["ok"], false, "only the platform orgs label an exposure training: {refused}");
+    flow(&storage, "bob", DEV, "a3t-projects", json!({ "action": "update", "namespace": "acme-community",
+        "policy": { "exposure": { "audience": "public" } } })).await;
+    flow(&storage, "bob", DEV, "a3t-share", json!({ "kind": "flow", "from": "acme-web", "name": "acme-job", "to": "acme-community" })).await;
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await; // the guard's snapshot refresh
+
+    // gina (globex) sees it as community, reads and runs it — never changes it.
+    let listed = flow(&storage, "gina", DEV, "a3t-projects", json!({ "action": "list" })).await;
+    let community: Vec<&Value> = listed["projects"].as_array().unwrap().iter().filter(|p| p["namespace"] == "acme-community").collect();
+    assert_eq!(community.len(), 1, "{listed}");
+    assert_eq!(community[0]["role"], "community");
+    assert!(tool(&storage, "gina", DEV, "get_flow", json!({ "namespace": "acme-community", "name": "acme-job" })).await.0);
+    assert!(!tool(&storage, "gina", DEV, "delete_flow", json!({ "namespace": "acme-community", "name": "acme-job" })).await.0);
+    assert!(!tool(&storage, "gina", DEV, "get_flow", json!({ "namespace": "acme-web", "name": "acme-job" })).await.0, "the working copy stays private");
+    // She clones it into her project; she can't publish into acme's.
+    flow(&storage, "gina", DEV, "a3t-share", json!({ "kind": "flow", "from": "acme-community", "name": "acme-job", "to": "globex-crm" })).await;
+    assert!(storage.workflows().get("globex-crm", "acme-job").await.is_ok());
+    let publish = run_flow(&storage, "gina", "a3t-share", json!({ "kind": "flow", "from": "globex-crm", "name": "globex-job", "to": "acme-community" })).await;
+    assert!(publish.is_null(), "refused: no write on acme-community");
+
+    // Wiring: a globex flow may run acme's community flow, not acme's private one.
+    for (n, target) in [("wire-ok", "acme-community"), ("wire-private", "acme-web")] {
+        storage.workflows().register(WorkflowRecord::from_yaml(&format!(
+            "document:\n  dsl: 1.0.3\n  namespace: globex-crm\n  name: {n}\n  version: 1.0.0\ndo:\n- call:\n    run:\n      workflow:\n        namespace: {target}\n        name: acme-job\n        input: {{}}\n"
+        )).unwrap()).await.unwrap();
+    }
+    let run = |n: &'static str| { let s = storage.clone(); async move {
+        let req = ExecutionRequest::new("globex-crm", n).with_principal(who("gina", DEV));
+        flowr_ce::execute_workflow(s, &reqwest::Client::new(), req).await.unwrap()
+    }};
+    assert_eq!(run("wire-ok").await.status, ExecutionStatus::Completed);
+    let blocked = run("wire-private").await;
+    assert_eq!(blocked.status, ExecutionStatus::Failed, "{:?}", blocked.error);
+}
+
+/// Run an a3t flow as a user and give back its output — Null when the run failed.
+async fn run_flow(storage: &Arc<dyn StorageBackend>, user: &str, name: &str, input: Value) -> Value {
+    let req = ExecutionRequest::new("a3t", name).with_input(input).with_principal(who(user, DEV));
+    let st = flowr_ce::execute_workflow(storage.clone(), &reqwest::Client::new(), req).await.unwrap();
+    st.output.unwrap_or(Value::Null)
 }
 
 /// Platform resources move with their secrets intact and references repointed;

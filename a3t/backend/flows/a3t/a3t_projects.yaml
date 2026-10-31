@@ -10,7 +10,10 @@ document:
       Visibility — a private personal project: its owner only; a personal one:
       owner and members; an org project: its members and the org's admins and
       security admins, plus every org member unless it is private. Superadmin
-      sees org projects and non-private personal ones.
+      sees org projects and non-private personal ones. A project with an
+      exposure (policy.exposure: { audience: orgs | public, orgs: [...], kind })
+      is also seen — read, clone, run — by that audience: as community, or
+      shared / training from the platform orgs; the system org exposes to a3t only.
       Input: { action: list | create | update | delete | move, ... }.
       Output: { ok, projects? , project? , report? , error? }.
       The caller is $context._principal.
@@ -75,6 +78,11 @@ do:
       as: '{_orgs: (group_by(.id) | map(sort_by(.created_at) | .[0]))}'
 # The projects the caller may see, each with their role in it and whether they
 # may change it. Every action below authorizes against this list.
+- my-handles:
+    set:
+      _myhandles: '${ [ $context._myorgs[] | .org_id as $id | (($context._orgs | map(select(.id == $id)) | .[0]) // {}).slug ] | map(select(. != null)) }'
+    export:
+      as: "."
 - visible:
     set:
       _visible: >-
@@ -82,6 +90,13 @@ do:
              | (($p.members // "[]") | fromjson) as $m
              | (($m | map(select(.id == $context._me)) | .[0]) // {}).role as $mr
              | (($context._myorgs | map(select(.org_id == $p.owner_id)) | .[0]) // {}).role as $or
+             | ((($p.policy // "{}") | fromjson).exposure // {}) as $ex
+             | ($p.owner_kind == "org" and $p.owner == "system") as $sys
+             | (if ($ex.audience == "public" and ($sys | not)) then true
+                elif $ex.audience == "orgs" then
+                  ([($ex.orgs // [])[] | select(($sys | not) or . == "a3t")] | any(. as $h | $context._myhandles | index($h) != null))
+                else false end) as $exposed
+             | (if ($p.owner_kind == "org" and ($p.owner == "a3t" or $sys)) then ($ex.kind // "shared") else "community" end) as $label
              | (if $p.owner_kind == "user" then
                   (if $p.owner_id == $context._me then "owner"
                    elif $p.private == "true" then null
@@ -94,7 +109,10 @@ do:
                    elif ($or != null and $p.private != "true") then "org-member"
                    elif $context._super then "superadmin"
                    else null end)
-                end) as $role
+                end) as $own
+             # Exposed to the caller: read, clone and run — shown as community,
+             # or as shared / training when the platform (a3t, system) exposes it.
+             | (if $own != null then $own elif $exposed then $label else null end) as $role
              | select($role != null)
              | { namespace: $p.namespace, owner_kind: $p.owner_kind, owner: $p.owner, owner_id: $p.owner_id,
                  name: $p.name, display_name: $p.display_name, description: $p.description,
@@ -271,6 +289,17 @@ do:
     - not-admin:
         when: '${ $context._mine.can_admin != true and ($context._mine.role != "owner") }'
         then: need-admin
+    - bad-exposure:
+        when: >-
+          ${ (($context._args.policy // {}).exposure // null) as $ex
+             | ($context._mine.owner_kind == "org" and $context._mine.owner == "system") as $sys
+             | ($context._mine.owner_kind == "org" and ($context._mine.owner == "a3t" or $sys)) as $platform
+             | $ex != null and (
+                 (["none", "orgs", "public"] | index($ex.audience // "none") == null)
+                 or (["community", "shared", "training"] | index($ex.kind // "community") == null)
+                 or (($platform | not) and ($ex.kind // "community") != "community")
+                 or ($sys and (($ex.audience // "none") == "public" or (($ex.audience // "none") == "orgs" and ($ex.orgs // []) != ["a3t"]))) ) }
+        then: bad-exposure
     - default:
         then: update-write
 - not-found:
@@ -282,6 +311,14 @@ do:
     set:
       ok: false
       error: Only the project's owner or its org's admins can change it.
+    then: end
+- bad-exposure:
+    set:
+      ok: false
+      error: >-
+        Exposure is none, orgs (with a list of org handles) or public; its kind is
+        community — shared or training only for the platform orgs. The system org
+        exposes only to a3t.
     then: end
 - update-write:
     call: lancedb

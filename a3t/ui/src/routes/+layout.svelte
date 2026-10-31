@@ -16,6 +16,7 @@
   import { untrack } from 'svelte';
   import { navigateTo, initFromUrl, setupPopState } from '$lib/stores/panels.svelte.ts';
   import { initContext } from '$lib/stores/context.svelte.ts';
+  import PublishDialog from '$lib/components/shared/PublishDialog.svelte';
   import { messages } from '$lib/core/status/messages';
   import { initAuth, isAuthenticated } from '$lib/stores/auth';
   import { initEditorContext } from '$lib/editor/context';
@@ -162,6 +163,7 @@
       {#if ctxFloating}<ContextList appType={activeType} />{/if}
       <PanelStack />
     </main>
+    <PublishDialog />
   </div>
   {@render children()}
 {:else if authChecked}

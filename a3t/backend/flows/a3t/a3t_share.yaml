@@ -1,0 +1,33 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-share
+  version: 1.0.0
+  metadata:
+    description: >
+      Publish or clone: copy a flow, resource or trigger from one project into
+      another. Publishing puts a release into an org's exposed project; cloning
+      copies something exposed to you into your own. You need read access to the
+      source and write access to the target (FlowR checks, as you). Secrets
+      stay on the server. A copy of something already there replaces it.
+      Input: { kind: flow | resource | trigger, from, name | id, to }.
+      Output: { ok, copied, kind }; a refusal fails the run with the reason.
+do:
+# A refusal (no read on the source, no write on the target) fails the run with
+# the reason, which the caller sees.
+- copy:
+    call: registry
+    with:
+      operation: copy
+      kind: '${ .kind }'
+      from: '${ .from }'
+      name: '${ .name // "" }'
+      id: '${ .id // "" }'
+      to: '${ .to }'
+    export:
+      as: '{_result: .}'
+- done:
+    set:
+      ok: true
+      copied: '${ $context._result.copied }'
+      kind: '${ $context._result.kind }'

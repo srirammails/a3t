@@ -322,6 +322,18 @@ export const projectsApi = {
     projectFlow('a3t-projects', { action: 'move', namespace, to_org, dry_run }),
 };
 
+/// Who else may use a project — read, clone, run, never change. `kind` labels
+/// it: community (any org's), or shared / training (the platform orgs').
+export type Exposure = { audience: 'none' | 'orgs' | 'public'; orgs?: string[]; kind?: 'community' | 'shared' | 'training' };
+
+/// Publish into an exposed project, or clone something exposed into your own:
+/// FlowR copies it (secrets stay server-side) if you may read the source and
+/// change the target.
+export const shareApi = {
+  copy: (p: { kind: 'flow' | 'resource' | 'trigger'; from: string; name?: string; id?: string; to: string }) =>
+    projectFlow('a3t-share', p),
+};
+
 export const profileApi = {
   get: () => projectFlow('a3t-profile', { action: 'get' }),
   claim: (handle: string, email?: string, name?: string) => projectFlow('a3t-profile', { action: 'claim', handle, email, name }),

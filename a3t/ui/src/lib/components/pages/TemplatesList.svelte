@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { openPublish } from '$lib/stores/publish.svelte.ts';
+  import ExposedSections from '$lib/components/shared/ExposedSections.svelte';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { execFlow, mcpCall } from '$lib/services/api';
@@ -248,18 +250,15 @@ do:
 
   /// The selected project's templates only (all of them under "All projects").
   let inView = $derived(allTemplates.filter(t => inContext(t.namespace, 'shared')));
-  /// Mine: templates I created. Shared: everyone else's and the built-in ones;
-  /// training and community keep their own sections.
+  /// Mine: templates I created. Shared: everyone else's in view, and the
+  /// built-in ones. Templates other orgs expose are in the sections below.
   let myTemplates = $derived(inView.filter(t => t.created_by === $currentUser?.id));
-  let platformTemplates = $derived(inView.filter(t => t.created_by !== $currentUser?.id && t.source !== 'training' && t.source !== 'community'));
-  let trainingTemplates = $derived(inView.filter(t => t.created_by !== $currentUser?.id && t.source === 'training'));
-  let communityTemplates = $derived(inView.filter(t => t.created_by !== $currentUser?.id && t.source === 'community'));
+  let platformTemplates = $derived(inView.filter(t => t.created_by !== $currentUser?.id));
 
   let tplSections = $derived([
     { key: 'my', label: 'My Templates', hint: 'Created by you', items: myTemplates },
     { key: 'platform', label: 'Shared Templates', hint: 'Created by others, and built into A3T', items: platformTemplates },
-    { key: 'training', label: 'Training Templates', hint: 'Learn A3T step by step', items: trainingTemplates },
-    { key: 'community', label: 'Community Templates', hint: 'Shared by the community', items: communityTemplates },
+
   ]);
 
   // When set, the slide-in panel is showing a not-yet-persisted template.
@@ -620,11 +619,16 @@ do:
                   </div>
                 </div>
                 <button class="tc-create-agent" onclick={(e) => { e.stopPropagation(); navigateTo('agents', 'Agents', { createFromTemplate: t.id }); }}>+ Create Agent</button>
+                {#if sec.key === 'my'}
+                  <button class="tc-create-agent" onclick={(e) => { e.stopPropagation(); openPublish({ kind: 'template', from: t.namespace ?? 'default', ref: t.name, label: t.name,
+                    template: { name: t.name, version: t.activeVersion, spec_yaml: t.spec_yaml, tags: (t.tags ?? []).join(','), vertical: t.vertical } }); }}>Publish…</button>
+                {/if}
               </div>
             {/each}
           </div>
       </FoldSection>
     {/each}
+    <ExposedSections kind="template" noun="Templates" />
   </div>
 
 <!-- Delete confirmation dialog -->

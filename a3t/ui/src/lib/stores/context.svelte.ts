@@ -106,7 +106,21 @@ export function roleIn(p: Project): string | null {
 /// superadmin or as a plain member of its org.
 export function isMine(p: Project): boolean {
   const r = roleIn(p);
-  return r != null && r !== 'superadmin' && r !== 'org-member';
+  return r != null && !['superadmin', 'org-member', ...EXPOSED_ROLES].includes(r);
+}
+
+/// The roles a project exposed to you shows with — its section in every app.
+export const EXPOSED_ROLES = ['shared', 'training', 'community'] as const;
+export type ExposedKind = (typeof EXPOSED_ROLES)[number];
+
+/// Projects exposed to you (not yours), by kind.
+export function exposedProjects(kind?: ExposedKind): Project[] {
+  return projects.filter((p) => (EXPOSED_ROLES as readonly string[]).includes(p.info?.role ?? '') && (!kind || p.info?.role === kind));
+}
+
+/// Your projects with an exposure — where you can publish to.
+export function publishTargets(): Project[] {
+  return projects.filter((p) => p.info?.can_admin && p.info?.policy?.exposure?.audience && p.info.policy.exposure.audience !== 'none');
 }
 
 /// Every project in the list is one the server let you see; legacy namespaces
@@ -141,7 +155,8 @@ export function isPlatform(ns: string | undefined): boolean {
 /// The namespaces a list of this kind loads, in the order to show them: the
 /// selected project (or every user project), then platform ones where they belong.
 export function namespacesFor(kind: ListKind): string[] {
-  const user = projects.filter((p) => !p.platform && canSee(p)).map((p) => p.name);
+  // Your projects — not ones only exposed to you (those have their own sections).
+  const user = projects.filter((p) => !p.platform && canSee(p) && !(EXPOSED_ROLES as readonly string[]).includes(p.info?.role ?? '')).map((p) => p.name);
   const platform = projects.filter((p) => p.platform).map((p) => p.name);
   const base = project ? [project] : user;
   const withPlatform = kind === 'picker' || (showPlatform && !project);

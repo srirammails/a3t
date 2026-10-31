@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { openPublish } from '$lib/stores/publish.svelte.ts';
+  import ExposedSections from '$lib/components/shared/ExposedSections.svelte';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { messages } from '$lib/core/status/messages';
@@ -17,7 +19,7 @@
   import { navigateTo, getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { can, currentUser } from '$lib/stores/auth';
   import { onMount } from 'svelte';
-  import { namespacesFor, inContext, itemProject, getProject } from '$lib/stores/context.svelte.ts';
+  import { namespacesFor, inContext, itemProject, getProject, isPlatform } from '$lib/stores/context.svelte.ts';
   import { contextRev_ } from '$lib/stores/apps.svelte.ts';
   import * as YAML from 'yaml';
 
@@ -1198,6 +1200,7 @@ do:
                     onclick={() => selectResource(r)}
                     onaction={() => { selectResource(r); panelTab = 'test'; }}
                     ondelete={() => deleteTarget = { name: r.name, namespace: r.namespace }}
+                    onpublish={isPlatform(r.project ?? r.namespace) ? undefined : () => openPublish({ kind: r.category === 'flows' ? 'flow' : 'resource', from: r.namespace, ref: r.name, label: r.name })}
                   />
                 {/each}
               </div>
@@ -1207,6 +1210,8 @@ do:
           </div>
         {/each}
 
+        <ExposedSections kind="resource" noun="Resources" />
+        <ExposedSections kind="flow" noun="Flows" />
       {:else}
         <!-- Single category view -->
         {@const items = filteredResources}
@@ -1235,6 +1240,7 @@ do:
                   onclick={() => selectResource(r)}
                   onaction={() => { selectResource(r); panelTab = 'test'; }}
                   ondelete={() => deleteTarget = { name: r.name, namespace: r.namespace }}
+                    onpublish={isPlatform(r.project ?? r.namespace) ? undefined : () => openPublish({ kind: r.category === 'flows' ? 'flow' : 'resource', from: r.namespace, ref: r.name, label: r.name })}
                 />
               {/each}
             </div>

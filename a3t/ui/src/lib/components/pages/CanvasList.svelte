@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { openPublish } from '$lib/stores/publish.svelte.ts';
+  import ExposedSections from '$lib/components/shared/ExposedSections.svelte';
   import { inContext, canvasKind, itemProject } from '$lib/stores/context.svelte.ts';
   import { contextRev_ } from '$lib/stores/apps.svelte.ts';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
@@ -178,6 +180,7 @@
             onclick={() => editCanvas(c)}
             onaction={() => deployCanvas(c)}
             ondelete={() => removeCanvas(c)}
+            onpublish={canvasKind(c) === 'owned' ? () => openPublish({ kind: 'resource', from: c.namespace, ref: c.name, label: c.name }) : undefined}
           />
         {/each}
       </div>
@@ -189,6 +192,7 @@
     <FoldSection title="Shared Canvases" count={sharedCanvases.length} hint="Presets — placement shapes every project can copy">
       {@render canvasCards(sharedCanvases)}
     </FoldSection>
+    <ExposedSections kind="canvas" noun="Canvases" />
   {/if}
 </div>
 

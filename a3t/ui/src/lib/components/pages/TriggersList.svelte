@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { openPublish } from '$lib/stores/publish.svelte.ts';
+  import ExposedSections from '$lib/components/shared/ExposedSections.svelte';
   import { inContext, namespacesFor, isPlatform, itemProject, getProject } from '$lib/stores/context.svelte.ts';
   import FoldSection from '$lib/components/shared/FoldSection.svelte';
   import ProjectPill from '$lib/components/shared/ProjectPill.svelte';
@@ -383,6 +385,9 @@
               {#if t.enabled}<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="2" width="3.5" height="12" rx="1"/><rect x="9.5" y="2" width="3.5" height="12" rx="1"/></svg>
               {:else}<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><polygon points="3,2 13,8 3,14"/></svg>{/if}
             </button>
+            {#if !isPlatform((t as any).project ?? t.namespace)}
+              <button class="trg-act" onclick={() => openPublish({ kind: 'trigger', from: t.namespace, ref: t.id, label: t.name })} title="Publish a release others can use">↗</button>
+            {/if}
             <button class="trg-act danger" onclick={() => deleteTarget = t} title="Delete">
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 4L4 12M4 4l8 8"/></svg>
             </button>
@@ -404,6 +409,7 @@
     <FoldSection title="Shared Triggers" count={sharedTriggers.length} hint="The platform's own (shown with “Show platform”)">
       {@render triggerRows(sharedTriggers)}
     </FoldSection>
+    <ExposedSections kind="trigger" noun="Triggers" />
   {/if}
 </div>
 

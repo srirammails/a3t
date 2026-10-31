@@ -1942,6 +1942,11 @@ async fn execute_tool_flow(
     input: Value,
     ctx: &mut ExecutionContext,
 ) -> std::result::Result<Value, String> {
+    // An agent's tool flow runs as the agent's principal: only flows it may run.
+    let guard = flowr_policy::namespace::namespace_guard();
+    if guard.enforcing() && guard.access(&ctx.principal, namespace).await < flowr_policy::namespace::NsAccess::Run {
+        return Err(format!("Tool workflow {namespace}/{name} not found"));
+    }
     let record = storage.workflows().get(namespace, name).await
         .map_err(|e| format!("Tool workflow {}/{} not found: {}", namespace, name, e))?;
 

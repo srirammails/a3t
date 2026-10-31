@@ -1,5 +1,6 @@
 //! call:registry — registry operations a flow can't do through other tasks.
 //!
+//! `copy` publishes or clones a flow, resource or trigger (read the source, write the target).
 //! `move_resources` moves some resources (secrets intact) and repoints references to them.
 //! `visible` keeps the items the caller may see. `usage` counts what a namespace holds. `move_namespace` moves every flow, resource and trigger
 //! from one namespace to another and rewrites the references inside them
@@ -257,6 +258,101 @@ async fn move_resources(storage: &dyn StorageBackend, from: &str, to: &str, name
     Ok(report)
 }
 
+/// `document.namespace` set to `to`, nothing else touched (block or flow style).
+fn with_namespace(yaml: &str, to: &str) -> Option<String> {
+    let mut out = Vec::new();
+    let mut done = false;
+    let mut in_doc = false;
+    for line in yaml.lines() {
+        if !done && line.starts_with("document:") {
+            if let Some(i) = line.find("namespace:") {
+                // flow style: document: {dsl: ..., namespace: x, ...}
+                let rest = &line[i + "namespace:".len()..];
+                let end = rest.find(|c: char| c == ',' || c == '}').unwrap_or(rest.len());
+                out.push(format!("{}namespace: {}{}", &line[..i], to, &rest[end..]));
+                done = true;
+                continue;
+            }
+            in_doc = true;
+        } else if in_doc && !done && line.trim_start().starts_with("namespace:") && line.starts_with("  ") {
+            let indent = &line[..line.len() - line.trim_start().len()];
+            out.push(format!("{indent}namespace: {to}"));
+            done = true;
+            continue;
+        } else if !line.starts_with(' ') && !line.is_empty() {
+            in_doc = false;
+        }
+        out.push(line.to_string());
+    }
+    done.then(|| out.join("\n") + "\n")
+}
+
+/// Copy a flow, resource or trigger into another project — publishing into an
+/// org's exposed project, or cloning something exposed into your own. The caller
+/// must be able to read the source and change the target. A copy of something
+/// already there replaces it (re-publishing a release). Secrets stay server-side.
+async fn copy_item(storage: &dyn StorageBackend, principal: &flowr_policy::Principal, kind: &str, from: &str, item: &str, to: &str) -> std::result::Result<Value, String> {
+    use flowr_policy::namespace::{namespace_guard, NsAccess};
+    let g = namespace_guard();
+    if g.enforcing() {
+        if g.access(principal, from).await < NsAccess::Read {
+            return Err(format!("no project '{from}' that you can read"));
+        }
+        if g.access(principal, to).await < NsAccess::Write {
+            return Err(format!("copying into '{to}' needs write access there"));
+        }
+    }
+    match kind {
+        "flow" => {
+            let rec = storage.workflows().get(from, item).await.map_err(|_| format!("no flow {from}/{item}"))?;
+            let yaml = with_namespace(&rec.raw_yaml, to).ok_or("the flow has no document.namespace")?;
+            let copy = WorkflowRecord::from_yaml_owned(&yaml, Some(principal.id().to_string())).map_err(|e| e.to_string())?;
+            if storage.workflows().get(to, item).await.is_ok() {
+                storage.workflows().delete(to, item).await.map_err(|e| e.to_string())?;
+            }
+            storage.workflows().register(copy).await.map_err(|e| e.to_string())?;
+            Ok(json!({ "copied": format!("{to}/{item}"), "kind": "flow" }))
+        }
+        "resource" => {
+            let r = storage.resources().get(from, item).await.map_err(|_| format!("no resource {from}/{item}"))?;
+            if storage.resources().get(to, item).await.is_ok() {
+                storage.resources().update(to, item, r.config.clone()).await.map_err(|e| e.to_string())?;
+            } else {
+                let mut copy = Resource::new(r.name.clone(), r.type_ref.clone(), r.config.clone()).with_namespace(to);
+                copy.tags = r.tags.clone();
+                copy.description = r.description.clone();
+                storage.resources().create(copy).await.map_err(|e| e.to_string())?;
+            }
+            Ok(json!({ "copied": format!("{to}/{item}"), "kind": "resource" }))
+        }
+        "trigger" => {
+            let t = storage.triggers().get(item).await.ok().flatten().ok_or(format!("no trigger {item}"))?;
+            if t.get("namespace").and_then(|v| v.as_str()) != Some(from) {
+                return Err(format!("trigger {item} is not in {from}"));
+            }
+            let mut copy = t.clone();
+            if let Some(o) = copy.as_object_mut() {
+                o.remove("id");
+                o.insert("namespace".into(), json!(to));
+            }
+            // A webhook path is global: the copy answers under the target's prefix.
+            if let Some(path) = copy.pointer("/config/path").and_then(|v| v.as_str()).map(String::from) {
+                copy["config"]["path"] = json!(format!("/{to}{}", if path.starts_with('/') { path } else { format!("/{path}") }));
+            }
+            if let Some(targets) = copy.get_mut("targets").and_then(|v| v.as_array_mut()) {
+                for tg in targets {
+                    if tg.get("namespace").and_then(|v| v.as_str()) == Some(from) {
+                        tg["namespace"] = json!(to);
+                    }
+                }
+            }
+            let id = storage.triggers().create(copy).await.map_err(|e| e.to_string())?;
+            Ok(json!({ "copied": id, "kind": "trigger" }))
+        }
+        other => Err(format!("can't copy a {other}; flow, resource or trigger")),
+    }
+}
+
 #[async_trait]
 impl TaskHandler for RegistryHandler {
     fn task_type(&self) -> &str {
@@ -276,6 +372,15 @@ impl TaskHandler for RegistryHandler {
                 move_namespace(store.as_ref(), &s("from"), &s("to"), dry_run)
                     .await
                     .map(|v| TaskResult::new(v))
+                    .map_err(|e| RuntimeError::task_failed(&task.name, e))
+            }
+            // Publish into an exposed project, or clone something exposed.
+            "copy" => {
+                let store = storage(ctx)?;
+                let item = { let n = s("name"); if n.is_empty() { s("id") } else { n } };
+                copy_item(store.as_ref(), &ctx.principal, &s("kind"), &s("from"), &item, &s("to"))
+                    .await
+                    .map(TaskResult::new)
                     .map_err(|e| RuntimeError::task_failed(&task.name, e))
             }
             "move_resources" => {

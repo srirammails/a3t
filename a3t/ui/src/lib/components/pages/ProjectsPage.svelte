@@ -74,6 +74,11 @@
   let moveReport = $state<any>(null);
 
   const selected = $derived(getProjects().find((p) => p.name === selectedName));
+  /// Exposure: the system org exposes to a3t only; the platform orgs label it
+  /// shared or training, every other org's is community.
+  const isSystem = $derived(selected?.info?.owner_kind === 'org' && selected?.info?.owner === 'system');
+  const isPlatformOrg = $derived(selected?.info?.owner_kind === 'org' && (selected?.info?.owner === 'a3t' || isSystem));
+  const ex = $derived<any>(dPolicy.exposure ?? { audience: 'none' });
   const info = $derived(selected?.info);
   const canEdit = $derived(!!info && (info.can_admin || info.role === 'owner'));
   const adminOrgs = $derived(orgs.filter((o) => o.role === 'admin'));
@@ -436,6 +441,33 @@
             ? `Isolated runs only on runtimes labelled a3t.io/org=${info.owner}; never on another org's.`
             : `Isolated runs only on a runtime labelled a3t.io/project=${info.namespace}.`} Enforced by FlowR when a flow is deployed.</em>
         </label>
+        <h4>Exposure</h4>
+        <label><span>Who else may use this project — read, clone and run its flows, resources, triggers and templates; never change them</span>
+          <select value={ex.audience ?? 'none'} disabled={!canEdit}
+                  onchange={(e) => { const a = e.currentTarget.value; dPolicy = { ...dPolicy, exposure: a === 'none' ? { audience: 'none' }
+                    : { ...ex, audience: a, orgs: isSystem ? ['a3t'] : (ex.orgs ?? []), kind: ex.kind ?? (isPlatformOrg ? 'shared' : 'community') } }; }}>
+            <option value="none">Not exposed</option>
+            <option value="orgs">{isSystem ? 'Org a3t' : 'Selected orgs'}</option>
+            {#if !isSystem}<option value="public">All orgs</option>{/if}
+          </select>
+          {#if isSystem}<em>The system org exposes to a3t only; a3t decides what it passes on.</em>{/if}
+        </label>
+        {#if ex.audience === 'orgs' && !isSystem}
+          <label><span>Org handles</span>
+            <input class="mono" value={(ex.orgs ?? []).join(', ')} disabled={!canEdit} placeholder="acme, globex"
+                   onchange={(e) => { dPolicy = { ...dPolicy, exposure: { ...ex, orgs: e.currentTarget.value.split(',').map((x) => x.trim()).filter(Boolean) } }; }} />
+          </label>
+        {/if}
+        {#if ex.audience !== 'none' && isPlatformOrg}
+          <label><span>Shown to them as</span>
+            <select value={ex.kind ?? 'shared'} disabled={!canEdit}
+                    onchange={(e) => { dPolicy = { ...dPolicy, exposure: { ...ex, kind: e.currentTarget.value } }; }}>
+              <option value="shared">Shared — to use or wire</option>
+              <option value="training">Training — examples to learn from and clone</option>
+            </select>
+          </label>
+        {/if}
+        <p class="pj-note">{ex.audience === 'none' ? 'Only this project\'s members and its org see it.' : 'Publish items into this project from their cards (Publish); others see them under Community, or From A3T / Training for the platform. Save to apply.'}</p>
         <h4>Project rules</h4>
         {#each POLICY_PRESETS as rule}
           <label class="pj-check">
