@@ -64,6 +64,10 @@ do:
       _cr_vertical: ${ .input.data.vertical }
       _cr_user: ${ .input.user_id }
       _cr_ts: ${ .input.timestamp }
+      _cr_replace: ${ .input.data.replace == true }
+      # The project the template belongs to: its spec's document.namespace.
+      _cr_ns: >-
+        ${ ((([(.input.data.spec_yaml // "") | capture("\n\\s+namespace:\\s*['\"]?(?<ns>[A-Za-z0-9_.-]+)")] | .[0]) // {}).ns) // "" }
     export:
       as: "."
     then: create-check
@@ -73,7 +77,7 @@ do:
       operation: query
       table: template_registry
       filter: name = "${ $context._cr_name }" AND org_id = "${ $context._cr_org }"
-      limit: 1
+      limit: 100
       _resource: a3t/a3t-platform-db
     metadata:
       a3t:
@@ -81,14 +85,46 @@ do:
           op: read
           resource:
             type: Template
-    then: create-decide
+    then: create-same
+# A name is unique per project (spec namespace), so a project can hold a
+# release of a template another project also has.
+- create-same:
+    set:
+      _cr_same: >-
+        ${ [ .[] | select(((([(.spec_yaml // "") | capture("\n\\s+namespace:\\s*['\"]?(?<ns>[A-Za-z0-9_.-]+)")] | .[0]) // {}).ns) == $context._cr_ns) ] }
+    export:
+      as: "."
 - create-decide:
     switch:
+    - replace:
+        when: ${ ($context._cr_same | length) > 0 and $context._cr_replace }
+        then: create-replace
     - case:
-        when: ${ (. | length) > 0 }
+        when: ${ ($context._cr_same | length) > 0 }
         then: create-exists
     - default:
         then: create-insert
+# Re-publishing: the release in that project is updated in place.
+- create-replace:
+    call: lancedb
+    with:
+      operation: update
+      table: template_registry
+      filter: id = "${ $context._cr_same[0].id }"
+      values:
+        version: ${ $context._cr_version }
+        spec_yaml: ${ $context._cr_spec }
+        tags: ${ $context._cr_tags }
+        vertical: ${ $context._cr_vertical }
+        updated_at: ${ $context._cr_ts }
+      _resource: a3t/a3t-platform-db
+    metadata:
+      a3t:
+        policy:
+          op: write
+          resource:
+            type: Template
+    then: end
 - create-exists:
     set:
       error: Template with this name already exists

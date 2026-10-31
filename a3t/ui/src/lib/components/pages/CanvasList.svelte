@@ -189,7 +189,7 @@
     <FoldSection title="My Canvases" count={myCanvases.length} hint="Deploy a flow in this project">
       {@render canvasCards(myCanvases)}
     </FoldSection>
-    <FoldSection title="Shared Canvases" count={sharedCanvases.length} hint="Presets — placement shapes every project can copy">
+    <FoldSection title="Presets" count={sharedCanvases.length} hint="Placement shapes every project can copy">
       {@render canvasCards(sharedCanvases)}
     </FoldSection>
     <ExposedSections kind="canvas" noun="Canvases" />

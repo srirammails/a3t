@@ -257,7 +257,7 @@ do:
 
   let tplSections = $derived([
     { key: 'my', label: 'My Templates', hint: 'Created by you', items: myTemplates },
-    { key: 'platform', label: 'Shared Templates', hint: 'Created by others, and built into A3T', items: platformTemplates },
+    { key: 'platform', label: 'Team Templates', hint: 'Created by others in view, and built into A3T', items: platformTemplates },
 
   ]);
 
@@ -268,7 +268,8 @@ do:
   // While a new template's spec is still auto-generated, keep regenerating it (with the
   // document name) as the user types the name. Flips true once they edit the spec/designer.
   let specEdited = $state(false);
-  let template = $derived(draftTemplate ? draftTemplate : (selected ? allTemplates.find(t => t.name === selected) : null));
+  // Two projects can hold a template of the same name (a release): the one in view wins.
+  let template = $derived(draftTemplate ? draftTemplate : (selected ? (inView.find(t => t.name === selected) ?? allTemplates.find(t => t.name === selected)) : null));
 
   let propNode = $state<'detail' | 'yaml' | 'policy' | 'ownership' | 'agents'>('detail');
   let panelClosing = $state(false);

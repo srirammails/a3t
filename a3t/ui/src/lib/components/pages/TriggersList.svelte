@@ -406,7 +406,7 @@
         <button class="trg-create-btn" onclick={openCreate}>+ Create your first trigger</button>
       </div>
     {/if}
-    <FoldSection title="Shared Triggers" count={sharedTriggers.length} hint="The platform's own (shown with “Show platform”)">
+    <FoldSection title="Platform Triggers" count={sharedTriggers.length} hint="The platform's own (shown with “Show platform”)">
       {@render triggerRows(sharedTriggers)}
     </FoldSection>
     <ExposedSections kind="trigger" noun="Triggers" />

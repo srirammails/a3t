@@ -804,7 +804,7 @@
   <FoldSection title="My Agents" count={myAgents.length} hint="Created by you">
     {@render agentCards(myAgents)}
   </FoldSection>
-  <FoldSection title="Shared Agents" count={sharedAgents.length} hint="Created by others, in projects you can see">
+  <FoldSection title="Team Agents" count={sharedAgents.length} hint="Created by others, in projects you can see">
     {@render agentCards(sharedAgents)}
   </FoldSection>
   <ExposedSections kind="agent" noun="Agents" />

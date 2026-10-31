@@ -34,8 +34,12 @@
       res = await execFlow('a3t-templates-create', 'a3t', {
         org_id: 'org-default', user_id: $currentUser?.id ?? '', timestamp: new Date().toISOString(),
         data: { id: `tpl-${to}-${item.template.name}-${Date.now().toString(36)}`, name: item.template.name, version: item.template.version,
-                source: 'community', spec_yaml: spec, tags: item.template.tags ?? '', vertical: item.template.vertical ?? '', published: 'true' },
+                source: 'community', spec_yaml: spec, tags: item.template.tags ?? '', vertical: item.template.vertical ?? '', published: 'true',
+                // Publishing again updates the release in that project.
+                replace: true },
       });
+      // The CRUD flow answers a refusal as { error } rather than failing.
+      if (res.ok && (res as any).data?.error) res = { ok: false, error: (res as any).data.error };
     } else {
       res = await shareApi.copy({ kind: item.kind as 'flow' | 'resource' | 'trigger', from: item.from,
         ...(item.kind === 'trigger' ? { id: item.ref } : { name: item.ref }), to });
@@ -51,7 +55,7 @@
   <div class="pd-overlay" role="presentation" onclick={closePublish}></div>
   <div class="pd" role="dialog" aria-label="Publish">
     <h3>Publish {item.label}</h3>
-    <p class="pd-note">A release in an exposed project: others read, clone and run it, never change it. Your copy in <span class="mono">{item.from}</span> stays yours; publish again to update the release.</p>
+    <p class="pd-note">One release in an exposed project. Others use or wire it by reference — they get each new release — or clone their own copy. Your copy in <span class="mono">{item.from}</span> stays yours; publish again to update the release.</p>
     {#if targets.length === 0}
       <p class="pd-warn">None of your projects is exposed yet. In Projects → Policy, set a project's Exposure to selected orgs or all orgs, then publish into it.</p>
     {:else}
