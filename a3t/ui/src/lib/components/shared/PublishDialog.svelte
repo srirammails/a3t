@@ -18,6 +18,7 @@
   $effect(() => { if (item) { to = targets[0]?.name ?? ''; message = ''; ok = false; } });
 
   function audienceOf(name: string): string {
+    if (name === 'a3t') return 'platform · org a3t';
     const ex = publishTargets().find((p) => p.name === name)?.info?.policy?.exposure;
     if (!ex) return '';
     const who = ex.audience === 'public' ? 'every org' : `org${(ex.orgs ?? []).length === 1 ? '' : 's'} ${(ex.orgs ?? []).join(', ')}`;
@@ -35,7 +36,7 @@
         org_id: 'org-default', user_id: $currentUser?.id ?? '', timestamp: new Date().toISOString(),
         data: { id: `tpl-${to}-${item.template.name}-${Date.now().toString(36)}`, name: item.template.name, version: item.template.version,
                 // Labelled as the target exposes it: shared / training (platform) or community.
-                source: publishTargets().find((p) => p.name === to)?.info?.policy?.exposure?.kind ?? 'community', spec_yaml: spec, tags: item.template.tags ?? '', vertical: item.template.vertical ?? '', published: 'true' },
+                source: to === 'a3t' ? 'shared' : publishTargets().find((p) => p.name === to)?.info?.policy?.exposure?.kind ?? 'community', spec_yaml: spec, tags: item.template.tags ?? '', vertical: item.template.vertical ?? '', published: 'true' },
       });
       // The CRUD flow answers a refusal as { error } rather than failing.
       if (res.ok && (res as any).data?.error) res = { ok: false, error: (res as any).data.error };

@@ -113,9 +113,32 @@ export function isMine(p: Project): boolean {
 export const EXPOSED_ROLES = ['shared', 'training', 'community'] as const;
 export type ExposedKind = (typeof EXPOSED_ROLES)[number];
 
-/// Projects exposed to you (not yours), by kind.
+/// The orgs the lists are seen from: the selected project's org, or every org
+/// you are in when no project (or a personal one) is selected.
+function viewingOrgs(): string[] {
+  const sel = projects.find((p) => p.name === project);
+  if (sel?.platform) return [sel.name];
+  if (sel?.info?.owner_kind === 'org') return [sel.info.owner];
+  return myOrgs.map((o) => o.handle);
+}
+
+/// What kind of exposure a project is to the orgs in view, if any. Decided by
+/// its policy, not by your role: a superadmin (or someone in both orgs) admins
+/// `system-shared` too, yet from org a3t it is still a3t's Shared.
+function exposureFor(p: Project): ExposedKind | null {
+  const role = p.info?.role ?? '';
+  if ((EXPOSED_ROLES as readonly string[]).includes(role)) return role as ExposedKind;
+  const ex = p.info?.policy?.exposure;
+  if (!p.info || !ex?.audience || ex.audience === 'none' || p.name === project) return null;
+  const orgs = viewingOrgs();
+  if (p.info.owner_kind === 'org' && orgs.includes(p.info.owner)) return null;
+  const reaches = ex.audience === 'public' || (ex.orgs ?? []).some((o: string) => orgs.includes(o));
+  return reaches ? ((ex.kind ?? 'community') as ExposedKind) : null;
+}
+
+/// Projects exposed to the orgs in view (not theirs), by kind.
 export function exposedProjects(kind?: ExposedKind): Project[] {
-  return projects.filter((p) => (EXPOSED_ROLES as readonly string[]).includes(p.info?.role ?? '') && (!kind || p.info?.role === kind));
+  return projects.filter((p) => { const k = exposureFor(p); return !!k && (!kind || k === kind); });
 }
 
 /// Whether you may change what is in a namespace: a project you administer, or a
@@ -127,9 +150,12 @@ export function canAdminNamespace(ns: string | undefined): boolean {
   return !!p?.info && (p.info.can_admin || p.info.role === 'owner' || p.info.role === 'developer');
 }
 
-/// Your projects with an exposure — where you can publish to.
+/// Your projects with an exposure — where you can publish to — and the `a3t`
+/// platform project when you admin org a3t: a release there is a3t's own, to
+/// use or pass on to every org.
 export function publishTargets(): Project[] {
-  return projects.filter((p) => p.info?.can_admin && p.info?.policy?.exposure?.audience && p.info.policy.exposure.audience !== 'none');
+  const exposed = projects.filter((p) => p.info?.can_admin && p.info?.policy?.exposure?.audience && p.info.policy.exposure.audience !== 'none');
+  return canAdminNamespace('a3t') ? [...exposed, { name: 'a3t', platform: true }] : exposed;
 }
 
 /// Every project in the list is one the server let you see; legacy namespaces
