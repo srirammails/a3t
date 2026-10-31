@@ -123,7 +123,7 @@
     // (A raw fetch to /registry/resources is JWT-gated → 401, and returns { resources: [...] }.)
     const seenRes = new Set<string>();
     const resAcc: { name: string; type: string; namespace: string }[] = [];
-    for (const ns of namespacesFor('shared')) {
+    for (const ns of namespacesFor('picker')) {
       const res = await mcpCall('list_resources', { namespace: ns });
       if (res.ok && res.data) {
         let raw: any = res.data;

@@ -156,6 +156,22 @@ do:
         created_at: '${ now | todate }'
         updated_at: '${ now | todate }'
       _resource: a3t/a3t-platform-db
+# The superadmin who creates an org is its first admin.
+- creator-admin:
+    call: lancedb
+    with:
+      operation: insert
+      table: org_members
+      records:
+      - id: '${ "org-" + $context._args.org + ":" + $context._me }'
+        org_id: '${ "org-" + $context._args.org }'
+        user_id: '${ $context._me }'
+        email: '${ $context._args.email // "" }'
+        name: '${ $context._args.name // "" }'
+        role: admin
+        added_by: '${ $context._me }'
+        created_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
 - created:
     set:
       ok: true

@@ -97,6 +97,14 @@ async fn users_orgs_and_projects() {
     w.refused("usr-ann", DEV, "a3t-orgs", json!({ "action": "set_member", "org": "acme", "user_id": "usr-ann", "role": "admin" }), "admin role").await;
     let orgs = w.ok("usr-ann", DEV, "a3t-orgs", json!({ "action": "list" })).await;
     assert_eq!(orgs["orgs"], json!([]), "ann is in no org");
+    // A superadmin may create projects in every org, as admin — even one they aren't in.
+    w.ok("usr-root2", SUPER, "a3t-orgs", json!({ "action": "create", "org": "globex" })).await;
+    let owners = w.ok("usr-root", SUPER, "a3t-projects", json!({ "action": "list" })).await;
+    let handles: Vec<(&str, &str)> = owners["orgs"].as_array().unwrap().iter()
+        .map(|o| (o["handle"].as_str().unwrap(), o["role"].as_str().unwrap())).collect();
+    assert_eq!(handles, [("acme", "admin"), ("globex", "admin")], "{owners}");
+    let carls = w.ok("usr-carl", DEV, "a3t-projects", json!({ "action": "list" })).await;
+    assert_eq!(carls["orgs"], json!([{ "handle": "acme", "id": "org-acme", "display_name": "Acme", "role": "member" }]));
 
     // A private personal project: its owner only — not even superadmin.
     w.ok("usr-ann", DEV, "a3t-projects", json!({ "action": "create", "owner_kind": "user", "owner": "ann", "name": "orders", "private": true })).await;
@@ -115,7 +123,8 @@ async fn users_orgs_and_projects() {
     w.ok("usr-carl", DEV, "a3t-projects", json!({ "action": "create", "owner_kind": "org", "owner": "acme", "name": "docs" })).await;
     assert_eq!(w.visible("usr-bob", DEV).await, pairs(&[("acme-docs", "org-admin"), ("acme-web", "org-admin")]));
     assert_eq!(w.visible("usr-carl", DEV).await, pairs(&[("acme-docs", "org-member")]));
-    assert_eq!(w.visible("usr-root", SUPER).await, pairs(&[("acme-docs", "superadmin"), ("acme-web", "superadmin")]));
+    // The superadmin who created acme is its first admin.
+    assert_eq!(w.visible("usr-root", SUPER).await, pairs(&[("acme-docs", "org-admin"), ("acme-web", "org-admin")]));
     // Adding carl to the private project lets him see it.
     w.ok("usr-bob", DEV, "a3t-projects", json!({ "action": "update", "namespace": "acme-web",
         "members": [{ "kind": "user", "id": "usr-carl", "role": "developer" }] })).await;

@@ -144,7 +144,7 @@
 
   async function loadRegistry() {
     const llm: any[] = [], mcp: any[] = [], fl: any[] = [];
-    for (const ns of namespacesFor('shared')) {
+    for (const ns of namespacesFor('picker')) {
       const r = await mcpCall('list_resources', { namespace: ns });
       for (const res of (r.data?.resources ?? [])) {
         const ref = `${res.namespace ?? ns}/${res.name}`;

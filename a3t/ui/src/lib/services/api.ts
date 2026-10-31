@@ -326,7 +326,9 @@ export const profileApi = {
 
 export const orgsApi = {
   list: () => projectFlow('a3t-orgs', { action: 'list' }),
-  create: (org: string, display_name: string) => projectFlow('a3t-orgs', { action: 'create', org, display_name }),
+  /** The creator becomes the org's first admin; email/name label that row. */
+  create: (org: string, display_name: string, creator?: { email?: string; name?: string }) =>
+    projectFlow('a3t-orgs', { action: 'create', org, display_name, ...creator }),
   remove: (org: string) => projectFlow('a3t-orgs', { action: 'delete', org }),
   setMember: (org: string, user: { user_id: string; email?: string; name?: string }, role: OrgRole) =>
     projectFlow('a3t-orgs', { action: 'set_member', org, role, ...user }),

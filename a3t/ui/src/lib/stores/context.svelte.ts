@@ -25,10 +25,13 @@ export type Project = {
 
 /// What a list holds decides whether platform namespaces belong in it.
 ///  - `owned`: things a project makes and runs (flows, triggers, executions,
-///    canvases, agents). Platform ones only with "Show platform".
+///    canvases). Platform ones only with "Show platform".
 ///  - `shared`: things every project uses from the platform (LLM / ADB / MCP
-///    resources in `a3t`, built-in templates in `system`). Always included.
-export type ListKind = 'owned' | 'shared';
+///    resources, built-in templates, presets). Shown under "All projects"; with
+///    a project selected, a list shows that project's items only.
+///  - `picker`: a dropdown choosing what to use (an LLM, an MCP server, a target
+///    flow) — always offers the platform's, whatever is selected.
+export type ListKind = 'owned' | 'shared' | 'picker';
 
 /// Used until the server answers, and when it can't (an older FlowR without
 /// `list_projects`): the namespaces the dash always knew about.
@@ -119,7 +122,8 @@ export function namespacesFor(kind: ListKind): string[] {
   const user = projects.filter((p) => !p.platform && canSee(p)).map((p) => p.name);
   const platform = projects.filter((p) => p.platform).map((p) => p.name);
   const base = project ? [project] : user;
-  return kind === 'shared' || showPlatform ? [...base, ...platform.filter((n) => !base.includes(n))] : base;
+  const withPlatform = showPlatform || kind === 'picker' || (kind === 'shared' && !project);
+  return withPlatform ? [...base, ...platform.filter((n) => !base.includes(n))] : base;
 }
 
 /// Whether a row from a list that isn't loaded per namespace is in view. Rows
@@ -141,6 +145,12 @@ export function contextKey(): string {
 }
 
 // ── Writes ──
+
+/// A project pill: select its project, or — when it is already the selection —
+/// clear the filter back to all projects.
+export function toggleProject(name: string) {
+  setProject(name === project ? ALL : name);
+}
 
 export function setProject(name: string) {
   if (name === project) return;

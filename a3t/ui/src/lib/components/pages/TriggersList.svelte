@@ -181,7 +181,7 @@
   async function loadFlows() {
     const all: FlowSummary[] = [];
     // Targets may be platform flows (an agent's chat wrapper), so the shared set.
-    for (const ns of namespacesFor('shared')) {
+    for (const ns of namespacesFor('picker')) {
       const res = await mcpCall('list_flows', { namespace: ns });
       if (res.ok && res.data) {
         const raw = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;

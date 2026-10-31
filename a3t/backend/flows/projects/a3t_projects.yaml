@@ -70,8 +70,9 @@ do:
       table: orgs
       limit: 1000
       _resource: a3t/a3t-platform-db
+    # One row per org id (an install may have seeded one twice).
     export:
-      as: '{_orgs: .}'
+      as: '{_orgs: (group_by(.id) | map(sort_by(.created_at) | .[0]))}'
 # The projects the caller may see, each with their role in it and whether they
 # may change it. Every action below authorizes against this list.
 - visible:
@@ -132,7 +133,14 @@ do:
     set:
       ok: true
       profile: '${ $context._profile[0] // null }'
-      orgs: '${ $context._myorgs | map(. as $mo | { handle: (($context._orgs | map(select(.id == $mo.org_id)) | .[0]) // {}).slug, id: $mo.org_id, role: $mo.role }) | map(select(.handle != null)) }'
+      # Orgs you can create projects in: yours with your role — and, for a
+      # superadmin, every org, as admin.
+      orgs: >-
+        ${ [ $context._orgs[] | . as $o
+             | (($context._myorgs | map(select(.org_id == $o.id)) | .[0]) // {}).role as $r
+             | select($r != null or $context._super)
+             | { handle: $o.slug, id: $o.id, display_name: $o.name,
+                 role: (if $context._super then "admin" else $r end) } ] }
       projects: '${ $context._visible }'
       # Every namespace that is a project, so the dash can tell a project you
       # can't see from a namespace that predates projects (open to everyone).

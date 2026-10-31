@@ -5,7 +5,7 @@
   /// person can be in several orgs. All of it is the a3t-orgs flow, which checks
   /// the caller on the server.
   import { onMount } from 'svelte';
-  import { userRole } from '$lib/stores/auth';
+  import { userRole, currentUser } from '$lib/stores/auth';
   import { loadProjects } from '$lib/stores/context.svelte.ts';
   import { orgsApi, loadDirectory, type OrgInfo, type OrgRole, type DirectoryUser } from '$lib/services/api';
 
@@ -42,7 +42,7 @@
     const h = newHandle.trim();
     if (!HANDLE.test(h)) { say('An org handle is 2–24 lowercase letters, digits and dashes.'); return; }
     busy = true;
-    const res = await orgsApi.create(h, newName.trim() || h);
+    const res = await orgsApi.create(h, newName.trim() || h, { email: $currentUser?.email, name: $currentUser?.name });
     busy = false;
     if (!res.ok) { say(res.error ?? 'Create failed'); return; }
     newHandle = ''; newName = '';

@@ -1,9 +1,11 @@
 // Covers the working context (stores/context.svelte.ts): which namespaces a list
 // loads for a project, and the `/p/<project>/…` URL prefix.
 //
-// Mirrors the store's pure parts. The risks being guarded: platform flows leaking
-// into a project's lists, shared platform resources (LLMs, ADB, MCP) vanishing from
-// pickers when the platform is hidden, and a project URL being misread as an app.
+// Mirrors the store's pure parts. With a project selected, every list shows that
+// project only; pickers still offer the platform's LLMs, MCP servers and flows.
+// The risks being guarded: another project's or the platform's items leaking into
+// a selected project's lists, platform resources vanishing from pickers, and a
+// project URL being misread as an app.
 
 const PROJECTS = [
   { name: 'default', platform: false },
@@ -16,7 +18,8 @@ function namespacesFor(kind, { project, showPlatform }, projects = PROJECTS) {
   const user = projects.filter((p) => !p.platform).map((p) => p.name);
   const platform = projects.filter((p) => p.platform).map((p) => p.name);
   const base = project ? [project] : user;
-  return kind === 'shared' || showPlatform ? [...base, ...platform.filter((n) => !base.includes(n))] : base;
+  const withPlatform = showPlatform || kind === 'picker' || (kind === 'shared' && !project);
+  return withPlatform ? [...base, ...platform.filter((n) => !base.includes(n))] : base;
 }
 
 function inContext(ns, kind, ctx, projects = PROJECTS) {
@@ -39,10 +42,12 @@ const check = (n, c, extra = '') => c ? (pass++, console.log(`  PASS  ${n}`))
 {
   const ctx = { project: 'orders', showPlatform: false };
   check('project: owned lists load only the project', eq(namespacesFor('owned', ctx), ['orders']));
-  check('project: shared lists add the platform', eq(namespacesFor('shared', ctx), ['orders', 'a3t', 'system']));
+  check('project: shared lists show the project only', eq(namespacesFor('shared', ctx), ['orders']));
+  check('project: pickers still offer the platform', eq(namespacesFor('picker', ctx), ['orders', 'a3t', 'system']));
   check('  a3t flow hidden', !inContext('a3t', 'owned', ctx));
   check('  default flow hidden', !inContext('default', 'owned', ctx));
-  check('  a3t LLM still pickable', inContext('a3t', 'shared', ctx));
+  check('  a3t resource hidden from the list', !inContext('a3t', 'shared', ctx));
+  check('  a3t LLM still pickable', inContext('a3t', 'picker', ctx));
   check('  conversation (no namespace) shown', inContext(undefined, 'owned', ctx));
 }
 // 2. All projects: every user project, not the platform.
@@ -50,6 +55,7 @@ const check = (n, c, extra = '') => c ? (pass++, console.log(`  PASS  ${n}`))
   const ctx = { project: '', showPlatform: false };
   check('all: owned lists every user project', eq(namespacesFor('owned', ctx), ['default', 'orders']));
   check('  system flow hidden', !inContext('system', 'owned', ctx));
+  check('  built-in templates shown under all projects', inContext('system', 'shared', ctx));
   check('  unknown namespace shown (created since the list loaded)', inContext('team-x', 'owned', ctx));
 }
 // 3. Show platform brings a3t/system into owned lists, once each.
