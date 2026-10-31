@@ -3,6 +3,8 @@
   import { userRole } from '$lib/stores/auth';
   import SqlEditor from '$lib/components/editor/SqlEditor.svelte';
   import { onMount } from 'svelte';
+  import { namespacesFor } from '$lib/stores/context.svelte.ts';
+  import { contextRev_ } from '$lib/stores/apps.svelte.ts';
 
   // ── Connection state ──
   interface DbResource { name: string; namespace: string; type: string; }
@@ -76,26 +78,44 @@
   }
 
   // ── Load DB resources ──
-  onMount(async () => {
+  // The selected project's databases; the platform's own (a3t-platform-db, adb,
+  // …) only with "Show platform". One entry per namespace/name — the registry can
+  // hold a resource twice.
+  async function loadResources() {
     loadingResources = true;
+    const found: typeof dbResources = [];
     try {
-      for (const ns of ['a3t', 'default']) {
+      for (const ns of namespacesFor('owned')) {
         const res = await resourcesApi.list(ns);
         const items = res?.data?.resources ?? res?.data ?? [];
-        if (Array.isArray(items)) {
-          for (const r of items) {
-            const type = r.type_ref ?? r.type ?? '';
-            if (DB_TYPES.has(type)) {
-              dbResources.push({ name: r.name, namespace: r.namespace ?? ns, type });
-            }
+        if (!Array.isArray(items)) continue;
+        for (const r of items) {
+          const type = r.type_ref ?? r.type ?? '';
+          const namespace = r.namespace ?? ns;
+          if (DB_TYPES.has(type) && !found.some((x) => x.namespace === namespace && x.name === r.name)) {
+            found.push({ name: r.name, namespace, type });
           }
         }
       }
-      dbResources = [...dbResources];
-      if (dbResources.length > 0) activeResource = dbResources[0];
+      dbResources = found;
+      if (!activeResource || !found.some((x) => x.namespace === activeResource!.namespace && x.name === activeResource!.name)) {
+        activeResource = found[0] ?? null;
+      }
     } finally {
       loadingResources = false;
     }
+  }
+
+  let loadedRev = contextRev_();
+  $effect(() => {
+    const rev = contextRev_();
+    if (rev === loadedRev) return;
+    loadedRev = rev;
+    void loadResources();
+  });
+
+  onMount(async () => {
+    await loadResources();
 
     // Load saved queries from localStorage
     try {
@@ -287,7 +307,7 @@
             {#if loadingResources}
               <div class="panel-empty">Loading resources...</div>
             {:else if dbResources.length === 0}
-              <div class="panel-empty">No DB resources found</div>
+              <div class="panel-empty">No databases in this project. Add one in Resources — or turn on “Show platform” in the project menu for the platform's own.</div>
             {:else}
               {#each dbResources as r}
                 {@const meta = getMeta(r.type)}
