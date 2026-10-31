@@ -108,3 +108,41 @@ async fn one_org_admin_cannot_see_another_org() {
     // The platform stays readable and runnable.
     assert!(tool(&storage, "zed", DEV, "list_flows", json!({ "namespace": "a3t" })).await.0);
 }
+
+/// Platform resources move with their secrets intact and references repointed;
+/// nobody reads a secret's value back, and a reference isn't mistaken for one.
+#[tokio::test(flavor = "multi_thread")]
+async fn moving_platform_resources_keeps_secrets_server_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = flowr_ce::init_storage(dir.path().to_str().unwrap()).await.unwrap();
+    let flows = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a3t/backend/flows");
+    storage.workflows().register(WorkflowRecord::from_yaml(&std::fs::read_to_string(flows.join("system/platform_move_resources.yaml")).unwrap()).unwrap()).await.unwrap();
+    storage.resources().create(Resource::new("router-key", "secret", json!({ "value": "sk-or-v1-0123456789abcdef" })).with_namespace("default")).await.unwrap();
+    storage.resources().create(Resource::new("glm", "openai", json!({ "model": "glm", "api_key_ref": "default/router-key" })).with_namespace("default")).await.unwrap();
+    storage.resources().create(Resource::new("deepseek", "openai", json!({ "model": "ds", "api_key_ref": "default/router-key" })).with_namespace("a3t")).await.unwrap();
+
+    // Not superadmin: refused.
+    let req = ExecutionRequest::new("system", "platform-move-resources").with_principal(who("bob", DEV))
+        .with_input(json!({ "from": "default", "to": "a3t", "names": ["router-key", "glm"], "dry_run": false }));
+    let st = flowr_ce::execute_workflow(storage.clone(), &reqwest::Client::new(), req).await.unwrap();
+    assert_eq!(st.output.unwrap()["ok"], false);
+
+    let run = |dry: bool| ExecutionRequest::new("system", "platform-move-resources").with_principal(who("root", SUPER))
+        .with_input(json!({ "from": "default", "to": "a3t", "names": ["router-key", "glm"], "dry_run": dry }));
+    let st = flowr_ce::execute_workflow(storage.clone(), &reqwest::Client::new(), run(true)).await.unwrap();
+    let report = st.output.unwrap();
+    assert_eq!(report["report"]["repointed"], json!(["a3t/deepseek", "a3t/glm"]), "{report}");
+    assert!(storage.resources().get("default", "router-key").await.is_ok(), "a dry run moves nothing");
+    flowr_ce::execute_workflow(storage.clone(), &reqwest::Client::new(), run(false)).await.unwrap();
+
+    assert_eq!(storage.resources().get("a3t", "router-key").await.unwrap().config["value"], "sk-or-v1-0123456789abcdef");
+    assert!(storage.resources().get("default", "router-key").await.is_err());
+    assert_eq!(storage.resources().get("a3t", "glm").await.unwrap().config["api_key_ref"], "a3t/router-key");
+    assert_eq!(storage.resources().get("a3t", "deepseek").await.unwrap().config["api_key_ref"], "a3t/router-key");
+
+    // Through the tools: the secret's value is hidden, the reference readable.
+    let (_, secret) = tool(&storage, "root", SUPER, "get_resource", json!({ "namespace": "a3t", "name": "router-key" })).await;
+    assert!(!secret.contains("0123456789") && secret.contains("****"), "{secret}");
+    let (_, llm) = tool(&storage, "root", SUPER, "get_resource", json!({ "namespace": "a3t", "name": "glm" })).await;
+    assert!(llm.contains("a3t/router-key"), "{llm}");
+}

@@ -115,35 +115,15 @@ export function canSee(_p: Project): boolean {
 /// Kinds of items the dash lists, for [`itemProject`].
 export type ItemKind = 'agent' | 'template' | 'flow' | 'execution' | 'resource' | 'trigger';
 
-/// The project an item shows under. Usually its namespace — but before projects
-/// the dash saved users' work in the platform's `a3t` namespace, and that work
-/// is `default`'s (the pre-projects namespace). What the platform itself ships
-/// stays platform: built-in agents and templates (`created_by: system`), its
-/// `a3t-*` / `adb-*` flows and their runs, shared infrastructure (LLMs, MCP
-/// servers, databases, ADB), canvas presets (`preset-*`), and triggers that
-/// only start platform flows.
+/// The project an item shows under: where it is stored. Users' agents,
+/// templates, canvases and triggers saved in `a3t` before projects are org
+/// a3t's, shown with the platform. (FlowR applies the same rule.)
 export function itemProject(
-  kind: ItemKind,
+  _kind: ItemKind,
   ns: string | undefined,
-  item: { name?: string; type?: string; created_by?: string; targets?: { name?: string; namespace?: string }[] } = {},
+  _item: { name?: string; type?: string; created_by?: string; targets?: { name?: string; namespace?: string }[] } = {},
 ): string | undefined {
-  if (!ns || !isPlatform(ns)) return ns;
-  const platformFlow = (n?: string, space?: string) => space === 'system' || /^(a3t|adb)-/.test(n ?? '');
-  switch (kind) {
-    case 'agent':
-    case 'template':
-      return item.created_by === 'system' ? ns : 'default';
-    case 'flow':
-    case 'execution':
-      return platformFlow(item.name, ns) ? ns : 'default';
-    case 'resource':
-      return item.type === 'canvas' && !(item.name ?? '').startsWith('preset-') ? 'default' : ns;
-    case 'trigger': {
-      const targets = item.targets ?? [];
-      const platformOnly = targets.length > 0 && targets.every((t) => platformFlow(t.name, t.namespace));
-      return !(item.name ?? '').startsWith('agent-') && platformOnly ? ns : 'default';
-    }
-  }
+  return ns;
 }
 
 /// `itemProject` for an agent or template.

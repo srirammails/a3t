@@ -488,7 +488,7 @@ async fn list_resources(
                         "name": r.name,
                         "namespace": r.namespace,
                         "type": r.type_ref,
-                        "config": r.config,
+                        "config": flowr_mcp_core::tools::masked_config(&r.type_ref, &r.config),
                         "tags": r.tags,
                     }));
                 }
@@ -514,12 +514,14 @@ struct ResourceBody {
 }
 fn default_ns() -> String { "default".to_string() }
 
+/// A resource as callers see it: a secret's values hidden, other resources'
+/// keys and passwords masked (`flowr_mcp_core::tools::masked_config`).
 fn resource_json(r: &StorageResource) -> Value {
     json!({
         "name": r.name,
         "namespace": r.namespace,
         "type": r.type_ref,
-        "config": r.config,
+        "config": flowr_mcp_core::tools::masked_config(&r.type_ref, &r.config),
         "tags": r.tags,
     })
 }
@@ -616,6 +618,11 @@ async fn update_resource(
         return resp.into_response();
     }
 
+    // The console edits what it was shown — masked values. Those stay as stored.
+    let config = match state.storage.resources().get(&ns, &name).await {
+        Ok(old) => flowr_mcp_core::tools::keep_masked(&old.type_ref, &old.config, &config),
+        Err(_) => config,
+    };
     match state.storage.resources().update(&ns, &name, config).await {
         Ok(r) => Json(resource_json(&r)).into_response(),
         Err(e) => (

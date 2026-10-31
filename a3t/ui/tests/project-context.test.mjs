@@ -27,20 +27,7 @@ function inContext(ns, kind, ctx, projects = PROJECTS) {
   return namespacesFor(kind, ctx, projects).includes(ns) || (!ctx.project && !projects.some((p) => p.name === ns));
 }
 
-function itemProject(kind, ns, item = {}, projects = PROJECTS) {
-  if (!ns || !projects.some((p) => p.name === ns && p.platform)) return ns;
-  const platformFlow = (n, space) => space === 'system' || /^(a3t|adb)-/.test(n ?? '');
-  switch (kind) {
-    case 'agent': case 'template': return item.created_by === 'system' ? ns : 'default';
-    case 'flow': case 'execution': return platformFlow(item.name, ns) ? ns : 'default';
-    case 'resource': return item.type === 'canvas' && !(item.name ?? '').startsWith('preset-') ? 'default' : ns;
-    case 'trigger': {
-      const t = item.targets ?? [];
-      const only = t.length > 0 && t.every((x) => platformFlow(x.name, x.namespace));
-      return !(item.name ?? '').startsWith('agent-') && only ? ns : 'default';
-    }
-  }
-}
+function itemProject(_kind, ns) { return ns; }
 const projectOf = (ns, createdBy) => itemProject('agent', ns, { created_by: createdBy });
 
 function splitContextPath(path) {
@@ -80,26 +67,12 @@ const check = (n, c, extra = '') => c ? (pass++, console.log(`  PASS  ${n}`))
   check('platform project: no duplicate', eq(namespacesFor('owned', ctx), ['a3t', 'system']));
   check('show platform + all', eq(namespacesFor('owned', { project: '', showPlatform: true }), ['default', 'orders', 'a3t', 'system']));
 }
-// 3b. Agents and templates users saved in `a3t` before projects belong to `default`.
+// 3b. Items belong where they are stored: users' work saved in a3t is a3t's.
 {
-  check('user template in a3t → default', projectOf('a3t', 'usr-superadmin') === 'default');
-  check('built-in template stays system', projectOf('system', 'system') === 'system');
-  check('project item keeps its project', projectOf('orders', 'usr-ann') === 'orders');
-  check('legacy agent shows under default', inContext(projectOf('a3t', 'usr-x'), 'shared', { project: 'default', showPlatform: false }));
-}
-// 3c. Every app: users' work in `a3t` is default's, the platform's own stays platform.
-{
-  check('user flow ops-ping → default', itemProject('flow', 'a3t', { name: 'ops-ping' }) === 'default');
-  check('platform flow a3t-agents stays', itemProject('flow', 'a3t', { name: 'a3t-agents' }) === 'a3t');
-  check('system flow stays', itemProject('flow', 'system', { name: 'agent-engine' }) === 'system');
-  check('chat-engine run stays platform', itemProject('execution', 'a3t', { name: 'a3t-chat-engine' }) === 'a3t');
-  check('LLM resource stays platform', itemProject('resource', 'a3t', { type: 'openai', name: 'Deepseek' }) === 'a3t');
-  check('user canvas → default', itemProject('resource', 'a3t', { type: 'canvas', name: 'ops-ping-canvas' }) === 'default');
-  check('preset canvas stays', itemProject('resource', 'a3t', { type: 'canvas', name: 'preset-shared-ephemeral' }) === 'a3t');
-  check('agent endpoint trigger → default', itemProject('trigger', 'a3t', { name: 'agent-agt-1-chat', targets: [{ namespace: 'a3t', name: 'a3t-chat-engine' }] }) === 'default');
-  check('platform hook trigger stays', itemProject('trigger', 'a3t', { name: 'a3t-agents-hook', targets: [{ namespace: 'a3t', name: 'a3t-agents' }] }) === 'a3t');
-  check('trigger to a user flow → default', itemProject('trigger', 'a3t', { name: 'ops-ping-hook', targets: [{ namespace: 'a3t', name: 'ops-ping' }] }) === 'default');
-  check('a project item is untouched', itemProject('flow', 'orders', { name: 'a3t-x' }) === 'orders');
+  check('user template in a3t stays a3t', projectOf('a3t', 'usr-superadmin') === 'a3t');
+  check('user flow in a3t stays a3t', itemProject('flow', 'a3t', { name: 'ops-ping' }) === 'a3t');
+  check('a3t items hidden from a selected project', !inContext(itemProject('agent', 'a3t'), 'shared', { project: 'orders', showPlatform: false }));
+  check('a3t items shown with the platform', inContext(itemProject('agent', 'a3t'), 'shared', { project: 'orders', showPlatform: true }));
 }
 // 4. URL prefix.
 {

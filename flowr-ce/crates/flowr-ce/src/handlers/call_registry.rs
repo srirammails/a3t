@@ -1,5 +1,6 @@
 //! call:registry — registry operations a flow can't do through other tasks.
 //!
+//! `move_resources` moves some resources (secrets intact) and repoints references to them.
 //! `visible` keeps the items the caller may see. `usage` counts what a namespace holds. `move_namespace` moves every flow, resource and trigger
 //! from one namespace to another and rewrites the references inside them
 //! (`<from>/name` → `<to>/name`, and `document.namespace`). The A3T project
@@ -182,6 +183,80 @@ async fn move_namespace(storage: &dyn StorageBackend, from: &str, to: &str, dry_
     Ok(report)
 }
 
+/// Move some resources to another namespace, as stored (secret values never
+/// leave the server), and point every other resource's references
+/// (`<from>/<name>` values, e.g. an LLM's `api_key_ref`) at the new place.
+/// Flows that mention them are reported, not changed.
+async fn move_resources(storage: &dyn StorageBackend, from: &str, to: &str, names: &[String], dry_run: bool) -> std::result::Result<Value, String> {
+    if from == to || names.is_empty() {
+        return Err("give `from`, a different `to`, and `names`".into());
+    }
+    let mut moving = Vec::new();
+    for n in names {
+        let r = storage.resources().get(from, n).await.map_err(|_| format!("no resource {from}/{n}"))?;
+        if storage.resources().get(to, n).await.is_ok() {
+            return Err(format!("{to}/{n} already exists"));
+        }
+        moving.push(r);
+    }
+    let refs: Vec<(String, String)> = names.iter().map(|n| (format!("{from}/{n}"), format!("{to}/{n}"))).collect();
+    fn swap(v: &Value, refs: &[(String, String)], hits: &mut usize) -> Value {
+        match v {
+            Value::String(s) => match refs.iter().find(|(a, _)| a == s) {
+                Some((_, b)) => { *hits += 1; Value::String(b.clone()) }
+                None => v.clone(),
+            },
+            Value::Array(a) => Value::Array(a.iter().map(|x| swap(x, refs, hits)).collect()),
+            Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), swap(x, refs, hits))).collect()),
+            other => other.clone(),
+        }
+    }
+    // Who refers to them.
+    let mut repoint = Vec::new();
+    for ns in storage.resources().namespaces().await.unwrap_or_default() {
+        for r in storage.resources().list(&ns).await.unwrap_or_default() {
+            let mut hits = 0;
+            let config = swap(&r.config, &refs, &mut hits);
+            if hits > 0 {
+                let ns = if ns == from && names.contains(&r.name) { to.to_string() } else { ns.clone() };
+                repoint.push((ns, r.name.clone(), config));
+            }
+        }
+    }
+    let mut flows = Vec::new();
+    for ns in storage.workflows().namespaces().await.unwrap_or_default() {
+        for f in storage.workflows().list(&ns).await.unwrap_or_default() {
+            if let Ok(rec) = storage.workflows().get(&ns, &f.name).await {
+                if refs.iter().any(|(a, _)| rec.raw_yaml.contains(a.as_str())) {
+                    flows.push(format!("{ns}/{}", f.name));
+                }
+            }
+        }
+    }
+    let report = json!({
+        "from": from, "to": to, "dry_run": dry_run, "resources": names,
+        "repointed": repoint.iter().map(|(ns, n, _)| format!("{ns}/{n}")).collect::<Vec<_>>(),
+        "flows_referring": flows,
+    });
+    if dry_run {
+        return Ok(report);
+    }
+    for r in &moving {
+        let mut copy = Resource::new(r.name.clone(), r.type_ref.clone(), r.config.clone()).with_namespace(to);
+        copy.tags = r.tags.clone();
+        copy.description = r.description.clone();
+        storage.resources().create(copy).await.map_err(|e| e.to_string())?;
+    }
+    for (ns, n, config) in &repoint {
+        storage.resources().update(ns, n, config.clone()).await.map_err(|e| format!("{ns}/{n}: {e}"))?;
+    }
+    for r in &moving {
+        storage.resources().delete(from, &r.name).await.map_err(|e| e.to_string())?;
+    }
+    info!(%from, %to, moved = names.len(), repointed = repoint.len(), "resources moved");
+    Ok(report)
+}
+
 #[async_trait]
 impl TaskHandler for RegistryHandler {
     fn task_type(&self) -> &str {
@@ -201,6 +276,16 @@ impl TaskHandler for RegistryHandler {
                 move_namespace(store.as_ref(), &s("from"), &s("to"), dry_run)
                     .await
                     .map(|v| TaskResult::new(v))
+                    .map_err(|e| RuntimeError::task_failed(&task.name, e))
+            }
+            "move_resources" => {
+                let dry_run = with.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true);
+                let names: Vec<String> = with.get("names").and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                let store = storage(ctx)?;
+                move_resources(store.as_ref(), &s("from"), &s("to"), &names, dry_run)
+                    .await
+                    .map(TaskResult::new)
                     .map_err(|e| RuntimeError::task_failed(&task.name, e))
             }
             // The rows the caller may see: `items` (each with `namespace`, and

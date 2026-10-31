@@ -1850,6 +1850,8 @@ async fn list_flows(storage: &dyn StorageBackend, principal: &flowr_policy::Prin
 
 /// Namespaces that belong to the platform rather than to a user's project.
 pub const PLATFORM_NAMESPACES: &[&str] = &["a3t", "system"];
+/// The platform orgs' test projects: shown with the platform, not with users' work.
+pub const PLATFORM_PROJECTS: &[&str] = &["a3t-test", "system-tests"];
 
 /// Every namespace in the registry, as a project: the union of the namespaces
 /// holding flows, resources and triggers, plus `default`, with each one's counts.
@@ -1878,7 +1880,7 @@ async fn list_projects(storage: &dyn StorageBackend, principal: &flowr_policy::P
         let trigger_count = triggers.iter().filter(|t| t.get("namespace").and_then(|v| v.as_str()) == Some(ns)).count();
         projects.push(json!({
             "name": ns,
-            "platform": PLATFORM_NAMESPACES.contains(&ns.as_str()),
+            "platform": PLATFORM_NAMESPACES.contains(&ns.as_str()) || PLATFORM_PROJECTS.contains(&ns.as_str()),
             "flows": flows,
             "resources": resources,
             "triggers": trigger_count,
@@ -2346,9 +2348,8 @@ async fn get_resource(storage: &dyn StorageBackend, args: &Value) -> CallToolRes
 
     match storage.resources().get(namespace, name).await {
         Ok(resource) => {
-            // Mask sensitive config fields
-            let mut config = resource.config.clone();
-            mask_sensitive_fields(&mut config);
+            // Mask sensitive config fields; a secret shows none of its values.
+            let config = masked_config(&resource.type_ref, &resource.config);
 
             CallToolResult::json(json!({
                 "name": resource.name,
@@ -2896,10 +2897,55 @@ async fn clear_agent_session(storage: &dyn StorageBackend, args: &Value) -> Call
     }
 }
 
+/// A resource's config as callers may see it. A `secret`'s every value is
+/// hidden; any other resource's API keys, passwords and tokens are masked, but
+/// not references to secrets (`*_ref`), which are names, not values.
+pub fn masked_config(type_ref: &str, config: &Value) -> Value {
+    let mut c = config.clone();
+    if type_ref == "secret" {
+        hide_all(&mut c);
+    } else {
+        mask_sensitive_fields(&mut c);
+    }
+    c
+}
+
+fn hide_all(v: &mut Value) {
+    match v {
+        Value::String(s) => *s = "****".to_string(),
+        Value::Array(a) => a.iter_mut().for_each(hide_all),
+        Value::Object(o) => o.values_mut().for_each(hide_all),
+        _ => {}
+    }
+}
+
+/// An update that echoes back masked values (the console edits what it was
+/// shown) keeps the stored ones: a field whose new value equals the masked
+/// form of the old is not a change.
+pub fn keep_masked(type_ref: &str, old: &Value, new: &Value) -> Value {
+    fn walk(old: &Value, shown: &Value, new: &Value) -> Value {
+        match (old, shown, new) {
+            (Value::Object(o), Value::Object(sh), Value::Object(n)) => Value::Object(n.iter().map(|(k, nv)| {
+                let v = match (o.get(k), sh.get(k)) {
+                    (Some(ov), Some(sv)) => walk(ov, sv, nv),
+                    _ => nv.clone(),
+                };
+                (k.clone(), v)
+            }).collect()),
+            (o, s, n) if n == s && s != o => o.clone(),
+            (_, _, n) => n.clone(),
+        }
+    }
+    walk(old, &masked_config(type_ref, old), new)
+}
+
 fn mask_sensitive_fields(config: &mut Value) {
     if let Value::Object(map) = config {
         for (key, value) in map.iter_mut() {
             let key_lower = key.to_lowercase();
+            if key_lower.ends_with("_ref") {
+                continue; // a reference to a secret, not the secret
+            }
             if key_lower.contains("key")
                 || key_lower.contains("secret")
                 || key_lower.contains("password")

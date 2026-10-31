@@ -1,0 +1,45 @@
+document:
+  dsl: 1.0.3
+  namespace: system
+  name: platform-move-resources
+  version: 1.0.0
+  metadata:
+    description: >
+      Move resources between namespaces as stored — secret values never leave
+      the server — and point every resource that refers to them (an LLM's
+      api_key_ref) at the new place. Flows that mention them are reported.
+      Input: { from, to, names: [...], dry_run: true }. A dry run (the default)
+      only reports. Superadmin only.
+do:
+- whoami:
+    set:
+      _super: '${ (($context._principal // {}).roles // []) | index("SuperAdmin") != null }'
+      _args: '${ . }'
+    export:
+      as: "."
+- check:
+    switch:
+    - not-super:
+        when: '${ $context._super != true }'
+        then: deny
+    - default:
+        then: move
+- deny:
+    set:
+      ok: false
+      error: Moving platform resources needs the SuperAdmin role.
+    then: end
+- move:
+    call: registry
+    with:
+      operation: move_resources
+      from: '${ $context._args.from }'
+      to: '${ $context._args.to }'
+      names: '${ $context._args.names }'
+      dry_run: '${ $context._args.dry_run != false }'
+    export:
+      as: '{_report: .}'
+- done:
+    set:
+      ok: true
+      report: '${ $context._report }'

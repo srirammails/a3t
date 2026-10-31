@@ -13,8 +13,7 @@
 //!   admins read; every org member reads it unless it is private; superadmin.
 //! - A namespace from before projects (`default`, …): org `default`'s.
 //! - The platform (`a3t`, `system`): everyone reads and runs it; superadmin and
-//!   the owning org's admins (orgs `a3t` / `system`) write. Users' work saved
-//!   there before projects counts as `default`'s.
+//!   the owning org's admins (orgs `a3t` / `system`) write.
 //! - Runtimes: an `a3t.io/org`-labelled runtime is that org's (its admins
 //!   control it); every other runtime is shared and only superadmin controls it.
 
@@ -280,24 +279,11 @@ pub async fn eligible_runtimes(namespace: &str, flow: &str, runtimes: Vec<flowr_
     out
 }
 
-/// Where an item in a platform namespace really belongs. Before projects the dash
-/// saved users' work in `a3t`; it is org `default`'s (the `default` namespace).
-/// What the platform ships stays platform: built-in agents (`created_by:
-/// system`), `a3t-*`/`adb-*`/`system` flows, infrastructure resources, `preset-*`
-/// canvases and `a3t-*` triggers. The dash applies the same rule
-/// (`itemProject` in stores/context.svelte.ts).
-pub fn effective_namespace(kind: ItemKind, namespace: &str, name: &str, type_ref: &str, created_by: &str) -> String {
-    if !PLATFORM.contains(&namespace) {
-        return namespace.to_string();
-    }
-    let platform_flow = namespace == "system" || name.starts_with("a3t-") || name.starts_with("adb-");
-    let stays = match kind {
-        ItemKind::Agent => created_by == "system",
-        ItemKind::Flow => platform_flow,
-        ItemKind::Resource => type_ref != "canvas" || name.starts_with("preset-"),
-        ItemKind::Trigger => name.starts_with("a3t-"),
-    };
-    if stays { namespace.to_string() } else { "default".to_string() }
+/// The namespace an item belongs to: where it is stored. Users' agents,
+/// templates, canvases and triggers saved in `a3t` before projects count as
+/// org `a3t`'s, like the rest of that namespace.
+pub fn effective_namespace(_kind: ItemKind, namespace: &str, _name: &str, _type_ref: &str, _created_by: &str) -> String {
+    namespace.to_string()
 }
 
 /// Install the guard (FlowR EE, policy enforcing).
@@ -418,14 +404,9 @@ mod tests {
     }
 
     #[test]
-    fn users_work_in_the_platform_namespace_is_defaults() {
-        assert_eq!(effective_namespace(ItemKind::Flow, "a3t", "ops-ping", "", ""), "default");
-        assert_eq!(effective_namespace(ItemKind::Flow, "a3t", "a3t-agents", "", ""), "a3t");
-        assert_eq!(effective_namespace(ItemKind::Resource, "a3t", "Deepseek", "openai", ""), "a3t");
-        assert_eq!(effective_namespace(ItemKind::Resource, "a3t", "ops-ping-canvas", "canvas", ""), "default");
-        assert_eq!(effective_namespace(ItemKind::Trigger, "a3t", "agent-agt-1-chat", "", ""), "default");
-        assert_eq!(effective_namespace(ItemKind::Agent, "a3t", "x", "", "usr-1"), "default");
-        assert_eq!(effective_namespace(ItemKind::Agent, "a3t", "x", "", "system"), "a3t");
+    fn items_belong_where_they_are_stored() {
+        assert_eq!(effective_namespace(ItemKind::Flow, "a3t", "ops-ping", "", ""), "a3t");
+        assert_eq!(effective_namespace(ItemKind::Agent, "a3t", "x", "", "usr-1"), "a3t");
         assert_eq!(effective_namespace(ItemKind::Flow, "acme-web", "a3t-x", "", ""), "acme-web");
     }
 }
