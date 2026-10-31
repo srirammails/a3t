@@ -495,7 +495,7 @@ async fn audit_handler(
     principal: Option<axum::Extension<flowr_policy::Principal>>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let limit = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(100);
+    let limit: usize = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(100);
     let denials_only = params.get("denials_only").map(|s| s == "true").unwrap_or(false);
     // The decision log names everyone's actions across every org. Platform
     // InfoSec (SuperAdmin / SecurityAdmin) reads all of it; anyone else only the
