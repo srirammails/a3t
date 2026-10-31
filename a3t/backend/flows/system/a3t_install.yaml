@@ -1,6 +1,6 @@
 document:
   dsl: 1.0.3
-  namespace: a3t
+  namespace: system
   name: a3t-install
   version: 1.0.0
   metadata:
@@ -13,7 +13,7 @@ do:
   - install-schema:
       run:
         workflow:
-          namespace: a3t
+          namespace: system
           name: a3t-schema-install
           input: {}
 

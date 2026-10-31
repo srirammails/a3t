@@ -1,0 +1,50 @@
+document:
+  dsl: 1.0.3
+  namespace: system
+  name: a3t-log-retention
+  version: 1.0.0
+  metadata:
+    description: 'Scheduled purge of on-disk run history (executions) + audit_log per Settings > Infrastructure > Logs & Retention. Deny-safe: unset/Forever purges nothing.'
+do:
+- read-exec-retention:
+    call: lancedb
+    with:
+      operation: query
+      table: settings
+      filter: key = "infra.logs.execution_history_retention" AND org_id = "org-default"
+      select:
+      - key
+      - value
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    then: purge-exec
+- purge-exec:
+    call: lancedb
+    with:
+      operation: delete
+      table: executions
+      filter: ${ (.[0].value // "Forever") as $r | (if ($r | contains("Forever")) then -1 elif ($r | contains("year")) then ((($r | split(" "))[0] | tonumber) * 365) else (($r | split(" "))[0] | tonumber) end) as $days | if $days < 0 then "created_at > '9999'" else "created_at < '" + ((now - ($days * 86400)) | todateiso8601) + "'" end }
+      _resource: a3t/a3t-runtime-db
+    then: read-audit-retention
+- read-audit-retention:
+    call: lancedb
+    with:
+      operation: query
+      table: settings
+      filter: key = "infra.logs.decision_log_retention" AND org_id = "org-default"
+      select:
+      - key
+      - value
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    then: purge-audit
+- purge-audit:
+    call: lancedb
+    with:
+      operation: delete
+      table: audit_log
+      filter: ${ (.[0].value // "Forever") as $r | (if ($r | contains("Forever")) then -1 elif ($r | contains("year")) then ((($r | split(" "))[0] | tonumber) * 365) else (($r | split(" "))[0] | tonumber) end) as $days | if $days < 0 then "created_at > '9999'" else "created_at < '" + ((now - ($days * 86400)) | todateiso8601) + "'" end }
+      _resource: a3t/a3t-platform-db
+    then: end
+
+

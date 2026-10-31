@@ -1,6 +1,6 @@
 document:
   dsl: 1.0.3
-  namespace: a3t
+  namespace: system
   name: a3t-deploy-init
   version: 1.0.0
 do:
@@ -65,7 +65,7 @@ do:
           name: execute_flow
           arguments:
             name: a3t-schema-install
-            namespace: a3t
+            namespace: system
             input:
               superadmin_user: ${ .superadmin_user }
               superadmin_pass_hash: ${ .superadmin_pass_hash }

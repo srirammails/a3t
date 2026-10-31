@@ -12,8 +12,9 @@
 //! - An org project: members by role; the org's admins write, its security
 //!   admins read; every org member reads it unless it is private; superadmin.
 //! - A namespace from before projects (`default`, …): org `default`'s.
-//! - The platform (`a3t`, `system`): everyone reads and runs it; superadmin
-//!   writes. Users' work saved there before projects counts as `default`'s.
+//! - The platform (`a3t`, `system`): everyone reads and runs it; superadmin and
+//!   the owning org's admins (orgs `a3t` / `system`) write. Users' work saved
+//!   there before projects counts as `default`'s.
 //! - Runtimes: an `a3t.io/org`-labelled runtime is that org's (its admins
 //!   control it); every other runtime is shared and only superadmin controls it.
 
@@ -31,8 +32,12 @@ use flowr_storage::StorageBackend;
 use crate::handlers::call_lancedb::{batches_to_json, DEFAULT_PLATFORM_DB_PATH, PLATFORM_DB_RESOURCE};
 
 const PLATFORM: &[&str] = &["a3t", "system"];
-/// The org namespaces from before projects belong to.
+/// The org namespaces from before projects belong to: org `a3t` (its id stays
+/// `org-default`, which users, agents and settings carry).
 const LEGACY_ORG: &str = "org-default";
+/// The platform orgs and the namespaces they own: `a3t` runs the UI's flows,
+/// `system` installs A3T and keeps the SaaS platform running.
+const PLATFORM_ORGS: &[(&str, &str)] = &[("a3t", "org-default"), ("system", "org-system")];
 /// The label that makes a runtime an org's own.
 pub const ORG_LABEL: &str = "a3t.io/org";
 /// The label that makes a runtime a single project's own (isolated personal projects).
@@ -133,7 +138,8 @@ impl Snapshot {
     /// The decision, for a known user (`super_` = holds SuperAdmin).
     pub fn decide(&self, user: &str, super_: bool, namespace: &str) -> NsAccess {
         if PLATFORM.contains(&namespace) {
-            return if super_ { NsAccess::Write } else { NsAccess::Run };
+            let org = PLATFORM_ORGS.iter().find(|(ns, _)| *ns == namespace).map(|(_, id)| *id).unwrap_or_default();
+            return if super_ || self.org_role(org, user) == Some("admin") { NsAccess::Write } else { NsAccess::Run };
         }
         let by_role = |role: &str| match role {
             "owner" | "developer" => NsAccess::Write,
@@ -324,6 +330,18 @@ mod tests {
     }
 
     #[test]
+    fn platform_org_admins_change_their_platform_namespace() {
+        let s = Snapshot::from_rows(&[], &[
+            json!({ "org_id": "org-default", "user_id": "ops", "role": "admin" }),
+            json!({ "org_id": "org-system", "user_id": "sre", "role": "admin" }),
+        ], &[]);
+        assert_eq!(s.decide("ops", false, "a3t"), NsAccess::Write);
+        assert_eq!(s.decide("ops", false, "system"), NsAccess::Run);
+        assert_eq!(s.decide("sre", false, "system"), NsAccess::Write);
+        assert_eq!(s.decide("sre", false, "a3t"), NsAccess::Run);
+    }
+
+    #[test]
     fn an_org_admin_sees_only_their_org() {
         let s = snap();
         assert_eq!(s.decide("bob", false, "acme-web"), NsAccess::Write);
@@ -352,6 +370,7 @@ mod tests {
         assert_eq!(s.decide("zed", false, "a3t"), NsAccess::Run);
         assert_eq!(s.decide("root", true, "a3t"), NsAccess::Write);
         assert_eq!(s.decide("dora", false, "default"), NsAccess::Write);
+        assert_eq!(s.decide("dora", false, "a3t"), NsAccess::Run, "a member of org a3t runs its flows");
         assert_eq!(s.decide("ann", false, "ann-orders"), NsAccess::Write);
     }
 

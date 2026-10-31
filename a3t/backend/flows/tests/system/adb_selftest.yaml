@@ -1,6 +1,6 @@
 document:
   dsl: 1.0.3
-  namespace: a3t
+  namespace: system-tests
   name: adb-selftest
   version: 1.0.0
   metadata:

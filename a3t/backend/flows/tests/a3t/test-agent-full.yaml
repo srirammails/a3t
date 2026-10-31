@@ -1,6 +1,6 @@
 document:
   dsl: 1.0.3
-  namespace: a3t
+  namespace: a3t-test
   name: a3t-test-agent-full
   version: 1.0.0
   metadata:
@@ -54,10 +54,10 @@ do:
         temperature: 0.3
         tool_flows:
           lookup_order:
-            namespace: a3t
+            namespace: a3t-test
             name: a3t-skill-lookup-order
           create_ticket:
-            namespace: a3t
+            namespace: a3t-test
             name: a3t-skill-create-ticket
         mcp_servers:
           - a3t/flowr-mcp

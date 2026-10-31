@@ -1,6 +1,6 @@
 document:
   dsl: 1.0.3
-  namespace: a3t
+  namespace: system
   name: a3t-schema-install
   version: 1.0.0
 do:

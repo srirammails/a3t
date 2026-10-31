@@ -1,6 +1,6 @@
 document:
   dsl: 1.0.3
-  namespace: a3t
+  namespace: system-tests
   name: runtime-echo
   version: 1.0.0
   metadata:
@@ -9,7 +9,7 @@ document:
       (SEMANTIC, key "echo-<request_id>") and answers with an echo. Input:
       {"request_id": "...", "text": "..."}; the runtime publishes the result to
       the request's _reply_topic. Deploy it as a canvas, then send it work with
-      a3t/canvas-dispatch.
+      system-tests/canvas-dispatch.
 do:
 - init:
     set:

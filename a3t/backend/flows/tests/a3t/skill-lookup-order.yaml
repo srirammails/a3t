@@ -1,6 +1,6 @@
 document:
   dsl: 1.0.3
-  namespace: a3t
+  namespace: a3t-test
   name: a3t-skill-lookup-order
   version: 1.0.0
   metadata:

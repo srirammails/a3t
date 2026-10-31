@@ -17,7 +17,7 @@ fn who(user: &str, roles: &[&str]) -> flowr_policy::Principal {
 }
 
 async fn flow(storage: &Arc<dyn StorageBackend>, user: &str, roles: &[&str], name: &str, input: Value) -> Value {
-    let req = ExecutionRequest::new("a3t", name).with_input(input).with_principal(who(user, roles));
+    let req = ExecutionRequest::new(if name == "a3t-projects-install" { "system" } else { "a3t" }, name).with_input(input).with_principal(who(user, roles));
     let st = flowr_ce::execute_workflow(storage.clone(), &reqwest::Client::new(), req).await.unwrap();
     assert_eq!(st.status, ExecutionStatus::Completed, "{name}: {:?}", st.error);
     let out = st.output.unwrap_or(Value::Null);
@@ -43,8 +43,8 @@ async fn one_org_admin_cannot_see_another_org() {
     let storage = flowr_ce::init_storage(dir.path().to_str().unwrap()).await.unwrap();
     let db = dir.path().join("platform.lance");
     storage.resources().create(Resource::new("a3t-platform-db", "lancedb", json!({ "db_path": db.to_str().unwrap() })).with_namespace("a3t")).await.unwrap();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a3t/backend/flows/projects");
-    for f in ["a3t_projects_install.yaml", "a3t_profile.yaml", "a3t_orgs.yaml", "a3t_projects.yaml"] {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a3t/backend/flows");
+    for f in ["system/a3t_projects_install.yaml", "a3t/a3t_profile.yaml", "a3t/a3t_orgs.yaml", "a3t/a3t_projects.yaml"] {
         storage.workflows().register(WorkflowRecord::from_yaml(&std::fs::read_to_string(root.join(f)).unwrap()).unwrap()).await.unwrap();
     }
 

@@ -1,0 +1,279 @@
+document:
+  dsl: 1.0.3
+  namespace: system
+  name: a3t-projects-install
+  version: 1.0.0
+  metadata:
+    description: >
+      Tables for profiles, org members and projects in the platform DB (orgs
+      already exists, from a3t-schema-install), and the two platform orgs:
+      `system` (installs A3T and keeps the SaaS platform running; namespace
+      system, tests in system-tests) and `a3t` (the flows behind the UI;
+      namespace a3t and the pre-projects `default`, tests in a3t-test). The a3t
+      org keeps the id org-default, which users, agents and settings carry.
+      The caller becomes an admin of both. Idempotent. Superadmin only.
+do:
+- whoami:
+    set:
+      _super: '${ (($context._principal // {}).roles // []) | index("SuperAdmin") != null }'
+      _me: '${ ($context._principal // {}).user }'
+    export:
+      as: "."
+- check:
+    switch:
+    - not-super:
+        when: '${ $context._super != true }'
+        then: deny
+    - default:
+        then: create-orgs
+- deny:
+    set:
+      ok: false
+      error: Installing the project tables needs the SuperAdmin role.
+    then: end
+# orgs normally comes from a3t-schema-install; created here too so a fresh
+# platform DB works (same schema, a no-op when it exists).
+- create-orgs:
+    call: lancedb
+    with:
+      operation: create_table
+      table: orgs
+      mode: create_if_not_exists
+      schema:
+        id: string
+        name: string
+        slug: string
+        plan: string
+        settings: string
+        created_at: string
+        updated_at: string
+      _resource: a3t/a3t-platform-db
+- create-profiles:
+    call: lancedb
+    with:
+      operation: create_table
+      table: profiles
+      mode: create_if_not_exists
+      schema:
+        handle: string
+        user_id: string
+        email: string
+        name: string
+        created_at: string
+      _resource: a3t/a3t-platform-db
+- create-org-members:
+    call: lancedb
+    with:
+      operation: create_table
+      table: org_members
+      mode: create_if_not_exists
+      schema:
+        id: string
+        org_id: string
+        user_id: string
+        email: string
+        name: string
+        role: string
+        added_by: string
+        created_at: string
+      _resource: a3t/a3t-platform-db
+- create-projects:
+    call: lancedb
+    with:
+      operation: create_table
+      table: projects
+      mode: create_if_not_exists
+      schema:
+        namespace: string
+        owner_kind: string
+        owner: string
+        owner_id: string
+        name: string
+        display_name: string
+        description: string
+        private: string
+        members: string
+        policy: string
+        environments: string
+        created_by: string
+        created_at: string
+        updated_at: string
+      _resource: a3t/a3t-platform-db
+# ── The platform orgs ──
+- load-orgs:
+    call: lancedb
+    with:
+      operation: query
+      table: orgs
+      limit: 1000
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_orgs: .}'
+- org-a3t:
+    switch:
+    - exists:
+        when: '${ $context._orgs | map(select(.id == "org-default")) | length > 0 }'
+        then: org-a3t-name
+    - default:
+        then: org-a3t-insert
+- org-a3t-name:
+    call: lancedb
+    with:
+      operation: update
+      table: orgs
+      filter: id = "org-default"
+      values:
+        slug: a3t
+        name: A3T
+        updated_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+    then: org-system
+- org-a3t-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: orgs
+      records:
+      - { id: org-default, name: A3T, slug: a3t, plan: platform, settings: '{}', created_at: '${ now | todate }', updated_at: '${ now | todate }' }
+      _resource: a3t/a3t-platform-db
+- org-system:
+    switch:
+    - exists:
+        when: '${ $context._orgs | map(select(.id == "org-system")) | length > 0 }'
+        then: load-members
+    - default:
+        then: org-system-insert
+- org-system-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: orgs
+      records:
+      - { id: org-system, name: System, slug: system, plan: platform, settings: '{}', created_at: '${ now | todate }', updated_at: '${ now | todate }' }
+      _resource: a3t/a3t-platform-db
+- load-members:
+    call: lancedb
+    with:
+      operation: query
+      table: org_members
+      filter: user_id = "${ $context._me }"
+      limit: 100
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_mine: .}'
+- admin-a3t:
+    switch:
+    - member:
+        when: '${ $context._mine | map(select(.org_id == "org-default")) | length > 0 }'
+        then: admin-system
+    - default:
+        then: admin-a3t-insert
+- admin-a3t-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: org_members
+      records:
+      - id: '${ "org-default:" + $context._me }'
+        org_id: org-default
+        user_id: '${ $context._me }'
+        email: ''
+        name: ''
+        role: admin
+        added_by: '${ $context._me }'
+        created_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+- admin-system:
+    switch:
+    - member:
+        when: '${ $context._mine | map(select(.org_id == "org-system")) | length > 0 }'
+        then: load-projects
+    - default:
+        then: admin-system-insert
+- admin-system-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: org_members
+      records:
+      - id: '${ "org-system:" + $context._me }'
+        org_id: org-system
+        user_id: '${ $context._me }'
+        email: ''
+        name: ''
+        role: admin
+        added_by: '${ $context._me }'
+        created_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+# ── The platform's test projects ──
+- load-projects:
+    call: lancedb
+    with:
+      operation: query
+      table: projects
+      limit: 5000
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_projects: .}'
+- project-a3t-test:
+    switch:
+    - exists:
+        when: '${ $context._projects | map(select(.namespace == "a3t-test")) | length > 0 }'
+        then: project-system-tests
+    - default:
+        then: project-a3t-test-insert
+- project-a3t-test-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: projects
+      records:
+      - namespace: a3t-test
+        owner_kind: org
+        owner: a3t
+        owner_id: org-default
+        name: test
+        display_name: A3T tests
+        description: Tests of the flows behind the A3T UI.
+        private: 'false'
+        members: '[]'
+        policy: '{}'
+        environments: '["dev","staging","prod"]'
+        created_by: '${ $context._me }'
+        created_at: '${ now | todate }'
+        updated_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+- project-system-tests:
+    switch:
+    - exists:
+        when: '${ $context._projects | map(select(.namespace == "system-tests")) | length > 0 }'
+        then: done
+    - default:
+        then: project-system-tests-insert
+- project-system-tests-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: projects
+      records:
+      - namespace: system-tests
+        owner_kind: org
+        owner: system
+        owner_id: org-system
+        name: tests
+        display_name: System tests
+        description: Tests of the FlowR engine, ADB and the platform's background flows.
+        private: 'false'
+        members: '[]'
+        policy: '{}'
+        environments: '["dev","staging","prod"]'
+        created_by: '${ $context._me }'
+        created_at: '${ now | todate }'
+        updated_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+- done:
+    set:
+      ok: true
+      tables: [orgs, profiles, org_members, projects]
+      orgs: [a3t, system]
+      projects: [a3t-test, system-tests]

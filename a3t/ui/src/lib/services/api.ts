@@ -260,7 +260,7 @@ export const resources = {
 };
 
 // ── Projects, orgs and profiles ──
-// All three are A3T flows (a3t/backend/flows/projects): a3t-projects, a3t-orgs
+// All three are A3T flows (a3t/backend/flows/a3t): a3t-projects, a3t-orgs
 // and a3t-profile, over platform-DB tables. The flows decide who may see and
 // change what, from the caller's principal — the UI only asks.
 //

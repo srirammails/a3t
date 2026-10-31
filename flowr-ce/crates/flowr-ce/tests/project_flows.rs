@@ -10,7 +10,7 @@ use flowr_storage::StorageBackend;
 use flowr_types::{ExecutionRequest, ExecutionStatus, Resource, WorkflowRecord};
 use serde_json::{json, Value};
 
-const FLOWS: &[&str] = &["a3t_projects_install.yaml", "a3t_profile.yaml", "a3t_orgs.yaml", "a3t_projects.yaml"];
+const FLOWS: &[&str] = &["system/a3t_projects_install.yaml", "a3t/a3t_profile.yaml", "a3t/a3t_orgs.yaml", "a3t/a3t_projects.yaml"];
 
 struct World {
     storage: Arc<dyn StorageBackend>,
@@ -29,7 +29,7 @@ impl World {
         storage.resources().create(
             Resource::new("a3t-platform-db", "lancedb", json!({ "db_path": db.to_str().unwrap() })).with_namespace("a3t"),
         ).await.unwrap();
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a3t/backend/flows/projects");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a3t/backend/flows");
         for f in FLOWS {
             let yaml = std::fs::read_to_string(root.join(f)).unwrap();
             storage.workflows().register(WorkflowRecord::from_yaml(&yaml).unwrap()).await.unwrap();
@@ -39,7 +39,7 @@ impl World {
 
     async fn run(&self, user: &str, roles: &[&str], flow: &str, input: Value) -> Value {
         let principal = flowr_policy::Principal::human(user, roles.iter().map(|r| r.to_string()).collect());
-        let req = ExecutionRequest::new("a3t", flow).with_input(input).with_principal(principal);
+        let req = ExecutionRequest::new(if flow == "a3t-projects-install" { "system" } else { "a3t" }, flow).with_input(input).with_principal(principal);
         let state = flowr_ce::execute_workflow(self.storage.clone(), &self.http, req).await.unwrap();
         assert_eq!(state.status, ExecutionStatus::Completed, "{flow} at {:?}: {:?}", state.current_step, state.error);
         state.output.unwrap_or(Value::Null)
@@ -77,6 +77,15 @@ async fn users_orgs_and_projects() {
     let w = World::new().await;
     w.refused("usr-ann", DEV, "a3t-projects-install", json!({}), "SuperAdmin").await;
     w.ok("usr-root", SUPER, "a3t-projects-install", json!({})).await;
+    // The install makes the platform orgs (a3t keeps the id org-default) and
+    // their test projects, with the installer as admin of both.
+    let platform = w.ok("usr-root", SUPER, "a3t-orgs", json!({ "action": "list" })).await;
+    let mut orgs: Vec<(String, String)> = platform["orgs"].as_array().unwrap().iter()
+        .map(|o| (o["handle"].as_str().unwrap().to_string(), o["id"].as_str().unwrap().to_string())).collect();
+    orgs.sort();
+    assert_eq!(orgs, [("a3t".into(), "org-default".into()), ("system".into(), "org-system".into())]);
+    assert_eq!(w.visible("usr-root", SUPER).await, pairs(&[("a3t-test", "org-admin"), ("system-tests", "org-admin")]));
+    w.ok("usr-root", SUPER, "a3t-projects-install", json!({})).await; // idempotent
 
     // Profiles: one handle each, shared space with orgs.
     w.ok("usr-ann", DEV, "a3t-profile", json!({ "action": "claim", "handle": "ann", "email": "ann@x.io" })).await;
@@ -108,7 +117,7 @@ async fn users_orgs_and_projects() {
     let owners = w.ok("usr-root", SUPER, "a3t-projects", json!({ "action": "list" })).await;
     let handles: Vec<(&str, &str)> = owners["orgs"].as_array().unwrap().iter()
         .map(|o| (o["handle"].as_str().unwrap(), o["role"].as_str().unwrap())).collect();
-    assert_eq!(handles, [("acme", "admin"), ("globex", "admin")], "{owners}");
+    assert_eq!(handles, [("acme", "admin"), ("a3t", "admin"), ("globex", "admin"), ("system", "admin")], "{owners}");
     let carls = w.ok("usr-carl", DEV, "a3t-projects", json!({ "action": "list" })).await;
     assert_eq!(carls["orgs"], json!([{ "handle": "acme", "id": "org-acme", "display_name": "Acme", "role": "member" }]));
 
@@ -119,9 +128,9 @@ async fn users_orgs_and_projects() {
     w.refused("usr-ann", DEV, "a3t-projects", json!({ "action": "create", "owner_kind": "org", "owner": "acme", "name": "x" }), "aren't a member").await;
     assert_eq!(w.visible("usr-ann", DEV).await, pairs(&[("ann-orders", "owner")]));
     assert_eq!(w.visible("usr-bob", DEV).await, pairs(&[]));
-    assert_eq!(w.visible("usr-root", SUPER).await, pairs(&[]));
+    assert_eq!(w.visible("usr-root", SUPER).await, pairs(&[("a3t-test", "org-admin"), ("system-tests", "org-admin")]));
     let listed = w.ok("usr-bob", DEV, "a3t-projects", json!({ "action": "list" })).await;
-    assert_eq!(listed["project_namespaces"], json!(["ann-orders"]), "names only, so the dash can hide it");
+    assert!(listed["project_namespaces"].as_array().unwrap().contains(&json!("ann-orders")), "names only, so the dash can hide it");
     assert_eq!(listed["profile"]["handle"], "bob");
 
     // A private org project: members and the org's admins; a plain org member doesn't see it.
@@ -130,7 +139,7 @@ async fn users_orgs_and_projects() {
     assert_eq!(w.visible("usr-bob", DEV).await, pairs(&[("acme-docs", "org-admin"), ("acme-web", "org-admin")]));
     assert_eq!(w.visible("usr-carl", DEV).await, pairs(&[("acme-docs", "org-member")]));
     // The superadmin who created acme is its first admin.
-    assert_eq!(w.visible("usr-root", SUPER).await, pairs(&[("acme-docs", "org-admin"), ("acme-web", "org-admin")]));
+    assert_eq!(w.visible("usr-root", SUPER).await, pairs(&[("a3t-test", "org-admin"), ("acme-docs", "org-admin"), ("acme-web", "org-admin"), ("system-tests", "org-admin")]));
     // Adding carl to the private project lets him see it.
     w.ok("usr-bob", DEV, "a3t-projects", json!({ "action": "update", "namespace": "acme-web",
         "members": [{ "kind": "user", "id": "usr-carl", "role": "developer" }] })).await;

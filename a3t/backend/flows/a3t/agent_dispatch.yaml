@@ -81,9 +81,9 @@ do:
         temperature: 0.3
         tool_flows:
           lookup_order:
-            namespace: a3t
+            namespace: a3t-test
             name: a3t-skill-lookup-order
           create_ticket:
-            namespace: a3t
+            namespace: a3t-test
             name: a3t-skill-create-ticket
     then: end

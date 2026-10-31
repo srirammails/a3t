@@ -1,6 +1,6 @@
 document:
   dsl: 1.0.3
-  namespace: a3t
+  namespace: system
   name: a3t-triggers-setup
   version: 1.0.0
 do:
@@ -147,7 +147,7 @@ do:
         enabled: true
         targets:
         - type: workflow
-          namespace: a3t
+          namespace: system
           name: a3t-schema-install
     export:
       as: .
