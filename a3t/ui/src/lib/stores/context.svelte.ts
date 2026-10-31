@@ -112,6 +112,14 @@ export function canSee(_p: Project): boolean {
   return true;
 }
 
+/// The project an agent or template belongs to. Before projects, the dash saved
+/// users' agents and templates in `a3t`; those are `default`'s (the pre-projects
+/// namespace), and only what the platform itself made (`created_by: system`)
+/// stays in the platform's namespace.
+export function projectOf(ns: string | undefined, createdBy?: string): string | undefined {
+  return ns && isPlatform(ns) && createdBy !== 'system' ? 'default' : ns;
+}
+
 export function isPlatform(ns: string | undefined): boolean {
   return !!ns && projects.some((p) => p.name === ns && p.platform);
 }

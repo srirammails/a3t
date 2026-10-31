@@ -12,7 +12,7 @@
   import AppHome from '$lib/shell/AppHome.svelte';
   import FoldSection from '$lib/components/shared/FoldSection.svelte';
   import ProjectPill from '$lib/components/shared/ProjectPill.svelte';
-  import { inContext } from '$lib/stores/context.svelte.ts';
+  import { inContext, projectOf, getProject } from '$lib/stores/context.svelte.ts';
 
   // Stacked sub-editors (unlimited depth)
   interface SubEditor { type: string; data?: any; closing?: boolean }
@@ -82,9 +82,10 @@
 
   function defaultSpecYaml(name: string): string {
     const n = name || 'my-agent';
+    // A new template belongs to the selected project (`default` under "All projects").
     return `document:
   dsl: '1.0.3'
-  namespace: a3t
+  namespace: ${getProject() || 'default'}
   name: ${n}
   version: '1.0.0'
 
@@ -175,9 +176,9 @@ do:
       created_at: r.created_at,
       created_by: r.created_by ?? '',
       // The project lives in the definition (`document.namespace`).
-      namespace: (typeof r.spec_yaml === 'string'
+      namespace: projectOf((typeof r.spec_yaml === 'string'
         ? r.spec_yaml.split(/\n(?=\S)/).find((b: string) => b.startsWith('document:'))?.match(/^\s+namespace:\s*['"]?([\w.-]+)/m)?.[1]
-        : undefined) as string | undefined,
+        : undefined), r.created_by) as string | undefined,
     }));
   }
 

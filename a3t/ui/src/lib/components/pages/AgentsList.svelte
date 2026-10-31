@@ -14,7 +14,7 @@
   import EntityCard from '$lib/components/shared/EntityCard.svelte';
   import FoldSection from '$lib/components/shared/FoldSection.svelte';
   import { currentUser } from '$lib/stores/auth';
-  import { getProject, inContext } from '$lib/stores/context.svelte.ts';
+  import { getProject, inContext, projectOf } from '$lib/stores/context.svelte.ts';
   import PropertiesTree from '$lib/components/shared/PropertiesTree.svelte';
   import DeleteConfirm from '$lib/components/shared/DeleteConfirm.svelte';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
@@ -29,7 +29,7 @@
 
   let allAgents: any[] = $state([]);
   /// In view for the project; split by who created them.
-  const visibleAgents = $derived(allAgents.filter((a) => inContext(a.namespace, 'shared')));
+  const visibleAgents = $derived(allAgents.filter((a) => inContext(a.project, 'shared')));
   const myAgents = $derived(visibleAgents.filter((a) => a.created_by === $currentUser?.id));
   const sharedAgents = $derived(visibleAgents.filter((a) => a.created_by !== $currentUser?.id));
   /// New agents go into the selected project (`default` under "All projects").
@@ -119,6 +119,8 @@
     if (res.ok) {
       allAgents = (Array.isArray(res.data) ? res.data : (res.data?.rows ?? res.data?.output ?? [])).map((r: any) => ({
         id: r.id, name: r.name, namespace: r.namespace ?? 'a3t',
+        // The project it shows under; `namespace` stays what is stored.
+        project: projectOf(r.namespace ?? 'a3t', r.owner ?? r.created_by),
         mode: r.mode ?? 'session', status: r.status ?? 'draft',
         template_id: r.template_id, template_version: r.template_version ?? '1.0.0',
         variables: r.variables, resource_bindings: r.resource_bindings,
@@ -787,7 +789,7 @@
           description="from {a.template_id ?? 'no template'}"
           tags={[a.mode, a.status]}
           meta="v{a.template_version}"
-          project={a.namespace}
+          project={a.project}
           actionLabel="Deploy to Canvas"
           onclick={() => selectAgent(a.id)}
           onaction={() => openAgentCanvas(a.id)}

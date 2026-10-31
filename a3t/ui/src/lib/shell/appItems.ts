@@ -7,7 +7,7 @@
 
 import { mcpCall, fetchChatSessions, opsApi, canvasApi } from '$lib/services/api';
 import { RESOURCE_CATEGORIES, categorize } from '$lib/core/resources/categories';
-import { namespacesFor, inContext, canvasKind, getProjects, getShowPlatform, loadProjects, canSee, roleIn, type ListKind } from '$lib/stores/context.svelte.ts';
+import { namespacesFor, inContext, canvasKind, projectOf, getProjects, getShowPlatform, loadProjects, canSee, roleIn, type ListKind } from '$lib/stores/context.svelte.ts';
 
 export type AppItem = {
   /// What navigation addresses. For chat this is the *client* conversation id,
@@ -201,7 +201,7 @@ async function loadAll(source: string): Promise<AppItem[]> {
   if (source === 'agents') {
     const res = await mcpCall('list_agents', {});
     if (!res.ok) throw new Error(res.error ?? 'list_agents failed');
-    return rows(res.data, 'agents').map(named);
+    return rows(res.data, 'agents').map((r: any) => ({ ...named(r), namespace: projectOf(r.namespace || undefined, r.created_by) }));
   }
   if (source === 'templates') {
     const res = await mcpCall('list_agent_templates', {});
@@ -211,7 +211,7 @@ async function loadAll(source: string): Promise<AppItem[]> {
     // like everything else, and show where the template came from.
     return rows(res.data, 'templates').map((r: any) => ({
       ...named(r),
-      namespace: r.namespace || specNamespace(r.spec_yaml),
+      namespace: projectOf(r.namespace || specNamespace(r.spec_yaml), r.created_by),
       sub: [r.version ? `v${r.version}` : '', r.source === 'system' ? 'built-in' : r.source === 'my' ? 'yours' : r.source ?? '']
         .filter(Boolean).join(' · '),
     }));

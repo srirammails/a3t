@@ -27,6 +27,11 @@ function inContext(ns, kind, ctx, projects = PROJECTS) {
   return namespacesFor(kind, ctx, projects).includes(ns) || (!ctx.project && !projects.some((p) => p.name === ns));
 }
 
+function projectOf(ns, createdBy, projects = PROJECTS) {
+  const platform = !!ns && projects.some((p) => p.name === ns && p.platform);
+  return platform && createdBy !== 'system' ? 'default' : ns;
+}
+
 function splitContextPath(path) {
   const m = path.match(/^\/p\/([^/]+)(\/.*)?$/);
   if (!m) return { project: null, rest: path };
@@ -63,6 +68,13 @@ const check = (n, c, extra = '') => c ? (pass++, console.log(`  PASS  ${n}`))
   const ctx = { project: 'a3t', showPlatform: true };
   check('platform project: no duplicate', eq(namespacesFor('owned', ctx), ['a3t', 'system']));
   check('show platform + all', eq(namespacesFor('owned', { project: '', showPlatform: true }), ['default', 'orders', 'a3t', 'system']));
+}
+// 3b. Agents and templates users saved in `a3t` before projects belong to `default`.
+{
+  check('user template in a3t → default', projectOf('a3t', 'usr-superadmin') === 'default');
+  check('built-in template stays system', projectOf('system', 'system') === 'system');
+  check('project item keeps its project', projectOf('orders', 'usr-ann') === 'orders');
+  check('legacy agent shows under default', inContext(projectOf('a3t', 'usr-x'), 'shared', { project: 'default', showPlatform: false }));
 }
 // 4. URL prefix.
 {
