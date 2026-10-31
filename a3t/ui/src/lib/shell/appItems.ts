@@ -144,10 +144,10 @@ async function loadAll(source: string): Promise<AppItem[]> {
       .filter((p) => (p.platform ? getShowPlatform() : canSee(p)))
       .map((p) => ({
         id: p.name,
-        label: p.record?.display_name || p.name,
+        label: p.info?.display_name || p.name,
         namespace: p.name,
-        sub: [roleIn(p) ?? (p.record ? '' : 'open to everyone'),
-              `${p.flows ?? 0} flows · ${Math.max(0, (p.resources ?? 0) - (p.record ? 1 : 0))} resources`].filter(Boolean).join(' · '),
+        sub: [roleIn(p) ?? (p.platform ? 'platform' : 'open to everyone'),
+              `${p.flows ?? 0} flows · ${p.resources ?? 0} resources`].filter(Boolean).join(' · '),
       }));
   }
   if (source === 'flows') {

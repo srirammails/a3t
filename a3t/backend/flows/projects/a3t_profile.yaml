@@ -1,0 +1,132 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-profile
+  version: 1.0.0
+  metadata:
+    description: >
+      The caller's profile handle — the owner part of their personal projects'
+      namespaces (<handle>-<project>). Handles share one space with org handles.
+      Input: { action: get } | { action: claim, handle, email, name }.
+      Output: { ok, profile? , error? }. The caller is $context._principal.
+do:
+- whoami:
+    set:
+      _me: '${ ($context._principal // {}).user }'
+      _args: '${ . }'
+    export:
+      as: "."
+- signed-in:
+    switch:
+    - anonymous:
+        when: '${ $context._me == null }'
+        then: deny
+    - default:
+        then: load-mine
+- deny:
+    set:
+      ok: false
+      error: Sign in to use projects.
+    then: end
+- load-mine:
+    call: lancedb
+    with:
+      operation: query
+      table: profiles
+      filter: user_id = "${ $context._me }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_mine: .}'
+- route:
+    switch:
+    - claim:
+        when: '${ $context._args.action == "claim" }'
+        then: claim-check
+    - default:
+        then: get
+- get:
+    set:
+      ok: true
+      profile: '${ $context._mine[0] // null }'
+    then: end
+
+# ── claim ──
+- claim-check:
+    switch:
+    - has-one:
+        when: '${ ($context._mine | length) > 0 }'
+        then: already
+    - malformed:
+        when: '${ ($context._args.handle // "") | test("^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$") | not }'
+        then: bad-handle
+    - reserved:
+        when: '${ ["a3t", "system", "default", "admin", "api", "p", "www", "platform", "org", "user"] | index($context._args.handle) != null }'
+        then: reserved
+    - default:
+        then: find-profile
+- already:
+    set:
+      ok: false
+      error: '${ "You already have the handle " + $context._mine[0].handle + "." }'
+    then: end
+- bad-handle:
+    set:
+      ok: false
+      error: A handle is 2-24 lowercase letters, digits and dashes, starting and ending with a letter or digit.
+    then: end
+- reserved:
+    set:
+      ok: false
+      error: That handle is reserved.
+    then: end
+- find-profile:
+    call: lancedb
+    with:
+      operation: query
+      table: profiles
+      filter: handle = "${ $context._args.handle }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_taken_profile: .}'
+- find-org:
+    call: lancedb
+    with:
+      operation: query
+      table: orgs
+      filter: slug = "${ $context._args.handle }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_taken_org: .}'
+- free:
+    switch:
+    - taken:
+        when: '${ (($context._taken_profile | length) + ($context._taken_org | length)) > 0 }'
+        then: taken
+    - default:
+        then: insert
+- taken:
+    set:
+      ok: false
+      error: That handle is taken.
+    then: end
+- insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: profiles
+      records:
+      - handle: '${ $context._args.handle }'
+        user_id: '${ $context._me }'
+        email: '${ $context._args.email // "" }'
+        name: '${ $context._args.name // "" }'
+        created_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+- claimed:
+    set:
+      ok: true
+      profile:
+        handle: '${ $context._args.handle }'
+        user_id: '${ $context._me }'

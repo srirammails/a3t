@@ -1,8 +1,9 @@
 <script lang="ts">
-  /// Projects: the namespaces people work in, who is in each, and the rules it
-  /// runs under. A project is a namespace plus a `type: project` record in it
-  /// (services/api.ts `projectsApi`); `default` and other namespaces from before
-  /// projects have no record and stay open to everyone.
+  /// Projects: namespaces owned by you (<handle>-<name>) or by an org
+  /// (<org>-<name>), who is in each, and the rules it runs under. Everything goes
+  /// through the a3t-projects / a3t-profile flows, which decide on the server who
+  /// may see and change what; this page only asks. Namespaces from before
+  /// projects (such as `default`) have no owner and stay open to everyone.
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
@@ -12,89 +13,107 @@
   import AppHome from '$lib/shell/AppHome.svelte';
   import { onMount, untrack } from 'svelte';
   import { getActivePanel, navigateToDetail, navigateTo } from '$lib/stores/panels.svelte.ts';
-  import { bumpContext } from '$lib/stores/apps.svelte.ts';
-  import { currentUser, userRole } from '$lib/stores/auth';
+  import { currentUser } from '$lib/stores/auth';
   import {
-    getProjects, getShowPlatform, loadProjects, setProject, canSee, roleIn, type Project,
+    getProjects, getShowPlatform, loadProjects, setProject, roleIn, isMine, getProfile, getMyOrgs, type Project,
   } from '$lib/stores/context.svelte.ts';
   import {
-    projectsApi, idp, type ProjectRecord, type ProjectMember, type ProjectRole,
+    projectsApi, profileApi, loadDirectory, type ProjectMember, type ProjectRole, type DirectoryUser,
   } from '$lib/services/api';
 
   const ROLES: ProjectRole[] = ['owner', 'developer', 'operator', 'viewer'];
   const ROLE_HINT: Record<ProjectRole, string> = {
-    owner: 'Everything, including members and policy',
+    owner: 'Everything, including members and rules',
     developer: 'Build and run flows, agents and resources',
     operator: 'Deploy and run; no authoring',
     viewer: 'Read only',
   };
-  /// Rules a project can add on top of the org baseline. Saved with the project;
+  /// Rules a project adds on top of the org baseline. Saved with the project;
   /// enforced once project-scoped Cedar is on.
   const POLICY_PRESETS: { key: string; label: string; hint: string }[] = [
     { key: 'prod_deploy_owner_only', label: 'Only owners deploy to prod', hint: 'Developers and operators deploy to dev and staging.' },
     { key: 'destructive_owner_only', label: 'Destructive tools need an owner', hint: 'Deletes and drops run only when an owner asks.' },
     { key: 'agent_memory_per_user', label: 'Agents remember per user', hint: "An agent's memory of one member isn't visible to another." },
-    { key: 'members_only', label: 'Members only', hint: 'Hide this project from non-members (admins still see it). Applies in the dash now.' },
   ];
   const ENVIRONMENTS = ['dev', 'staging', 'prod'];
-  const SLUG = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
+  const SLUG = /^[a-z0-9]([a-z0-9-]{0,36}[a-z0-9])?$/;
+  const HANDLE = /^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$/;
 
-  const isAdmin = $derived($userRole === 'superadmin' || $userRole === 'admin');
-  const visible = $derived(getProjects().filter((p) => (p.platform ? getShowPlatform() : canSee(p))));
-  const mine = $derived(visible.filter((p) => roleIn(p) != null));
-  const shared = $derived(visible.filter((p) => roleIn(p) == null));
+  const visible = $derived(getProjects().filter((p) => !p.platform || getShowPlatform()));
+  const mine = $derived(visible.filter((p) => isMine(p)));
+  const shared = $derived(visible.filter((p) => !isMine(p)));
+  const profile = $derived(getProfile());
+  const orgs = $derived(getMyOrgs());
 
   // ── Panel state ──
   let panel = $state<'closed' | 'create' | 'detail'>('closed');
   let tab = $state<'overview' | 'members' | 'policy' | 'environments'>('overview');
   let selectedName = $state('');
-  let draft = $state<ProjectRecord>({});
-  let newSlug = $state('');
-  let saving = $state(false);
   let message = $state('');
-  let knownUsers = $state<{ id: string; label: string }[]>([]);
-  let addKind = $state<'user' | 'group'>('user');
-  let addId = $state('');
+  let messageOk = $state(false);
+  let saving = $state(false);
+  // Create
+  let owner = $state('');            // "user:<handle>" or "org:<handle>"
+  let newName = $state('');
+  let newDisplay = $state('');
+  let newDesc = $state('');
+  let newPrivate = $state(false);
+  let handleDraft = $state('');
+  // Detail drafts
+  let dName = $state('');
+  let dDesc = $state('');
+  let dPrivate = $state(false);
+  let dMembers = $state<ProjectMember[]>([]);
+  let dPolicy = $state<Record<string, boolean>>({});
+  // Members
+  let directory = $state<DirectoryUser[]>([]);
+  let addWho = $state('');
   let addRole = $state<ProjectRole>('developer');
+  // Move
+  let moveOrg = $state('');
+  let moveReport = $state<any>(null);
 
   const selected = $derived(getProjects().find((p) => p.name === selectedName));
-  const myRole = $derived(selected ? roleIn(selected) : null);
-  /// Owners and admins change a project; everyone else reads it.
-  const canEdit = $derived(isAdmin || myRole === 'owner');
-  const resourceCount = (p: Project) => Math.max(0, (p.resources ?? 0) - (p.record ? 1 : 0));
-  const isEmpty = (p: Project) => !p.flows && !p.triggers && resourceCount(p) === 0;
+  const info = $derived(selected?.info);
+  const canEdit = $derived(!!info && (info.can_admin || info.role === 'owner'));
+  const adminOrgs = $derived(orgs.filter((o) => o.role === 'admin'));
+  const ownerHandle = $derived(owner.split(':')[1] ?? '');
+  const previewNs = $derived(ownerHandle && newName ? `${ownerHandle}-${newName}` : '');
+
+  function say(text: string, ok = false) { message = text; messageOk = ok; }
 
   function card(p: Project) {
     const role = roleIn(p);
     return {
-      name: p.record?.display_name || p.name,
-      description: p.record?.description || (p.platform ? 'Platform namespace' : p.record ? '' : 'Open to everyone — no members yet'),
-      tags: [role ?? (p.record ? 'not a member' : 'open'), ...(p.platform ? ['platform'] : [])],
-      meta: `${p.flows ?? 0} flows · ${resourceCount(p)} resources · ${p.triggers ?? 0} triggers`,
+      name: p.info?.display_name || p.name,
+      description: p.info?.description || (p.platform ? 'Platform namespace' : p.info ? `${p.info.owner_kind === 'org' ? 'Org' : 'Personal'} project of ${p.info.owner}` : 'From before projects — open to everyone'),
+      tags: [role ?? (p.platform ? 'platform' : 'open'), ...(p.info?.private ? ['private'] : [])],
+      meta: `${p.flows ?? 0} flows · ${p.resources ?? 0} resources · ${p.triggers ?? 0} triggers`,
     };
   }
 
-  function openDetail(name: string) {
-    navigateToDetail('projects', 'Projects', name);
-  }
+  function openDetail(name: string) { navigateToDetail('projects', 'Projects', name); }
 
   function showDetail(name: string) {
     const p = getProjects().find((x) => x.name === name);
     if (!p) return;
     selectedName = name;
-    draft = structuredClone($state.snapshot(p.record) ?? {}) as ProjectRecord;
-    draft.members ??= [];
-    draft.environments ??= [...ENVIRONMENTS];
-    message = '';
+    dName = p.info?.display_name ?? '';
+    dDesc = p.info?.description ?? '';
+    dPrivate = !!p.info?.private;
+    dMembers = structuredClone($state.snapshot(p.info?.members ?? [])) as ProjectMember[];
+    dPolicy = { ...(p.info?.policy ?? {}) };
+    moveOrg = ''; moveReport = null;
+    say('');
     tab = 'overview';
     panel = 'detail';
   }
 
   function openCreate() {
-    newSlug = '';
-    draft = { display_name: '', description: '', members: [], environments: [...ENVIRONMENTS] };
-    message = '';
-    tab = 'overview';
+    owner = profile ? `user:${profile.handle}` : (orgs[0] ? `org:${orgs[0].handle}` : '');
+    newName = ''; newDisplay = ''; newDesc = ''; newPrivate = false;
+    handleDraft = profile ? '' : (($currentUser?.email ?? '').split('@')[0] ?? '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+    say('');
     panel = 'create';
   }
 
@@ -103,7 +122,7 @@
     if (getActivePanel()?.props?.selectedId || getActivePanel()?.props?.create) navigateTo('projects', 'Projects');
   }
 
-  // The URL drives the panel: /projects/<name> opens it, the switcher's
+  // The URL drives the panel: /projects/<name> opens it; the switcher's
   // "+ New project" arrives with { create: true }.
   $effect(() => {
     const props = getActivePanel()?.props ?? {};
@@ -117,82 +136,97 @@
     });
   });
 
-  function explain(res: { status?: number; error?: string }, what: string): string {
-    if (res.status === 403) return `${what} needs the Admin role.`;
-    if (res.status === 409) return 'That namespace already has a project.';
-    return res.error || `${what} failed (HTTP ${res.status ?? '?'})`;
+  async function claimHandle() {
+    const h = handleDraft.trim();
+    if (!HANDLE.test(h)) { say('A handle is 2–24 lowercase letters, digits and dashes.'); return; }
+    saving = true;
+    const res = await profileApi.claim(h, $currentUser?.email, $currentUser?.name);
+    saving = false;
+    if (!res.ok) { say(res.error ?? 'Could not claim the handle'); return; }
+    await loadProjects(true);
+    owner = `user:${h}`;
+    say(`Your handle is @${h}.`, true);
   }
 
   async function create() {
-    const slug = newSlug.trim();
-    if (!SLUG.test(slug)) { message = 'Use lowercase letters, digits and dashes (2–40), starting and ending with a letter or digit.'; return; }
-    if (getProjects().some((p) => p.name === slug)) { message = `“${slug}” is already in use.`; return; }
-    const me = $currentUser;
-    if (!me) return;
-    saving = true; message = '';
-    const record: ProjectRecord = {
-      ...draft,
-      display_name: draft.display_name?.trim() || slug,
-      owner: { id: me.id, email: me.email, name: me.name },
-      created_at: new Date().toISOString(),
-    };
-    const res = await projectsApi.create(slug, record);
+    const [kind, handle] = owner.split(':') as ['user' | 'org', string];
+    if (!kind || !handle) { say(profile ? 'Choose an owner.' : 'Choose your handle first.'); return; }
+    if (!SLUG.test(newName.trim())) { say('A project name is 2–38 lowercase letters, digits and dashes.'); return; }
+    saving = true; say('');
+    const res = await projectsApi.create({
+      owner_kind: kind, owner: handle, name: newName.trim(),
+      display_name: newDisplay.trim() || newName.trim(), description: newDesc.trim(), private: newPrivate,
+    });
     saving = false;
-    if (!res.ok) { message = explain(res, 'Creating a project'); return; }
+    if (!res.ok) { say(res.error ?? 'Create failed'); return; }
+    const ns = res.data?.project?.namespace ?? `${handle}-${newName.trim()}`;
     await loadProjects(true);
-    setProject(slug);
-    navigateToDetail('projects', 'Projects', slug);
+    setProject(ns);
+    navigateToDetail('projects', 'Projects', ns);
     tab = 'members';
   }
 
   async function save() {
-    if (!selected || !canEdit) return;
-    saving = true; message = '';
-    const record = $state.snapshot(draft) as ProjectRecord;
-    // A namespace from before projects gets its first record, owned by whoever saves it.
-    const res = selected.record
-      ? await projectsApi.update(selected.name, record)
-      : await projectsApi.create(selected.name, { ...record, owner: record.owner ?? { id: $currentUser!.id, email: $currentUser!.email, name: $currentUser!.name }, created_at: new Date().toISOString() });
+    if (!info || !canEdit) return;
+    saving = true; say('');
+    const res = await projectsApi.update(info.namespace, {
+      display_name: dName.trim() || info.name, description: dDesc, private: dPrivate,
+      members: $state.snapshot(dMembers) as ProjectMember[], policy: { ...dPolicy },
+    });
     saving = false;
-    if (!res.ok) { message = explain(res, 'Saving the project'); return; }
-    message = 'Saved.';
+    if (!res.ok) { say(res.error ?? 'Save failed'); return; }
     await loadProjects(true);
-    bumpContext();
+    say('Saved.', true);
   }
 
   async function remove() {
-    if (!selected || !canEdit || !isEmpty(selected)) return;
-    if (!confirm(`Delete project “${selected.name}”? Its members and rules are removed; the namespace is already empty.`)) return;
-    const res = await projectsApi.remove(selected.name);
-    if (!res.ok) { message = explain(res, 'Deleting the project'); return; }
+    if (!info || !canEdit) return;
+    if (!confirm(`Delete project “${info.namespace}”? Its members and rules are removed.`)) return;
+    const res = await projectsApi.remove(info.namespace);
+    if (!res.ok) { say(res.error ?? 'Delete failed'); return; }
     await loadProjects(true);
     setProject('');
     closePanel();
   }
 
+  async function previewMove() {
+    if (!info || !moveOrg) return;
+    saving = true; say(''); moveReport = null;
+    const res = await projectsApi.move(info.namespace, moveOrg, true);
+    saving = false;
+    if (!res.ok) { say(res.error ?? 'Preview failed'); return; }
+    moveReport = res.data?.report ?? {};
+  }
+
+  async function doMove() {
+    if (!info || !moveOrg || !moveReport) return;
+    saving = true; say('');
+    const res = await projectsApi.move(info.namespace, moveOrg, false);
+    saving = false;
+    if (!res.ok) { say(res.error ?? 'Move failed'); return; }
+    const ns = res.data?.project?.namespace ?? moveReport.to;
+    await loadProjects(true);
+    setProject(ns);
+    navigateToDetail('projects', 'Projects', ns);
+  }
+
   function addMember() {
-    const id = addId.trim();
-    if (!id) return;
-    draft.members ??= [];
-    if (draft.members.some((m) => m.kind === addKind && m.id === id)) { message = `${id} is already a member.`; return; }
-    const known = knownUsers.find((u) => u.id === id);
-    draft.members = [...draft.members, { kind: addKind, id, name: known?.label, role: addRole }];
-    addId = '';
-    message = '';
+    const q = addWho.trim().toLowerCase();
+    const u = directory.find((d) => d.email.toLowerCase() === q || d.id === addWho.trim());
+    if (!u) { say('Pick someone from the directory — members are matched by account, not by typed email.'); return; }
+    if (dMembers.some((m) => m.id === u.id)) { say(`${u.email || u.id} is already a member.`); return; }
+    dMembers = [...dMembers, { kind: 'user', id: u.id, email: u.email, name: u.name, role: addRole }];
+    addWho = '';
+    say('');
   }
 
   function removeMember(m: ProjectMember) {
-    draft.members = (draft.members ?? []).filter((x) => !(x.kind === m.kind && x.id === m.id));
+    dMembers = dMembers.filter((x) => x.id !== m.id);
   }
 
   onMount(async () => {
     await loadProjects(true);
-    // The identity provider's users, for the member picker (EE, admins). Without
-    // it, members are added by email.
-    try {
-      const us = await idp.users();
-      if (us.ok) knownUsers = (us.data?.users ?? []).map((u: any) => ({ id: u.email ?? u.username ?? u.id, label: u.name || u.username || u.email }));
-    } catch { /* CE, or not an admin */ }
+    directory = await loadDirectory();
   });
 </script>
 
@@ -204,8 +238,7 @@
       <h1 class="screen-title">Projects</h1>
     </div>
     <div class="screen-actions">
-      <NewButton label="New project" accent="spec" onclick={openCreate} disabled={!isAdmin}
-                 title={isAdmin ? '' : 'Creating a project needs the Admin role'} />
+      <NewButton label="New project" accent="spec" onclick={openCreate} />
     </div>
   </div>
 </div>
@@ -214,8 +247,8 @@
   <PageBanner
     headline="Organise work into projects."
     highlightWord="projects"
-    subtitle="A project is a namespace with its members and rules."
-    description="Flows, agents, resources and triggers live in a project. Pick one in the top bar and every page shows only its work. Add people with a role, and set the rules the project runs under."
+    subtitle="Yours, or your organisation's — each one a namespace with its members and rules."
+    description="A project you create lives under your handle (you-orders); an organisation's under its name (acme-orders). Make it private to keep it to yourself — or, in an org, to its members and admins. Pick one in the top bar and every page shows only its work."
     accent="spec"
   />
   <AppHome appType="projects" embedded />
@@ -225,8 +258,8 @@
       {#each list as p (p.name)}
         {@const c = card(p)}
         <EntityCard
-          icon={(p.record?.display_name || p.name).slice(0, 2).toUpperCase()}
-          color={p.platform ? '#777' : '#5530a8'}
+          icon={(p.info?.display_name || p.name).slice(0, 2).toUpperCase()}
+          color={p.platform ? '#777' : p.info?.owner_kind === 'org' ? '#1a7158' : '#5530a8'}
           name={c.name}
           description={c.description}
           tags={c.tags}
@@ -240,126 +273,171 @@
     </div>
   {/snippet}
 
-  <FoldSection title="My Projects" count={mine.length} hint="You own or are a member of">
+  <FoldSection title="My Projects" count={mine.length} hint={profile ? `Yours (@${profile.handle}) and the ones you're a member of` : "Yours and the ones you're a member of"}>
     {@render projectCards(mine)}
   </FoldSection>
-  <FoldSection title="Shared Projects" count={shared.length} hint="Projects you can see but aren't a member of">
+  <FoldSection title="Shared Projects" count={shared.length} hint="Your orgs' projects, and namespaces open to everyone">
     {@render projectCards(shared)}
   </FoldSection>
 </div>
 
-<SlidePanel open={panel !== 'closed'} onclose={closePanel} onsave={panel === 'create' ? create : (canEdit ? save : undefined)}>
+<SlidePanel open={panel !== 'closed'} onclose={closePanel} onsave={panel === 'detail' && canEdit ? save : undefined}>
   <div class="pj">
     <div class="pj-head">
-      <div class="pj-icon">{(panel === 'create' ? (newSlug || 'NP') : (selected?.record?.display_name || selectedName)).slice(0, 2).toUpperCase()}</div>
+      <div class="pj-icon">{(panel === 'create' ? (newName || 'NP') : (info?.display_name || selectedName)).slice(0, 2).toUpperCase()}</div>
       <div>
-        <h2 class="pj-title">{panel === 'create' ? 'New project' : (selected?.record?.display_name || selectedName)}</h2>
+        <h2 class="pj-title">{panel === 'create' ? 'New project' : (info?.display_name || selectedName)}</h2>
         <div class="pj-sub">
-          {#if panel === 'create'}A namespace, its members and its rules{:else}
-            <span class="mono">{selectedName}</span> · {myRole ?? (selected?.record ? 'not a member' : 'open to everyone')}
+          {#if panel === 'create'}Yours or an organisation's{:else}
+            <span class="mono">{selectedName}</span> · {info ? `${info.owner_kind === 'org' ? 'org' : 'personal'} · ${info.role}${info.private ? ' · private' : ''}` : (selected?.platform ? 'platform' : 'open to everyone')}
           {/if}
         </div>
       </div>
     </div>
 
-    {#if panel === 'detail'}
+    {#if panel === 'detail' && info}
       <div class="pj-tabs" role="tablist">
-        {#each [['overview', 'Overview'], ['members', `Members (${draft.members?.length ?? 0})`], ['policy', 'Policy'], ['environments', 'Environments']] as [key, label]}
+        {#each [['overview', 'Overview'], ['members', `Members (${dMembers.length})`], ['policy', 'Policy'], ['environments', 'Environments']] as [key, label]}
           <button class="pj-tab" class:active={tab === key} role="tab" aria-selected={tab === key} onclick={() => (tab = key as any)}>{label}</button>
         {/each}
       </div>
     {/if}
 
-    {#if message}<div class="pj-msg" class:ok={message === 'Saved.'}>{message}</div>{/if}
+    {#if message}<div class="pj-msg" class:ok={messageOk}>{message}</div>{/if}
 
-    {#if panel === 'create' || tab === 'overview'}
+    {#if panel === 'create'}
       <div class="pj-form">
-        {#if panel === 'create'}
-          <label><span>Namespace</span>
-            <input class="mono" bind:value={newSlug} placeholder="orders-app" autocomplete="off" />
-            <em>Lowercase letters, digits and dashes. It can't be changed later.</em>
-          </label>
-        {/if}
-        <label><span>Display name</span>
-          <input bind:value={draft.display_name} placeholder={panel === 'create' ? (newSlug || 'Orders app') : selectedName} disabled={panel === 'detail' && !canEdit} />
-        </label>
-        <label><span>Description</span>
-          <textarea rows="3" bind:value={draft.description} placeholder="What this project delivers" disabled={panel === 'detail' && !canEdit}></textarea>
-        </label>
-        {#if panel === 'detail' && selected}
-          <div class="pj-facts">
-            <div><span>Owner</span>{selected.record?.owner?.name || selected.record?.owner?.email || '— (open project)'}</div>
-            <div><span>Created</span>{selected.record?.created_at ? new Date(selected.record.created_at).toLocaleDateString() : '—'}</div>
-            <div><span>Holds</span>{card(selected).meta}</div>
+        {#if !profile}
+          <div class="pj-box">
+            <h4>Choose your handle</h4>
+            <p class="pj-note">Your personal projects are named after it: <span class="mono">{handleDraft || 'you'}-orders</span>. It's yours for good, shared with no org.</p>
+            <div class="pj-row">
+              <input class="mono" bind:value={handleDraft} placeholder="your-handle" />
+              <button class="pj-btn primary" onclick={claimHandle} disabled={saving || !handleDraft.trim()}>Claim</button>
+            </div>
           </div>
-          <div class="pj-row">
-            <button class="pj-btn" onclick={() => setProject(selected.name)}>Work in this project</button>
-            {#if canEdit && selected.record}
-              <button class="pj-btn danger" onclick={remove} disabled={!isEmpty(selected)}
-                      title={isEmpty(selected) ? '' : 'Move or delete its flows, resources and triggers first'}>Delete project</button>
+        {/if}
+        <label><span>Owner</span>
+          <select bind:value={owner}>
+            {#if profile}<option value={`user:${profile.handle}`}>Me — @{profile.handle}</option>{/if}
+            {#each orgs as o}<option value={`org:${o.handle}`}>{o.handle} (org, {o.role})</option>{/each}
+          </select>
+        </label>
+        <label><span>Project name</span>
+          <input class="mono" bind:value={newName} placeholder="orders" autocomplete="off" />
+          <em>Namespace: <span class="mono">{previewNs || '<owner>-<name>'}</span> — lowercase letters, digits and dashes.</em>
+        </label>
+        <label><span>Display name</span><input bind:value={newDisplay} placeholder={newName || 'Orders'} /></label>
+        <label><span>Description</span><textarea rows="3" bind:value={newDesc} placeholder="What this project delivers"></textarea></label>
+        <label class="pj-check">
+          <input type="checkbox" bind:checked={newPrivate} />
+          <span><b>Private</b><em>{owner.startsWith('org:') ? "Only the project's members and the org's admins and security admins see it." : 'Only you see it.'}</em></span>
+        </label>
+        <div class="pj-row"><button class="pj-btn primary" onclick={create} disabled={saving || !owner || !newName.trim()}>{saving ? 'Creating…' : 'Create project'}</button></div>
+      </div>
+
+    {:else if !info}
+      <div class="pj-form">
+        <p class="pj-note">{selected?.platform
+          ? 'A platform namespace: the shared LLMs, memory and MCP servers every project uses, and A3T’s own flows.'
+          : 'This namespace is from before projects, so it has no owner and is open to everyone. New work belongs in a project of yours or your organisation’s.'}</p>
+        <div class="pj-facts"><div><span>Holds</span>{selected ? card(selected).meta : ''}</div></div>
+        <div class="pj-row"><button class="pj-btn" onclick={() => setProject(selectedName)}>Work in this namespace</button></div>
+      </div>
+
+    {:else if tab === 'overview'}
+      <div class="pj-form">
+        <label><span>Display name</span><input bind:value={dName} disabled={!canEdit} /></label>
+        <label><span>Description</span><textarea rows="3" bind:value={dDesc} disabled={!canEdit}></textarea></label>
+        <label class="pj-check">
+          <input type="checkbox" bind:checked={dPrivate} disabled={!canEdit} />
+          <span><b>Private</b><em>{info.owner_kind === 'org' ? "Only its members and the org's admins and security admins see it." : 'Only you see it.'}</em></span>
+        </label>
+        <div class="pj-facts">
+          <div><span>Owner</span>{info.owner_kind === 'org' ? `org ${info.owner}` : `@${info.owner}`}</div>
+          <div><span>Created</span>{info.created_at ? new Date(info.created_at).toLocaleDateString() : '—'}</div>
+          <div><span>Holds</span>{card(selected!).meta}</div>
+        </div>
+        <div class="pj-row">
+          <button class="pj-btn" onclick={() => setProject(info.namespace)}>Work in this project</button>
+          {#if canEdit}<button class="pj-btn danger" onclick={remove}>Delete project</button>{/if}
+        </div>
+
+        {#if info.owner_kind === 'user' && info.role === 'owner'}
+          <div class="pj-box">
+            <h4>Move to an organisation</h4>
+            {#if adminOrgs.length === 0}
+              <p class="pj-note">You need the admin role in an organisation to move a project into it.</p>
+            {:else}
+              <p class="pj-note">The namespace becomes <span class="mono">&lt;org&gt;-{info.name}</span>. Flows, resources and triggers move with it, and references inside the project are rewritten. Run history stays under the old name.</p>
+              <div class="pj-row">
+                <select bind:value={moveOrg} onchange={() => (moveReport = null)}>
+                  <option value="">Choose an organisation…</option>
+                  {#each adminOrgs as o}<option value={o.handle}>{o.handle}</option>{/each}
+                </select>
+                <button class="pj-btn" onclick={previewMove} disabled={!moveOrg || saving}>Preview</button>
+              </div>
+              {#if moveReport}
+                <div class="pj-report">
+                  <div><b>{moveReport.from}</b> → <b>{moveReport.to}</b></div>
+                  <div>{moveReport.flows?.length ?? 0} flows, {moveReport.resources?.length ?? 0} resources, {moveReport.triggers?.length ?? 0} triggers move.</div>
+                  {#if moveReport.external_references?.length}
+                    <div class="warn">These refer to it from outside and will break: {moveReport.external_references.join(', ')}</div>
+                  {:else}
+                    <div class="dim">Nothing outside the project refers to it.</div>
+                  {/if}
+                  <button class="pj-btn primary" onclick={doMove} disabled={saving}>{saving ? 'Moving…' : `Move to ${moveOrg}`}</button>
+                </div>
+              {/if}
             {/if}
           </div>
-          {#if !selected.record && canEdit}
-            <p class="pj-note">This namespace has no project record yet, so it's open to everyone. Save to make it a project you own, then add members.</p>
-          {/if}
-        {:else}
-          <p class="pj-note">You become the project's owner. Add members next.</p>
-          <div class="pj-row"><button class="pj-btn primary" onclick={create} disabled={saving || !newSlug.trim()}>{saving ? 'Creating…' : 'Create project'}</button></div>
         {/if}
       </div>
+
     {:else if tab === 'members'}
       <div class="pj-form">
         <table class="pj-table">
-          <thead><tr><th>Member</th><th>Kind</th><th>Role</th><th></th></tr></thead>
+          <thead><tr><th>Member</th><th>Role</th><th></th></tr></thead>
           <tbody>
-            {#if selected?.record?.owner}
-              <tr><td>{selected.record.owner.name || selected.record.owner.email}<div class="dim mono">{selected.record.owner.email ?? selected.record.owner.id}</div></td><td>user</td><td>owner</td><td></td></tr>
-            {/if}
-            {#each draft.members ?? [] as m (m.kind + m.id)}
+            {#each dMembers as m (m.id)}
               <tr>
-                <td>{m.name || m.id}{#if m.name}<div class="dim mono">{m.id}</div>{/if}</td>
-                <td>{m.kind}</td>
-                <td>
-                  <select bind:value={m.role} disabled={!canEdit}>
-                    {#each ROLES as r}<option value={r}>{r}</option>{/each}
-                  </select>
-                </td>
+                <td>{m.name || m.email || m.id}<div class="dim mono">{m.email || m.id}</div></td>
+                <td><select bind:value={m.role} disabled={!canEdit}>{#each ROLES as r}<option value={r}>{r}</option>{/each}</select></td>
                 <td>{#if canEdit}<button class="pj-x" onclick={() => removeMember(m)} title="Remove">×</button>{/if}</td>
               </tr>
             {:else}
-              {#if !selected?.record?.owner}<tr><td colspan="4" class="dim">No members yet.</td></tr>{/if}
+              <tr><td colspan="3" class="dim">{info.owner_kind === 'org' ? "No named members — the org's admins (and, unless private, all its members) see it." : 'Only you so far.'}</td></tr>
             {/each}
           </tbody>
         </table>
-
         {#if canEdit}
           <div class="pj-add">
-            <select bind:value={addKind}><option value="user">User</option><option value="group">Group</option></select>
-            <input bind:value={addId} list="pj-users" placeholder={addKind === 'user' ? 'email' : 'group name (Keycloak)'} onkeydown={(e) => { if (e.key === 'Enter') addMember(); }} />
-            <datalist id="pj-users">{#each knownUsers as u}<option value={u.id}>{u.label}</option>{/each}</datalist>
+            <input bind:value={addWho} list="pj-users" placeholder="name or email" onkeydown={(e) => { if (e.key === 'Enter') addMember(); }} />
+            <datalist id="pj-users">{#each directory as u}<option value={u.email || u.id}>{u.name}{u.source === 'sso' ? ' (SSO)' : ''}</option>{/each}</datalist>
             <select bind:value={addRole} title={ROLE_HINT[addRole]}>{#each ROLES as r}<option value={r}>{r}</option>{/each}</select>
             <button class="pj-btn" onclick={addMember}>Add</button>
           </div>
           <ul class="pj-roles">{#each ROLES as r}<li><b>{r}</b> — {ROLE_HINT[r]}</li>{/each}</ul>
         {/if}
-        <p class="pj-note">Membership decides “My” and “Shared” and which projects you're offered today. Permissions per role apply once project-scoped Cedar is on (next step); until then the org roles still decide what anyone may do. Save to keep changes.</p>
+        <p class="pj-note">Members decide who sees the project now. What each role may do inside it takes effect once project-scoped Cedar is on (next step); until then the org-wide roles decide. Save to keep changes.</p>
       </div>
+
     {:else if tab === 'policy'}
       <div class="pj-form">
         <h4>Project rules</h4>
         {#each POLICY_PRESETS as rule}
           <label class="pj-check">
-            <input type="checkbox" disabled={!canEdit}
-                   checked={!!draft.policy?.[rule.key]}
-                   onchange={(e) => { draft.policy = { ...(draft.policy ?? {}), [rule.key]: e.currentTarget.checked }; }} />
+            <input type="checkbox" disabled={!canEdit} checked={!!dPolicy[rule.key]}
+                   onchange={(e) => { dPolicy = { ...dPolicy, [rule.key]: e.currentTarget.checked }; }} />
             <span><b>{rule.label}</b><em>{rule.hint}</em></span>
           </label>
         {/each}
         <p class="pj-note">Saved with the project, enforced once project-scoped Cedar is on (next step). Always in force, from the org baseline: deny by default, agents act only on behalf of a user, destructive tools need an admin, prod deploys need an admin, and InfoSec owns Cedar policy resources — see Security → Policies.</p>
       </div>
+
     {:else if tab === 'environments'}
       <div class="pj-form">
-        <div class="pj-envs">{#each draft.environments ?? ENVIRONMENTS as env}<span class="pj-env {env}">{env}</span>{/each}</div>
+        <div class="pj-envs">{#each info.environments?.length ? info.environments : ENVIRONMENTS as env}<span class="pj-env {env}">{env}</span>{/each}</div>
         <p class="pj-note">Environments arrive with the next stage: runtimes labelled per environment, the environment switcher in the top bar, per-environment resource values and promotion from dev to prod.</p>
       </div>
     {/if}
@@ -396,14 +474,19 @@
     padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--r-sm);
     background: var(--bg-surface); color: var(--text-1); font-size: 13px; font-family: inherit;
   }
-  .pj-form .mono, .mono { font-family: var(--font-mono); }
+  .mono { font-family: var(--font-mono); }
   .dim { color: var(--text-4); font-size: 11px; }
+  .warn { color: var(--warn, #b45309); font-size: 12px; }
+  .pj-box { border: 1px solid var(--border); border-radius: var(--r); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-surface); }
+  .pj-report { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+  .pj-report .pj-btn { align-self: flex-start; }
   .pj-facts { display: grid; gap: 6px; font-size: 12.5px; color: var(--text-2); }
   .pj-facts span { display: inline-block; width: 80px; color: var(--text-4); }
-  .pj-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pj-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .pj-btn { padding: 7px 14px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--bg-surface); font-size: 12.5px; color: var(--text-1); cursor: pointer; }
   .pj-btn:hover:not(:disabled) { border-color: var(--spec); color: var(--spec); }
   .pj-btn.primary { background: var(--spec); border-color: var(--spec); color: white; }
+  .pj-btn.primary:hover:not(:disabled) { color: white; opacity: 0.9; }
   .pj-btn.danger:hover:not(:disabled) { border-color: var(--err, #d44); color: var(--err, #d44); }
   .pj-btn:disabled { opacity: 0.5; cursor: default; }
   .pj-note { margin: 0; font-size: 11.5px; color: var(--text-4); line-height: 1.5; }
@@ -412,7 +495,7 @@
   .pj-table td { padding: 8px; border-bottom: 1px solid var(--divider, var(--border)); vertical-align: middle; }
   .pj-x { border: none; background: none; color: var(--text-4); font-size: 16px; cursor: pointer; }
   .pj-x:hover { color: var(--err, #d44); }
-  .pj-add { display: grid; grid-template-columns: 90px 1fr 120px auto; gap: 8px; }
+  .pj-add { display: grid; grid-template-columns: 1fr 120px auto; gap: 8px; }
   .pj-roles { margin: 0; padding-left: 18px; font-size: 11.5px; color: var(--text-3); line-height: 1.6; }
   .pj-check { flex-direction: row !important; align-items: flex-start; gap: 10px !important; }
   .pj-check span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--text-1); }

@@ -69,7 +69,7 @@
       <div class="ps-sep"></div>
       {#each listed as p (p.name)}
         <button class="ps-item" class:active={project === p.name} role="option" aria-selected={project === p.name} onclick={() => pick(p.name)}>
-          <span class="ps-name">{p.record?.display_name || p.name}{#if p.platform}<span class="ps-tag">platform</span>{/if}</span>
+          <span class="ps-name">{p.info?.display_name || p.name}{#if p.platform}<span class="ps-tag">platform</span>{/if}</span>
           <span class="ps-sub">{counts(p)}</span>
         </button>
       {:else}

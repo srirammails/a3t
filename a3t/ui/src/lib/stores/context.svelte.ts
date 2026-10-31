@@ -7,10 +7,8 @@
 // The project is part of the URL (`/p/<project>/<app>/…`), so a link reproduces
 // what you saw; the last choice is remembered in this browser for a bare URL.
 
-import { get } from 'svelte/store';
-import { mcpCall, projectsApi, type ProjectRecord, type ProjectRole } from '$lib/services/api';
+import { mcpCall, projectsApi, type ProjectInfo, type ProfileInfo, type OrgRole } from '$lib/services/api';
 import { bumpContext } from './apps.svelte.ts';
-import { currentUser, userRole } from './auth';
 
 export type Project = {
   name: string;
@@ -19,9 +17,10 @@ export type Project = {
   flows?: number;
   resources?: number;
   triggers?: number;
-  /// The Projects app's record (owner, members, …); absent for a namespace that
-  /// predates projects, such as `default`, which stays open to everyone.
-  record?: ProjectRecord | null;
+  /// The project as the a3t-projects flow shows it to you (owner, members,
+  /// your role, …). Absent for a namespace that predates projects, such as
+  /// `default`, which stays open to everyone.
+  info?: ProjectInfo;
 };
 
 /// What a list holds decides whether platform namespaces belong in it.
@@ -47,6 +46,8 @@ let projects = $state<Project[]>(FALLBACK);
 let project = $state<string>(ALL);
 let showPlatform = $state(false);
 let loaded = false;
+let profile = $state<ProfileInfo | null>(null);
+let myOrgs = $state<{ handle: string; id: string; role: OrgRole }[]>([]);
 
 function remembered(): { project?: string; showPlatform?: boolean } {
   try { return JSON.parse(localStorage.getItem(STORE_KEY) ?? '{}') ?? {}; } catch { return {}; }
@@ -83,22 +84,29 @@ function syncUrl() {
 export function getProjects(): Project[] { return projects; }
 export function getProject(): string { return project; }
 export function getShowPlatform(): boolean { return showPlatform; }
-/// The current user's role in a project: `owner`/member role from its record,
-/// or null when they aren't in it. A project without a record has no members.
-export function roleIn(p: Project): ProjectRole | null {
-  const me = get(currentUser);
-  if (!me || !p.record) return null;
-  if (p.record.owner?.id === me.id) return 'owner';
-  const m = p.record.members?.find((x) => x.kind === 'user' && (x.id === me.id || x.id === me.email));
-  return m?.role ?? null;
+/// Your profile handle (the owner part of your personal projects' namespaces).
+export function getProfile(): ProfileInfo | null { return profile; }
+/// The orgs you belong to, with your role in each.
+export function getMyOrgs() { return myOrgs; }
+
+/// Your role in a project as the server decided it (owner, developer, …,
+/// org-admin, org-member, superadmin), or null for a namespace that predates
+/// projects.
+export function roleIn(p: Project): string | null {
+  return p.info?.role ?? null;
 }
 
-/// Whether the dash offers a project: any project unless it is "members only",
-/// in which case its members and admins.
-export function canSee(p: Project): boolean {
-  if (!p.record?.policy?.members_only) return true;
-  const role = get(userRole);
-  return roleIn(p) != null || role === 'superadmin' || role === 'admin';
+/// A project is "mine" when I own it or am in it — not when I only see it as
+/// superadmin or as a plain member of its org.
+export function isMine(p: Project): boolean {
+  const r = roleIn(p);
+  return r != null && r !== 'superadmin' && r !== 'org-member';
+}
+
+/// Every project in the list is one the server let you see; legacy namespaces
+/// (no project) are open to everyone.
+export function canSee(_p: Project): boolean {
+  return true;
 }
 
 export function isPlatform(ns: string | undefined): boolean {
@@ -171,12 +179,22 @@ export function contextFromUrl() {
 export async function loadProjects(force = false) {
   if (loaded && !force) return;
   loaded = true;
-  const res = await mcpCall('list_projects', {});
-  const list: Project[] | undefined = res.ok ? (res.data?.projects ?? undefined) : undefined;
-  if (!list?.length) return; // keep the fallback
-  // Records come from each namespace; platform namespaces have none.
-  const records = await Promise.all(list.map((p) => (p.platform ? null : projectsApi.get(p.name).catch(() => null))));
-  projects = list.map((p, i) => ({ ...p, record: records[i] }))
+  // Namespaces and their counts from the registry; projects (who owns them, your
+  // role) from the a3t-projects flow, which leaves out the ones you can't see.
+  const [res, mine] = await Promise.all([mcpCall('list_projects', {}), projectsApi.list()]);
+  const list: Project[] = res.ok ? (res.data?.projects ?? []) : [];
+  const infos: ProjectInfo[] = mine.ok ? (mine.data?.projects ?? []) : [];
+  const hidden = new Set<string>(mine.ok ? (mine.data?.project_namespaces ?? []) : []);
+  profile = mine.ok ? (mine.data?.profile ?? null) : null;
+  myOrgs = mine.ok ? (mine.data?.orgs ?? []) : [];
+  if (!list.length && !infos.length) return; // keep the fallback
+  const byName = new Map(list.map((p) => [p.name, p]));
+  // A project that holds nothing yet isn't in the registry's namespace list.
+  for (const i of infos) if (!byName.has(i.namespace)) byName.set(i.namespace, { name: i.namespace, platform: false });
+  projects = [...byName.values()]
+    .map((p) => ({ ...p, info: infos.find((i) => i.namespace === p.name) }))
+    // A project you can't see is left out entirely, not shown as open.
+    .filter((p) => p.info || p.platform || !hidden.has(p.name))
     .sort((a, b) => Number(a.platform) - Number(b.platform) || a.name.localeCompare(b.name));
   // A remembered project that no longer exists would show an empty dash.
   if (project && !projects.some((p) => p.name === project)) setProject(ALL);

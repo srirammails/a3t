@@ -42,10 +42,27 @@ pub fn merge_context_into_input(input: &Value, context: &Value) -> Value {
 
 /// Merge exported values into the workflow context
 /// Always merges — never replaces context entirely
+/// The `$context` key holding the run's principal; set once, never merged over.
+pub const PRINCIPAL_KEY: &str = "_principal";
+
+/// The principal as flows see it: `kind`, `id`, `roles`, and `user` — the human
+/// the run acts for (the agent's `on_behalf_of`, or the human itself).
+pub fn principal_value(p: &flowr_policy::Principal) -> Value {
+    let user = match p {
+        flowr_policy::Principal::Human { user_id, .. } => Value::String(user_id.clone()),
+        flowr_policy::Principal::Agent { on_behalf_of, .. } => on_behalf_of.clone().map(Value::String).unwrap_or(Value::Null),
+        flowr_policy::Principal::Service { .. } => Value::Null,
+    };
+    serde_json::json!({ "kind": p.kind(), "id": p.id(), "roles": p.roles(), "user": user })
+}
+
 pub fn merge_into_context(context: &mut Value, exports: Value) {
     match (&mut *context, exports) {
         (Value::Object(ctx), Value::Object(exp)) => {
             for (key, val) in exp {
+                if key == PRINCIPAL_KEY && ctx.contains_key(PRINCIPAL_KEY) {
+                    continue;
+                }
                 ctx.insert(key, val);
             }
         }

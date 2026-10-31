@@ -1,0 +1,291 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-orgs
+  version: 1.0.0
+  metadata:
+    description: >
+      Organisations and their members. A user is independent and can be in
+      several orgs, as member, admin or securityadmin. Superadmin creates and
+      deletes orgs; superadmin or the org's admins manage its members.
+      Input: { action: list | create | delete | set_member | remove_member, ... }.
+      Output: { ok, orgs? , error? }. The caller is $context._principal.
+do:
+- whoami:
+    set:
+      _me: '${ ($context._principal // {}).user }'
+      _super: '${ (($context._principal // {}).roles // []) | index("SuperAdmin") != null }'
+      _args: '${ . }'
+    export:
+      as: "."
+- signed-in:
+    switch:
+    - anonymous:
+        when: '${ $context._me == null }'
+        then: deny
+    - default:
+        then: load-orgs
+- deny:
+    set:
+      ok: false
+      error: Sign in to see organisations.
+    then: end
+- load-orgs:
+    call: lancedb
+    with:
+      operation: query
+      table: orgs
+      limit: 1000
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_orgs: .}'
+- load-members:
+    call: lancedb
+    with:
+      operation: query
+      table: org_members
+      limit: 10000
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_members: .}'
+# Every org with its members and the caller's role in it; a non-superadmin
+# sees only the orgs they belong to.
+- shape:
+    set:
+      _view: >-
+        ${ [ $context._orgs[] | . as $o
+             | ($context._members | map(select(.org_id == $o.id))) as $m
+             | (($m | map(select(.user_id == $context._me)) | .[0]) // {}).role as $mine
+             | select($context._super or $mine != null)
+             | { id: $o.id, handle: $o.slug, display_name: $o.name, created_at: $o.created_at,
+                 my_role: $mine,
+                 can_admin: ($context._super or $mine == "admin"),
+                 members: ($m | map({ user_id, email, name, role })) } ] }
+      _target: '${ $context._orgs | map(select(.slug == ($context._args.org // ""))) | .[0] // null }'
+    export:
+      as: "."
+- route:
+    switch:
+    - create:
+        when: '${ $context._args.action == "create" }'
+        then: create-check
+    - delete:
+        when: '${ $context._args.action == "delete" }'
+        then: delete-check
+    - set-member:
+        when: '${ $context._args.action == "set_member" }'
+        then: member-check
+    - remove-member:
+        when: '${ $context._args.action == "remove_member" }'
+        then: member-check
+    - default:
+        then: list
+- list:
+    set:
+      ok: true
+      orgs: '${ $context._view }'
+    then: end
+
+# ── create (superadmin) ──
+- create-check:
+    switch:
+    - not-super:
+        when: '${ $context._super != true }'
+        then: need-super
+    - malformed:
+        when: '${ ($context._args.org // "") | test("^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$") | not }'
+        then: bad-handle
+    - reserved:
+        when: '${ ["a3t", "system", "admin", "api", "p", "www", "platform", "org", "user"] | index($context._args.org) != null }'
+        then: reserved
+    - exists:
+        when: '${ $context._target != null }'
+        then: taken
+    - default:
+        then: create-find-profile
+- need-super:
+    set:
+      ok: false
+      error: Only a superadmin can create or delete organisations.
+    then: end
+- bad-handle:
+    set:
+      ok: false
+      error: An org handle is 2-24 lowercase letters, digits and dashes, starting and ending with a letter or digit.
+    then: end
+- reserved:
+    set:
+      ok: false
+      error: That handle is reserved.
+    then: end
+- taken:
+    set:
+      ok: false
+      error: That handle is taken.
+    then: end
+- create-find-profile:
+    call: lancedb
+    with:
+      operation: query
+      table: profiles
+      filter: handle = "${ $context._args.org }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_taken_profile: .}'
+- create-free:
+    switch:
+    - taken-by-user:
+        when: '${ ($context._taken_profile | length) > 0 }'
+        then: taken
+    - default:
+        then: create-insert
+- create-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: orgs
+      records:
+      - id: '${ "org-" + $context._args.org }'
+        name: '${ $context._args.display_name // $context._args.org }'
+        slug: '${ $context._args.org }'
+        plan: pro
+        settings: '{}'
+        created_at: '${ now | todate }'
+        updated_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+- created:
+    set:
+      ok: true
+      org: '${ { id: ("org-" + $context._args.org), handle: $context._args.org } }'
+    then: end
+
+# ── delete (superadmin; only an org that owns no projects) ──
+- delete-check:
+    switch:
+    - not-super:
+        when: '${ $context._super != true }'
+        then: need-super
+    - missing:
+        when: '${ $context._target == null }'
+        then: no-org
+    - default-org:
+        when: '${ $context._target.id == "org-default" }'
+        then: keep-default
+    - default:
+        then: delete-find-projects
+- no-org:
+    set:
+      ok: false
+      error: No such organisation.
+    then: end
+- keep-default:
+    set:
+      ok: false
+      error: The default organisation can't be deleted.
+    then: end
+- delete-find-projects:
+    call: lancedb
+    with:
+      operation: query
+      table: projects
+      filter: owner_id = "${ $context._target.id }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_owned: .}'
+- delete-empty:
+    switch:
+    - has-projects:
+        when: '${ ($context._owned | length) > 0 }'
+        then: has-projects
+    - default:
+        then: delete-members
+- has-projects:
+    set:
+      ok: false
+      error: This organisation still owns projects. Move or delete them first.
+    then: end
+- delete-members:
+    call: lancedb
+    with:
+      operation: delete
+      table: org_members
+      filter: org_id = "${ $context._target.id }"
+      _resource: a3t/a3t-platform-db
+- delete-org:
+    call: lancedb
+    with:
+      operation: delete
+      table: orgs
+      filter: id = "${ $context._target.id }"
+      _resource: a3t/a3t-platform-db
+- deleted:
+    set:
+      ok: true
+    then: end
+
+# ── members (superadmin or the org's admins) ──
+- member-check:
+    switch:
+    - missing:
+        when: '${ $context._target == null }'
+        then: no-org
+    - not-admin:
+        when: '${ (($context._view | map(select(.id == $context._target.id)) | .[0]) // {}).can_admin != true }'
+        then: need-admin
+    - no-user:
+        when: '${ ($context._args.user_id // "") | test("^[A-Za-z0-9@._:-]{1,128}$") | not }'
+        then: bad-user
+    - bad-role:
+        when: '${ $context._args.action == "set_member" and (["member", "admin", "securityadmin"] | index($context._args.role // "") == null) }'
+        then: bad-role
+    - default:
+        then: member-remove-old
+- need-admin:
+    set:
+      ok: false
+      error: Managing members needs superadmin or the org's admin role.
+    then: end
+- bad-user:
+    set:
+      ok: false
+      error: Pick a user from the directory.
+    then: end
+- bad-role:
+    set:
+      ok: false
+      error: A member's role is member, admin or securityadmin.
+    then: end
+- member-remove-old:
+    call: lancedb
+    with:
+      operation: delete
+      table: org_members
+      filter: id = "${ $context._target.id + ":" + $context._args.user_id }"
+      _resource: a3t/a3t-platform-db
+- member-route:
+    switch:
+    - removing:
+        when: '${ $context._args.action == "remove_member" }'
+        then: member-done
+    - default:
+        then: member-insert
+- member-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: org_members
+      records:
+      - id: '${ $context._target.id + ":" + $context._args.user_id }'
+        org_id: '${ $context._target.id }'
+        user_id: '${ $context._args.user_id }'
+        email: '${ $context._args.email // "" }'
+        name: '${ $context._args.name // "" }'
+        role: '${ $context._args.role }'
+        added_by: '${ $context._me }'
+        created_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+- member-done:
+    set:
+      ok: true

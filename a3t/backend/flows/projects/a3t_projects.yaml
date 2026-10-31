@@ -1,0 +1,424 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-projects
+  version: 1.0.0
+  metadata:
+    description: >
+      Projects: a namespace owned by a user (<handle>-<project>) or an org
+      (<org>-<project>), with members, rules and environments.
+      Visibility — a private personal project: its owner only; a personal one:
+      owner and members; an org project: its members and the org's admins and
+      security admins, plus every org member unless it is private. Superadmin
+      sees org projects and non-private personal ones.
+      Input: { action: list | create | update | delete | move, ... }.
+      Output: { ok, projects? , project? , report? , error? }.
+      The caller is $context._principal.
+do:
+- whoami:
+    set:
+      _me: '${ ($context._principal // {}).user }'
+      _super: '${ (($context._principal // {}).roles // []) | index("SuperAdmin") != null }'
+      _args: '${ . }'
+    export:
+      as: "."
+- signed-in:
+    switch:
+    - anonymous:
+        when: '${ $context._me == null }'
+        then: deny
+    - default:
+        then: load-projects
+- deny:
+    set:
+      ok: false
+      error: Sign in to use projects.
+    then: end
+- load-projects:
+    call: lancedb
+    with:
+      operation: query
+      table: projects
+      limit: 5000
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_projects: .}'
+- load-my-orgs:
+    call: lancedb
+    with:
+      operation: query
+      table: org_members
+      filter: user_id = "${ $context._me }"
+      limit: 1000
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_myorgs: .}'
+- load-my-profile:
+    call: lancedb
+    with:
+      operation: query
+      table: profiles
+      filter: user_id = "${ $context._me }"
+      limit: 1
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_profile: .}'
+- load-orgs:
+    call: lancedb
+    with:
+      operation: query
+      table: orgs
+      limit: 1000
+      _resource: a3t/a3t-platform-db
+    export:
+      as: '{_orgs: .}'
+# The projects the caller may see, each with their role in it and whether they
+# may change it. Every action below authorizes against this list.
+- visible:
+    set:
+      _visible: >-
+        ${ [ $context._projects[] | . as $p
+             | (($p.members // "[]") | fromjson) as $m
+             | (($m | map(select(.id == $context._me)) | .[0]) // {}).role as $mr
+             | (($context._myorgs | map(select(.org_id == $p.owner_id)) | .[0]) // {}).role as $or
+             | (if $p.owner_kind == "user" then
+                  (if $p.owner_id == $context._me then "owner"
+                   elif $p.private == "true" then null
+                   elif $mr != null then $mr
+                   elif $context._super then "superadmin"
+                   else null end)
+                else
+                  (if $mr != null then $mr
+                   elif ($or == "admin" or $or == "securityadmin") then ("org-" + $or)
+                   elif ($or != null and $p.private != "true") then "org-member"
+                   elif $context._super then "superadmin"
+                   else null end)
+                end) as $role
+             | select($role != null)
+             | { namespace: $p.namespace, owner_kind: $p.owner_kind, owner: $p.owner, owner_id: $p.owner_id,
+                 name: $p.name, display_name: $p.display_name, description: $p.description,
+                 private: ($p.private == "true"), members: $m,
+                 policy: (($p.policy // "{}") | fromjson),
+                 environments: (($p.environments // "[]") | fromjson),
+                 created_by: $p.created_by, created_at: $p.created_at, role: $role,
+                 can_admin: ($role == "owner" or $role == "org-admin"
+                             or ($role == "superadmin" and $p.owner_kind == "org")) } ] }
+      _handle: '${ ($context._profile[0] // {}).handle }'
+      _p: '${ ($context._args.namespace // "") as $ns | [ $context._projects[] | select(.namespace == $ns) ] | .[0] // null }'
+    export:
+      as: "."
+- pick:
+    set:
+      _mine: '${ ($context._args.namespace // "") as $ns | $context._visible | map(select(.namespace == $ns)) | .[0] // null }'
+    export:
+      as: "."
+- route:
+    switch:
+    - create:
+        when: '${ $context._args.action == "create" }'
+        then: create-owner
+    - update:
+        when: '${ $context._args.action == "update" }'
+        then: update-check
+    - delete:
+        when: '${ $context._args.action == "delete" }'
+        then: delete-check
+    - move:
+        when: '${ $context._args.action == "move" }'
+        then: move-check
+    - default:
+        then: list
+- list:
+    set:
+      ok: true
+      profile: '${ $context._profile[0] // null }'
+      orgs: '${ $context._myorgs | map(. as $mo | { handle: (($context._orgs | map(select(.id == $mo.org_id)) | .[0]) // {}).slug, id: $mo.org_id, role: $mo.role }) | map(select(.handle != null)) }'
+      projects: '${ $context._visible }'
+      # Every namespace that is a project, so the dash can tell a project you
+      # can't see from a namespace that predates projects (open to everyone).
+      project_namespaces: '${ $context._projects | map(.namespace) }'
+    then: end
+
+# ── create ──
+# Owner is the caller's profile handle, or an org they belong to.
+- create-owner:
+    set:
+      _owner_org: '${ if $context._args.owner_kind == "org" then ($context._orgs | map(select(.slug == ($context._args.owner // ""))) | .[0] // null) else null end }'
+      _ns: '${ ($context._args.owner // "") + "-" + ($context._args.name // "") }'
+    export:
+      as: "."
+- create-check:
+    switch:
+    - bad-name:
+        when: '${ ($context._args.name // "") | test("^[a-z0-9]([a-z0-9-]{0,36}[a-z0-9])?$") | not }'
+        then: bad-name
+    - no-handle:
+        when: '${ $context._args.owner_kind == "user" and $context._handle == null }'
+        then: no-handle
+    - not-mine:
+        when: '${ $context._args.owner_kind == "user" and $context._args.owner != $context._handle }'
+        then: not-yours
+    - no-org:
+        when: '${ $context._args.owner_kind == "org" and $context._owner_org == null }'
+        then: no-org
+    - not-in-org:
+        when: '${ $context._args.owner_kind == "org" and ($context._myorgs | map(select(.org_id == $context._owner_org.id)) | length) == 0 and ($context._super | not) }'
+        then: not-in-org
+    - bad-kind:
+        when: '${ ["user", "org"] | index($context._args.owner_kind // "") == null }'
+        then: bad-kind
+    - exists:
+        when: '${ $context._projects | map(select(.namespace == $context._ns)) | length > 0 }'
+        then: exists
+    - default:
+        then: create-usage
+- bad-name:
+    set:
+      ok: false
+      error: A project name is 2-38 lowercase letters, digits and dashes, starting and ending with a letter or digit.
+    then: end
+- no-handle:
+    set:
+      ok: false
+      error: Choose your profile handle first.
+    then: end
+- not-yours:
+    set:
+      ok: false
+      error: A personal project is created under your own handle.
+    then: end
+- no-org:
+    set:
+      ok: false
+      error: No such organisation.
+    then: end
+- not-in-org:
+    set:
+      ok: false
+      error: You aren't a member of that organisation.
+    then: end
+- bad-kind:
+    set:
+      ok: false
+      error: A project is owned by a user or an org.
+    then: end
+- exists:
+    set:
+      ok: false
+      error: '${ "The namespace " + $context._ns + " is already a project." }'
+    then: end
+- create-usage:
+    call: registry
+    with:
+      operation: usage
+      namespace: '${ $context._ns }'
+    export:
+      as: '{_usage: .}'
+- create-free:
+    switch:
+    - in-use:
+        when: '${ $context._usage.empty != true }'
+        then: in-use
+    - default:
+        then: create-insert
+- in-use:
+    set:
+      ok: false
+      error: '${ "The namespace " + $context._ns + " already holds flows or resources." }'
+    then: end
+- create-insert:
+    call: lancedb
+    with:
+      operation: insert
+      table: projects
+      records:
+      - namespace: '${ $context._ns }'
+        owner_kind: '${ $context._args.owner_kind }'
+        owner: '${ $context._args.owner }'
+        owner_id: '${ if $context._args.owner_kind == "org" then $context._owner_org.id else $context._me end }'
+        name: '${ $context._args.name }'
+        display_name: '${ $context._args.display_name // $context._args.name }'
+        description: '${ $context._args.description // "" }'
+        private: '${ if $context._args.private == true then "true" else "false" end }'
+        members: '[]'
+        policy: '{}'
+        environments: '["dev","staging","prod"]'
+        created_by: '${ $context._me }'
+        created_at: '${ now | todate }'
+        updated_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+- created:
+    set:
+      ok: true
+      project:
+        namespace: '${ $context._ns }'
+    then: end
+
+# ── update (owner, org admin, a member with role owner, or superadmin on org projects) ──
+- update-check:
+    switch:
+    - unseen:
+        when: '${ $context._mine == null }'
+        then: not-found
+    - not-admin:
+        when: '${ $context._mine.can_admin != true and ($context._mine.role != "owner") }'
+        then: need-admin
+    - default:
+        then: update-write
+- not-found:
+    set:
+      ok: false
+      error: No such project.
+    then: end
+- need-admin:
+    set:
+      ok: false
+      error: Only the project's owner or its org's admins can change it.
+    then: end
+- update-write:
+    call: lancedb
+    with:
+      operation: update
+      table: projects
+      filter: namespace = "${ $context._mine.namespace }"
+      values:
+        display_name: '${ $context._args.display_name // $context._mine.display_name }'
+        description: '${ $context._args.description // $context._mine.description }'
+        private: '${ if (if ($context._args | has("private")) then $context._args.private else $context._mine.private end) == true then "true" else "false" end }'
+        members: >-
+          ${ ($context._args.members // $context._mine.members)
+             | map(select((.id // "") != "" and ((.role // "") as $r | ["owner", "developer", "operator", "viewer"] | index($r)) != null)
+                   | { kind: (.kind // "user"), id, email: (.email // ""), name: (.name // ""), role })
+             | tojson }
+        policy: '${ ($context._args.policy // $context._mine.policy) | tojson }'
+        updated_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+- updated:
+    set:
+      ok: true
+    then: end
+
+# ── delete (same as update; only an empty namespace) ──
+- delete-check:
+    switch:
+    - unseen:
+        when: '${ $context._mine == null }'
+        then: not-found
+    - not-admin:
+        when: '${ $context._mine.can_admin != true and ($context._mine.role != "owner") }'
+        then: need-admin
+    - default:
+        then: delete-usage
+- delete-usage:
+    call: registry
+    with:
+      operation: usage
+      namespace: '${ $context._mine.namespace }'
+    export:
+      as: '{_usage: .}'
+- delete-empty:
+    switch:
+    - not-empty:
+        when: '${ $context._usage.empty != true }'
+        then: not-empty
+    - default:
+        then: delete-row
+- not-empty:
+    set:
+      ok: false
+      error: Move or delete the project's flows, resources and triggers first.
+    then: end
+- delete-row:
+    call: lancedb
+    with:
+      operation: delete
+      table: projects
+      filter: namespace = "${ $context._mine.namespace }"
+      _resource: a3t/a3t-platform-db
+- deleted:
+    set:
+      ok: true
+    then: end
+
+# ── move a personal project to an org: <handle>-<name> → <org>-<name> ──
+- move-check:
+    set:
+      _to_org: '${ $context._orgs | map(select(.slug == ($context._args.to_org // ""))) | .[0] // null }'
+      _to_ns: '${ ($context._args.to_org // "") + "-" + (($context._mine // {}).name // "") }'
+      _dry: '${ $context._args.dry_run != false }'
+    export:
+      as: "."
+- move-allowed:
+    switch:
+    - unseen:
+        when: '${ $context._mine == null }'
+        then: not-found
+    - not-owner:
+        when: '${ $context._mine.owner_kind != "user" or $context._mine.role != "owner" }'
+        then: move-not-owner
+    - no-org:
+        when: '${ $context._to_org == null }'
+        then: no-org
+    - not-org-admin:
+        when: '${ ($context._myorgs | map(select(.org_id == $context._to_org.id and .role == "admin")) | length) == 0 and ($context._super | not) }'
+        then: move-not-admin
+    - exists:
+        when: '${ $context._projects | map(select(.namespace == $context._to_ns)) | length > 0 }'
+        then: move-exists
+    - default:
+        then: move-run
+- move-not-owner:
+    set:
+      ok: false
+      error: Only the owner of a personal project can move it to an org.
+    then: end
+- move-not-admin:
+    set:
+      ok: false
+      error: You need the admin role in the target organisation.
+    then: end
+- move-exists:
+    set:
+      ok: false
+      error: '${ "The org already has a project " + $context._to_ns + "." }'
+    then: end
+- move-run:
+    call: registry
+    with:
+      operation: move_namespace
+      from: '${ $context._mine.namespace }'
+      to: '${ $context._to_ns }'
+      dry_run: '${ $context._dry }'
+    export:
+      as: '{_report: .}'
+- move-route:
+    switch:
+    - preview:
+        when: '${ $context._dry }'
+        then: move-preview
+    - default:
+        then: move-row
+- move-preview:
+    set:
+      ok: true
+      report: '${ $context._report }'
+    then: end
+- move-row:
+    call: lancedb
+    with:
+      operation: update
+      table: projects
+      filter: namespace = "${ $context._mine.namespace }"
+      values:
+        namespace: '${ $context._to_ns }'
+        owner_kind: org
+        owner: '${ $context._to_org.slug }'
+        owner_id: '${ $context._to_org.id }'
+        updated_at: '${ now | todate }'
+      _resource: a3t/a3t-platform-db
+- moved:
+    set:
+      ok: true
+      report: '${ $context._report }'
+      project:
+        namespace: '${ $context._to_ns }'

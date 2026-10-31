@@ -113,8 +113,10 @@ impl WorkflowExecutor {
             input.clone()
         };
 
-        // Initialize context
-        ctx.context = Value::Object(serde_json::Map::new());
+        // Initialize context. `$context._principal` is who this run acts for, so a
+        // flow can authorize on it (the A3T project/org flows do); the merge
+        // refuses to overwrite it, so input and exports can't fake it.
+        ctx.context = serde_json::json!({ data_flow::PRINCIPAL_KEY: data_flow::principal_value(&ctx.principal) });
 
         // E2 #2a/#4: lift the flow's `metadata.a3t` (exposedTools, runtimePolicy, …)
         // into template attributes, exposed to policy as `principal.template.*`.

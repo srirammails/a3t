@@ -259,44 +259,98 @@ export const resources = {
     }),
 };
 
-// ── Projects ──
-// A project is a namespace plus its record: a `type: project` registry resource
-// named `project` in that namespace, holding the display name, owner, members and
-// environments. The namespace itself needs no creating — it exists once it holds
-// something, and the record is the first thing it holds.
+// ── Projects, orgs and profiles ──
+// All three are A3T flows (a3t/backend/flows/projects): a3t-projects, a3t-orgs
+// and a3t-profile, over platform-DB tables. The flows decide who may see and
+// change what, from the caller's principal — the UI only asks.
+//
+// A personal project's namespace is <profile handle>-<name>; an org's is
+// <org handle>-<name>. Moving a personal project to an org renames it.
 export type ProjectRole = 'owner' | 'developer' | 'operator' | 'viewer';
-export type ProjectMember = { kind: 'user' | 'group'; id: string; name?: string; role: ProjectRole };
-export type ProjectRecord = {
+export type ProjectMember = { kind: 'user' | 'group'; id: string; email?: string; name?: string; role: ProjectRole };
+export type ProjectInfo = {
+  namespace: string;
+  owner_kind: 'user' | 'org';
+  owner: string;
+  name: string;
   display_name?: string;
   description?: string;
-  owner?: { id: string; email?: string; name?: string };
-  members?: ProjectMember[];
-  environments?: string[];
+  private: boolean;
+  members: ProjectMember[];
   /// Project rules on top of the org baseline (Projects → Policy), by preset key.
-  policy?: Record<string, boolean>;
+  policy: Record<string, boolean>;
+  environments: string[];
+  created_by?: string;
   created_at?: string;
+  /// The caller's role: owner/developer/operator/viewer (member), org-admin,
+  /// org-securityadmin, org-member, or superadmin.
+  role: string;
+  can_admin: boolean;
 };
-export const PROJECT_RECORD = 'project';
+export type OrgRole = 'member' | 'admin' | 'securityadmin';
+export type OrgInfo = {
+  id: string; handle: string; display_name: string; created_at?: string;
+  my_role: OrgRole | null; can_admin: boolean;
+  members: { user_id: string; email?: string; name?: string; role: OrgRole }[];
+};
+export type ProfileInfo = { handle: string; user_id: string; email?: string; name?: string };
+
+/// Run one of the project flows; a flow's own refusal ({ ok: false, error })
+/// comes back as an error.
+async function projectFlow(name: string, input: Record<string, any>): Promise<{ ok: boolean; data?: any; error?: string }> {
+  const res = await execFlow(name, 'a3t', input, { silent: true });
+  if (!res.ok) return res;
+  if (res.data?.ok === false) return { ok: false, error: res.data.error ?? 'Refused' };
+  return { ok: true, data: res.data };
+}
 
 export const projectsApi = {
-  /** The project's record, or null when the namespace has none (e.g. `default`). */
-  get: async (namespace: string): Promise<ProjectRecord | null> => {
-    const res = await mcpCall('get_resource', { namespace, name: PROJECT_RECORD });
-    return res.ok && res.data && typeof res.data === 'object' ? (res.data.config ?? null) : null;
-  },
-  create: (namespace: string, record: ProjectRecord) =>
-    request('/registry/resources', {
-      method: 'POST',
-      body: JSON.stringify({ name: PROJECT_RECORD, namespace, type: 'project', config: record }),
-    }),
-  update: (namespace: string, record: ProjectRecord) =>
-    request(`/registry/resources/${encodeURIComponent(namespace)}/${PROJECT_RECORD}`, {
-      method: 'PUT', body: JSON.stringify(record),
-    }),
-  /** Removes the record only; the caller checks the project is empty first. */
-  remove: (namespace: string) =>
-    request(`/registry/resources/${encodeURIComponent(namespace)}/${PROJECT_RECORD}`, { method: 'DELETE' }),
+  /** Projects you can see (with your role), your profile, your orgs, and every
+   *  namespace that is a project (to hide the ones you can't see). */
+  list: () => projectFlow('a3t-projects', { action: 'list' }),
+  create: (p: { owner_kind: 'user' | 'org'; owner: string; name: string; display_name?: string; description?: string; private?: boolean }) =>
+    projectFlow('a3t-projects', { action: 'create', ...p }),
+  update: (namespace: string, changes: Partial<Pick<ProjectInfo, 'display_name' | 'description' | 'private' | 'members' | 'policy'>>) =>
+    projectFlow('a3t-projects', { action: 'update', namespace, ...changes }),
+  remove: (namespace: string) => projectFlow('a3t-projects', { action: 'delete', namespace }),
+  /** Move a personal project to an org. `dry_run` (the default) reports what
+   *  would move and what outside the project refers to it. */
+  move: (namespace: string, to_org: string, dry_run = true) =>
+    projectFlow('a3t-projects', { action: 'move', namespace, to_org, dry_run }),
 };
+
+export const profileApi = {
+  get: () => projectFlow('a3t-profile', { action: 'get' }),
+  claim: (handle: string, email?: string, name?: string) => projectFlow('a3t-profile', { action: 'claim', handle, email, name }),
+};
+
+export const orgsApi = {
+  list: () => projectFlow('a3t-orgs', { action: 'list' }),
+  create: (org: string, display_name: string) => projectFlow('a3t-orgs', { action: 'create', org, display_name }),
+  remove: (org: string) => projectFlow('a3t-orgs', { action: 'delete', org }),
+  setMember: (org: string, user: { user_id: string; email?: string; name?: string }, role: OrgRole) =>
+    projectFlow('a3t-orgs', { action: 'set_member', org, role, ...user }),
+  removeMember: (org: string, user_id: string) => projectFlow('a3t-orgs', { action: 'remove_member', org, user_id }),
+};
+
+/// Everyone who can be added to an org or project: local users and, in EE, the
+/// identity provider's. Ids are what the server knows a signed-in user as.
+export type DirectoryUser = { id: string; email: string; name: string; source: 'local' | 'sso' };
+export async function loadDirectory(): Promise<DirectoryUser[]> {
+  const out: DirectoryUser[] = [];
+  try {
+    const local = await execFlow('a3t-users', 'a3t', { input: { action: 'list', org_id: 'org-default' } }, { silent: true });
+    const rows = Array.isArray(local.data) ? local.data : (local.data?.rows ?? []);
+    for (const u of rows) if (u?.id) out.push({ id: u.id, email: u.email ?? '', name: u.name ?? '', source: 'local' });
+  } catch { /* not allowed, or no local users */ }
+  try {
+    const sso = await idp.users();
+    for (const u of sso.ok ? (sso.data?.users ?? []) : []) {
+      if (u?.id && !out.some((x) => x.email && x.email === u.email)) out.push({ id: u.id, email: u.email ?? u.username ?? '', name: u.name ?? u.username ?? '', source: 'sso' });
+    }
+  } catch { /* CE, or not an admin */ }
+  return out;
+}
 
 // ── Executions (run history — persisted in the storage backend) ──
 export const executions = {

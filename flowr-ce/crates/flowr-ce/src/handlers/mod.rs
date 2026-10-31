@@ -5,6 +5,7 @@
 //! - call:llm — LLM provider calls (OpenAI, Anthropic, Ollama)
 //! - call:adb — AQL agent memory on ADB (`call:clawdb` is an alias)
 //! - call:mcp — MCP server tool calls
+//! - call:registry — moving a namespace (the A3T project flows)
 //! - call:state:get/set/delete — state store operations
 //! - run:script — inline script execution (Lua, JS, Python)
 
@@ -14,6 +15,7 @@ pub mod call_agent;
 pub mod call_lancedb;
 pub mod call_llm;
 pub mod call_rotate;
+pub mod call_registry;
 pub mod call_mcp;
 pub mod run_script;
 pub mod run_workflow;
@@ -37,5 +39,6 @@ pub fn register_clawdflow_handlers(executor: &mut WorkflowExecutor) {
     executor.register_handler(Arc::new(call_adb::AdbHandler::new("call:adb")));
     executor.register_handler(Arc::new(call_adb::AdbHandler::new("call:clawdb")));
     executor.register_handler(Arc::new(call_rotate::RotateHandler));
+    executor.register_handler(Arc::new(call_registry::RegistryHandler));
     executor.register_handler(Arc::new(call_agent::AgentHandler));
 }

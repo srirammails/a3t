@@ -1,4 +1,5 @@
 <script lang="ts">
+  import OrgsSettings from '$lib/components/settings/OrgsSettings.svelte';
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
   import { onMount } from 'svelte';
   import { execFlow, getPlatformDb, switchPlatformDb, getAdbEmbedding, setAdbEmbedding, getAdbCache, setAdbCache, type PlatformDbStatus, type AdbEmbeddingStatus, type AdbEmbeddingSettings, type AdbCacheStatus, type AdbCacheRule, type AdbCacheKeep } from '$lib/services/api';
@@ -88,6 +89,7 @@
       { key: 'general.platform', label: 'Platform', icon: 'box' },
       { key: 'general.runtime', label: 'Runtime', icon: 'swap' },
       { key: 'general.appearance', label: 'Appearance', icon: 'palette' },
+      { key: 'general.orgs', label: 'Organisations', icon: 'users' },
     ]},
     { label: 'Security', icon: 'shield', ee: true, items: [
       { key: 'security.authn', label: 'Authentication', icon: 'key', ee: true },
@@ -487,6 +489,9 @@
           </button>
         {/each}
       </div>
+
+    {:else if leaf === 'general.orgs'}
+      <OrgsSettings />
 
     {:else if leaf === 'infra.platformdb'}
       <div class="card">

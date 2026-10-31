@@ -28,3 +28,15 @@ fn annotated_a3t_flows_parse() {
     }
     assert_eq!(checked, 7);
 }
+
+/// The project, org and profile flows (a3t/backend/flows/projects) parse.
+#[test]
+fn a3t_project_flows_parse() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../a3t/backend/flows/projects");
+    for f in ["a3t_projects_install.yaml", "a3t_profile.yaml", "a3t_orgs.yaml", "a3t_projects.yaml"] {
+        let p = dir.join(f);
+        let yaml = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+        let wf = swf_parser::parse_yaml(&yaml).unwrap_or_else(|e| panic!("{f} failed to parse: {e}"));
+        assert_eq!(wf.document.namespace, "a3t", "{f}");
+    }
+}
