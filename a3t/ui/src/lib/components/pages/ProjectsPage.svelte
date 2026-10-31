@@ -18,7 +18,7 @@
     getProjects, getShowPlatform, loadProjects, setProject, roleIn, isMine, getProfile, getMyOrgs, type Project,
   } from '$lib/stores/context.svelte.ts';
   import {
-    projectsApi, profileApi, loadDirectory, type ProjectMember, type ProjectRole, type DirectoryUser,
+    projectsApi, profileApi, loadDirectory, releasesApi, mcpCall, type ProjectMember, type ProjectRole, type DirectoryUser,
   } from '$lib/services/api';
 
   const ROLES: ProjectRole[] = ['owner', 'developer', 'operator', 'viewer'];
@@ -47,7 +47,29 @@
 
   // ── Panel state ──
   let panel = $state<'closed' | 'create' | 'detail'>('closed');
-  let tab = $state<'overview' | 'members' | 'policy' | 'environments'>('overview');
+  let tab = $state<'overview' | 'members' | 'policy' | 'releases' | 'environments'>('overview');
+  // Releases: each flow in the project, its versions and the active one.
+  let releases = $state<{ name: string; versions: string[]; active: string }[]>([]);
+  let releasesLoading = $state(false);
+  async function loadReleases(ns: string) {
+    releasesLoading = true;
+    const r = await mcpCall('list_flows', { namespace: ns });
+    const flows: any[] = r.ok ? (r.data?.workflows ?? []) : [];
+    const out = [];
+    for (const f of flows) {
+      const v = await releasesApi.versions(ns, f.name);
+      out.push({ name: f.name, versions: v.ok ? (v.data?.versions ?? []) : [f.version], active: v.ok ? v.data?.active : f.version });
+    }
+    releases = out;
+    releasesLoading = false;
+  }
+  async function activate(name: string, version: string) {
+    if (!info) return;
+    const r = await releasesApi.activate(info.namespace, name, version);
+    say(r.ok ? `${name}: callers without a pin now get ${version}.` : (r.error ?? 'Could not activate'), r.ok);
+    await loadReleases(info.namespace);
+  }
+  $effect(() => { if (tab === 'releases' && info) void loadReleases(info.namespace); });
   let selectedName = $state('');
   let message = $state('');
   let messageOk = $state(false);
@@ -302,7 +324,7 @@
 
     {#if panel === 'detail' && info}
       <div class="pj-tabs" role="tablist">
-        {#each [['overview', 'Overview'], ['members', `Members (${dMembers.length})`], ['policy', 'Policy'], ['environments', 'Environments']] as [key, label]}
+        {#each [['overview', 'Overview'], ['members', `Members (${dMembers.length})`], ['policy', 'Policy'], ['releases', 'Releases'], ['environments', 'Environments']] as [key, label]}
           <button class="pj-tab" class:active={tab === key} role="tab" aria-selected={tab === key} onclick={() => (tab = key as any)}>{label}</button>
         {/each}
       </div>
@@ -479,6 +501,30 @@
         <p class="pj-note">Saved with the project, enforced once project-scoped Cedar is on (next step). Always in force, from the org baseline: deny by default, agents act only on behalf of a user, destructive tools need an admin, prod deploys need an admin, and InfoSec owns Cedar policy resources — see Security → Policies.</p>
       </div>
 
+    {:else if tab === 'releases'}
+      <div class="pj-form">
+        <p class="pj-note">Each flow keeps every version released here. Callers that pin one (<span class="mono">run: workflow … version: 1.0.0</span>) keep it; everyone else gets the active one. Activate rolls that back or forward — one release at a time, never all callers' pins.</p>
+        {#if releasesLoading}<p class="dim">Loading…</p>
+        {:else if releases.length === 0}<p class="dim">No flows in this project yet.</p>
+        {:else}
+          <table class="pj-table">
+            <thead><tr><th>Flow</th><th>Releases</th><th>Active</th></tr></thead>
+            <tbody>
+              {#each releases as r (r.name)}
+                <tr>
+                  <td class="mono">{r.name}</td>
+                  <td class="mono dim">{r.versions.join(', ')}</td>
+                  <td>
+                    <select value={r.active} disabled={!canEdit || r.versions.length < 2} onchange={(e) => activate(r.name, e.currentTarget.value)}>
+                      {#each r.versions as v}<option value={v}>{v}</option>{/each}
+                    </select>
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
+      </div>
     {:else if tab === 'environments'}
       <div class="pj-form">
         <div class="pj-envs">{#each info.environments?.length ? info.environments : ENVIRONMENTS as env}<span class="pj-env {env}">{env}</span>{/each}</div>

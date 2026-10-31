@@ -159,7 +159,7 @@ do:
   }
 
   function applyRows(rows: any[]) {
-    allTemplates = rows.map((r: any) => ({
+    allTemplates = releases(rows.map((r: any) => ({
       name: r.name,
       version: r.version ?? 'v1.0',
       activeVersion: r.version ?? 'v1.0',
@@ -181,7 +181,23 @@ do:
       namespace: projectOf((typeof r.spec_yaml === 'string'
         ? r.spec_yaml.split(/\n(?=\S)/).find((b: string) => b.startsWith('document:'))?.match(/^\s+namespace:\s*['"]?([\w.-]+)/m)?.[1]
         : undefined), r.created_by) as string | undefined,
-    }));
+    })));
+  }
+
+  /// One card per template per project: its newest version, with every
+  /// released version listed (a release is name + version in a project).
+  function releases(list: any[]): any[] {
+    const byKey = new Map<string, any[]>();
+    for (const t of list) {
+      const k = `${t.namespace ?? ''}/${t.name}`;
+      (byKey.get(k) ?? byKey.set(k, []).get(k)!).push(t);
+    }
+    const newer = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true }) > 0;
+    return [...byKey.values()].map((group) => {
+      const top = group.reduce((a, b) => (newer(String(b.version), String(a.version)) ? b : a));
+      const versions = group.map((g) => String(g.version)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      return { ...top, versions, activeVersion: top.version };
+    });
   }
 
 
@@ -613,7 +629,7 @@ do:
                     <div class="tc-desc">{t.description}</div>
                     <div class="tc-tags">{#each t.tags as tag}<span class="badge mut mono" style="font-size: 10px;">{tag}</span>{/each}</div>
                     <div class="tc-footer">
-                      <span class="mono dim" style="font-size: 11px;">v{t.activeVersion}</span>
+                      <span class="mono dim" style="font-size: 11px;">v{t.activeVersion}{#if (t.versions ?? []).length > 1}<span title={`Releases: ${t.versions.join(', ')}`}> · {t.versions.length} releases</span>{/if}</span>
                       {#if t.vertical}<span class="dim" style="font-size: 11px;">&middot; {t.vertical}</span>{/if}
                       <ProjectPill project={t.namespace} />
                     </div>

@@ -44,7 +44,7 @@ async fn one_org_admin_cannot_see_another_org() {
     let db = dir.path().join("platform.lance");
     storage.resources().create(Resource::new("a3t-platform-db", "lancedb", json!({ "db_path": db.to_str().unwrap() })).with_namespace("a3t")).await.unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a3t/backend/flows");
-    for f in ["system/a3t_projects_install.yaml", "a3t/a3t_profile.yaml", "a3t/a3t_orgs.yaml", "a3t/a3t_projects.yaml", "a3t/a3t_share.yaml"] {
+    for f in ["system/a3t_projects_install.yaml", "a3t/a3t_profile.yaml", "a3t/a3t_orgs.yaml", "a3t/a3t_projects.yaml", "a3t/a3t_share.yaml", "a3t/a3t_releases.yaml"] {
         storage.workflows().register(WorkflowRecord::from_yaml(&std::fs::read_to_string(root.join(f)).unwrap()).unwrap()).await.unwrap();
     }
 
@@ -145,6 +145,26 @@ async fn one_org_admin_cannot_see_another_org() {
     assert_eq!(run("wire-ok").await.status, ExecutionStatus::Completed);
     let blocked = run("wire-private").await;
     assert_eq!(blocked.status, ExecutionStatus::Failed, "{:?}", blocked.error);
+
+    // ── Releases: versioned, earlier ones kept, pins honoured, owners roll back ──
+    let again = run_flow(&storage, "bob", "a3t-share", json!({ "kind": "flow", "from": "acme-web", "name": "acme-job", "to": "acme-community" })).await;
+    assert!(again.is_null(), "1.0.0 is already released — refused, not replaced");
+    storage.workflows().register(WorkflowRecord::from_yaml(
+        "document:\n  dsl: 1.0.3\n  namespace: acme-web\n  name: acme-job\n  version: 1.1.0\ndo:\n- a:\n    set:\n      v: two\n").unwrap()).await.unwrap();
+    flow(&storage, "bob", DEV, "a3t-share", json!({ "kind": "flow", "from": "acme-web", "name": "acme-job", "to": "acme-community" })).await;
+    let rel = flow(&storage, "gina", DEV, "a3t-releases", json!({ "action": "versions", "namespace": "acme-community", "name": "acme-job" })).await;
+    assert_eq!((rel["versions"].clone(), rel["active"].clone()), (json!(["1.0.0", "1.1.0"]), json!("1.1.0")), "{rel}");
+    // A caller pinned to 1.0.0 keeps it.
+    storage.workflows().register(WorkflowRecord::from_yaml(
+        "document:\n  dsl: 1.0.3\n  namespace: globex-crm\n  name: wire-pinned\n  version: 1.0.0\ndo:\n- call:\n    run:\n      workflow:\n        namespace: acme-community\n        name: acme-job\n        version: 1.0.0\n        input: {}\n").unwrap()).await.unwrap();
+    let pinned = run("wire-pinned").await;
+    assert_eq!(pinned.status, ExecutionStatus::Completed, "{:?}", pinned.error);
+    assert_eq!(pinned.output.unwrap()["done"], true, "1.0.0 sets done; 1.1.0 would set v");
+    // The owner rolls back; a consumer can't.
+    let denied = run_flow(&storage, "gina", "a3t-releases", json!({ "action": "activate", "namespace": "acme-community", "name": "acme-job", "version": "1.0.0" })).await;
+    assert!(denied.is_null(), "gina may not roll acme's release");
+    flow(&storage, "bob", DEV, "a3t-releases", json!({ "action": "activate", "namespace": "acme-community", "name": "acme-job", "version": "1.0.0" })).await;
+    assert_eq!(storage.workflows().get("acme-community", "acme-job").await.unwrap().metadata.version, "1.0.0");
 }
 
 /// Run an a3t flow as a user and give back its output — Null when the run failed.

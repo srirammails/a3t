@@ -97,6 +97,12 @@ pub trait WorkflowStore: Send + Sync {
     /// Check if a workflow exists
     async fn exists(&self, namespace: &str, name: &str) -> FlowResult<bool>;
 
+    /// A flow's versions and which one is active (`(versions, active)`); none if
+    /// the store can't tell.
+    async fn versions(&self, _namespace: &str, _name: &str) -> FlowResult<(Vec<String>, String)> {
+        Ok((Vec::new(), String::new()))
+    }
+
     /// Every namespace that holds a workflow. Stores that can't enumerate
     /// namespaces return none, and callers fall back to the ones they know.
     async fn namespaces(&self) -> FlowResult<Vec<String>> {

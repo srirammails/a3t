@@ -1,0 +1,47 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t
+  name: a3t-releases
+  version: 1.0.0
+  metadata:
+    description: >
+      A flow's releases. Publishing adds a version and makes it the one callers
+      without a pin get; earlier versions stay, so callers that pin one
+      (run: workflow ... version: x) keep it until they move. Activate rolls the
+      default back or forward. Listing needs read access, activating write
+      (FlowR checks, as the caller).
+      Input: { action: versions | activate, namespace, name, version? }.
+      Output: { ok, namespace, name, versions?, active }.
+do:
+- route:
+    switch:
+    - activate:
+        when: '${ .action == "activate" }'
+        then: activate
+    - default:
+        then: versions
+- versions:
+    call: registry
+    with:
+      operation: versions
+      namespace: '${ .namespace }'
+      name: '${ .name }'
+    export:
+      as: '{_r: .}'
+    then: answer
+- activate:
+    call: registry
+    with:
+      operation: activate
+      namespace: '${ .namespace }'
+      name: '${ .name }'
+      version: '${ .version }'
+    export:
+      as: '{_r: .}'
+- answer:
+    set:
+      ok: true
+      namespace: '${ $context._r.namespace }'
+      name: '${ $context._r.name }'
+      versions: '${ $context._r.versions // null }'
+      active: '${ $context._r.active }'

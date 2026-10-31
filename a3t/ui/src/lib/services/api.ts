@@ -334,6 +334,12 @@ export const shareApi = {
     projectFlow('a3t-share', p),
 };
 
+/// A flow's releases: list them, and roll the active one back or forward.
+export const releasesApi = {
+  versions: (namespace: string, name: string) => projectFlow('a3t-releases', { action: 'versions', namespace, name }),
+  activate: (namespace: string, name: string, version: string) => projectFlow('a3t-releases', { action: 'activate', namespace, name, version }),
+};
+
 export const profileApi = {
   get: () => projectFlow('a3t-profile', { action: 'get' }),
   claim: (handle: string, email?: string, name?: string) => projectFlow('a3t-profile', { action: 'claim', handle, email, name }),

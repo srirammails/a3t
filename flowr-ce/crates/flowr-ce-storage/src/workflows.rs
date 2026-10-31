@@ -106,62 +106,27 @@ impl WorkflowStore for LanceWorkflowStore {
         )
         .map_err(|e| FlowError::Storage(format!("Failed to create record batch: {}", e)))?;
 
+        // Re-registering a version replaces it; other versions stay.
+        let same = format!("namespace = '{}' AND name = '{}' AND version = '{}'",
+            record.metadata.namespace, record.metadata.name, record.metadata.version);
+        table.delete(&same).await.map_err(|e| FlowError::Storage(format!("Failed to replace version: {}", e)))?;
         let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
         table
             .add(Box::new(batches))
             .execute()
             .await
             .map_err(|e| FlowError::Storage(format!("Failed to add workflow: {}", e)))?;
-
-        Ok(())
+        drop(table);
+        drop(conn);
+        // The new version is the active one.
+        self.set_active_version(&record.metadata.namespace, &record.metadata.name, &record.metadata.version).await
     }
 
     async fn get(&self, namespace: &str, name: &str) -> FlowResult<WorkflowRecord> {
         let conn = self.conn.read().await;
-
-        let table = conn
-            .open_table(TABLE_NAME)
-            .execute()
-            .await
-            .map_err(|e| FlowError::Storage(format!("Failed to open workflows table: {}", e)))?;
-
-        // Query for active version using only_if
-        let filter = format!(
-            "namespace = '{}' AND name = '{}' AND enabled = 'true'",
-            namespace, name
-        );
-
-        let batches: Vec<RecordBatch> = table
-            .query()
-            .only_if(filter)
-            .limit(1)
-            .execute()
-            .await
-            .map_err(|e| FlowError::Storage(format!("Failed to query workflows: {}", e)))?
-            .try_collect()
-            .await
-            .map_err(|e| FlowError::Storage(format!("Failed to collect results: {}", e)))?;
-
-        if batches.is_empty() || batches[0].num_rows() == 0 {
-            return Err(FlowError::NotFound(format!(
-                "Workflow {}/{} not found",
-                namespace, name
-            )));
-        }
-
-        let def_col = batches[0]
-            .column_by_name("definition")
-            .ok_or_else(|| FlowError::Storage("Missing definition column".to_string()))?;
-
-        let def_array = def_col
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| FlowError::Storage("Invalid definition column type".to_string()))?;
-
-        let def_json = def_array.value(0);
-
-        serde_json::from_str(def_json)
-            .map_err(|e| FlowError::Storage(format!("Failed to deserialize workflow: {}", e)))
+        let rows = version_rows(&conn, &format!("namespace = '{}' AND name = '{}' AND enabled = 'true'", namespace, name)).await?;
+        let row = active_of(&rows).ok_or_else(|| FlowError::NotFound(format!("Workflow {}/{} not found", namespace, name)))?;
+        serde_json::from_str(&row.4).map_err(|e| FlowError::Storage(format!("Failed to deserialize workflow: {}", e)))
     }
 
     async fn get_version(
@@ -218,49 +183,26 @@ impl WorkflowStore for LanceWorkflowStore {
 
     async fn list(&self, namespace: &str) -> FlowResult<Vec<WorkflowSummary>> {
         let conn = self.conn.read().await;
-
-        let table = conn
-            .open_table(TABLE_NAME)
-            .execute()
-            .await
-            .map_err(|e| FlowError::Storage(format!("Failed to open workflows table: {}", e)))?;
-
-        let filter = format!("namespace = '{}'", namespace);
-
-        let batches: Vec<RecordBatch> = table
-            .query()
-            .only_if(filter)
-            .execute()
-            .await
-            .map_err(|e| FlowError::Storage(format!("Failed to query workflows: {}", e)))?
-            .try_collect()
-            .await
-            .map_err(|e| FlowError::Storage(format!("Failed to collect results: {}", e)))?;
-
+        let rows = version_rows(&conn, &format!("namespace = '{}'", namespace)).await?;
+        // One entry per flow: its active version.
+        let mut by_name: std::collections::BTreeMap<String, Vec<(String, String, String, String, String)>> = Default::default();
+        for r in rows {
+            let name = serde_json::from_str::<WorkflowRecord>(&r.4).map(|w| w.metadata.name).unwrap_or_default();
+            by_name.entry(name).or_default().push(r);
+        }
         let mut summaries = Vec::new();
-
-        for batch in batches {
-            // Get definition column and deserialize for full summary
-            if let Some(def_array) = batch
-                .column_by_name("definition")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-            {
-                for i in 0..batch.num_rows() {
-                    if let Ok(record) = serde_json::from_str::<WorkflowRecord>(def_array.value(i))
-                    {
-                        let task_count = record.parse().map(|wf| wf.tasks.len()).unwrap_or(0);
-                        summaries.push(WorkflowSummary {
-                            namespace: record.metadata.namespace.clone(),
-                            name: record.metadata.name.clone(),
-                            version: record.metadata.version.clone(),
-                            enabled: record.metadata.enabled,
-                            step_count: task_count,
-                        });
-                    }
-                }
+        for versions in by_name.values() {
+            let Some(row) = active_of(versions) else { continue };
+            if let Ok(record) = serde_json::from_str::<WorkflowRecord>(&row.4) {
+                summaries.push(WorkflowSummary {
+                    step_count: record.parse().map(|wf| wf.tasks.len()).unwrap_or(0),
+                    namespace: record.metadata.namespace.clone(),
+                    name: record.metadata.name.clone(),
+                    version: record.metadata.version.clone(),
+                    enabled: record.metadata.enabled,
+                });
             }
         }
-
         Ok(summaries)
     }
 
@@ -301,13 +243,14 @@ impl WorkflowStore for LanceWorkflowStore {
         name: &str,
         version: &str,
     ) -> FlowResult<()> {
-        // Similar limitation
-        tracing::warn!(
-            "set_active_version not fully implemented for LanceDB: {}/{} -> {}",
-            namespace,
-            name,
-            version
-        );
+        let conn = self.conn.read().await;
+        let table = conn.open_table(TABLE_NAME).execute().await
+            .map_err(|e| FlowError::Storage(format!("Failed to open workflows table: {}", e)))?;
+        table.update()
+            .only_if(format!("namespace = '{}' AND name = '{}'", namespace, name))
+            .column("active_version", format!("'{}'", version.replace('\'', "''")))
+            .execute().await
+            .map_err(|e| FlowError::Storage(format!("Failed to set the active version: {}", e)))?;
         Ok(())
     }
 
@@ -321,6 +264,16 @@ impl WorkflowStore for LanceWorkflowStore {
 
     async fn namespaces(&self) -> FlowResult<Vec<String>> {
         distinct_namespaces(&*self.conn.read().await, TABLE_NAME).await
+    }
+
+    async fn versions(&self, namespace: &str, name: &str) -> FlowResult<(Vec<String>, String)> {
+        let conn = self.conn.read().await;
+        let rows = version_rows(&conn, &format!("namespace = '{}' AND name = '{}'", namespace, name)).await?;
+        let active = active_of(&rows).map(|r| r.0.clone()).unwrap_or_default();
+        let mut v: Vec<String> = rows.into_iter().map(|r| r.0).collect();
+        v.sort();
+        v.dedup();
+        Ok((v, active))
     }
 }
 
@@ -349,6 +302,33 @@ pub(crate) async fn distinct_namespaces(conn: &Connection, table: &str) -> FlowR
     Ok(out.into_iter().collect())
 }
 
+
+/// A flow's version rows: (version, active_version, enabled, updated_at, definition).
+async fn version_rows(conn: &Connection, filter: &str) -> FlowResult<Vec<(String, String, String, String, String)>> {
+    let table = conn.open_table(TABLE_NAME).execute().await
+        .map_err(|e| FlowError::Storage(format!("Failed to open workflows table: {}", e)))?;
+    let batches: Vec<RecordBatch> = table.query().only_if(filter.to_string()).execute().await
+        .map_err(|e| FlowError::Storage(format!("Failed to query workflows: {}", e)))?
+        .try_collect().await
+        .map_err(|e| FlowError::Storage(format!("Failed to collect results: {}", e)))?;
+    let mut out = Vec::new();
+    for b in &batches {
+        let col = |n: &str| b.column_by_name(n).and_then(|c| c.as_any().downcast_ref::<StringArray>().cloned());
+        let (Some(v), Some(a), Some(e), Some(u), Some(d)) = (col("version"), col("active_version"), col("enabled"), col("updated_at"), col("definition")) else { continue };
+        for i in 0..b.num_rows() {
+            let get = |c: &StringArray| if c.is_valid(i) { c.value(i).to_string() } else { String::new() };
+            out.push((get(&v), get(&a), get(&e), get(&u), get(&d)));
+        }
+    }
+    Ok(out)
+}
+
+/// Of a flow's version rows, the active one: its `active_version`, else the newest.
+fn active_of(rows: &[(String, String, String, String, String)]) -> Option<&(String, String, String, String, String)> {
+    let newest = rows.iter().max_by_key(|r| r.3.clone())?;
+    rows.iter().find(|r| !newest.1.is_empty() && r.0 == newest.1).or(Some(newest))
+}
+
 #[cfg(test)]
 mod tests {
     use flowr_storage::StorageBackend;
@@ -361,6 +341,29 @@ mod tests {
             "document:\n  dsl: 1.0.3\n  namespace: {namespace}\n  name: {name}\n  version: 1.0.0\ndo:\n- a:\n    set:\n      x: 1\n"
         ))
         .unwrap()
+    }
+
+    fn flow_v(namespace: &str, name: &str, version: &str) -> WorkflowRecord {
+        WorkflowRecord::from_yaml(&format!(
+            "document:\n  dsl: 1.0.3\n  namespace: {namespace}\n  name: {name}\n  version: {version}\ndo:\n- a:\n    set:\n      v: '{version}'\n"
+        ))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn versions_stay_side_by_side_and_one_is_active() {
+        let storage = LanceStorage::in_memory().await.unwrap();
+        storage.init().await.unwrap();
+        let w = storage.workflows();
+        w.register(flow_v("p", "f", "1.0.0")).await.unwrap();
+        w.register(flow_v("p", "f", "1.1.0")).await.unwrap();
+        assert_eq!(w.get("p", "f").await.unwrap().metadata.version, "1.1.0", "the newest release is active");
+        assert_eq!(w.get_version("p", "f", "1.0.0").await.unwrap().metadata.version, "1.0.0", "the old one stays pinnable");
+        assert_eq!(w.list("p").await.unwrap().len(), 1, "listed once");
+        w.set_active_version("p", "f", "1.0.0").await.unwrap();
+        assert_eq!(w.get("p", "f").await.unwrap().metadata.version, "1.0.0", "rolled back");
+        w.register(flow_v("p", "f", "1.0.0")).await.unwrap();
+        assert_eq!(w.list("p").await.unwrap()[0].version, "1.0.0", "re-registering a version replaces it, not duplicates");
     }
 
     #[tokio::test]

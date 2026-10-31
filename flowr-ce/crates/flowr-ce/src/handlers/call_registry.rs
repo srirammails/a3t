@@ -1,5 +1,6 @@
 //! call:registry — registry operations a flow can't do through other tasks.
 //!
+//! `versions` / `activate` list a flow's releases and roll back or forward.
 //! `copy` publishes or clones a flow, resource or trigger (read the source, write the target).
 //! `move_resources` moves some resources (secrets intact) and repoints references to them.
 //! `visible` keeps the items the caller may see. `usage` counts what a namespace holds. `move_namespace` moves every flow, resource and trigger
@@ -307,11 +308,14 @@ async fn copy_item(storage: &dyn StorageBackend, principal: &flowr_policy::Princ
             let rec = storage.workflows().get(from, item).await.map_err(|_| format!("no flow {from}/{item}"))?;
             let yaml = with_namespace(&rec.raw_yaml, to).ok_or("the flow has no document.namespace")?;
             let copy = WorkflowRecord::from_yaml_owned(&yaml, Some(principal.id().to_string())).map_err(|e| e.to_string())?;
-            if storage.workflows().get(to, item).await.is_ok() {
-                storage.workflows().delete(to, item).await.map_err(|e| e.to_string())?;
+            // A release is versioned: earlier ones stay (callers pin them with
+            // `version:`), and a version already released is never replaced.
+            let version = copy.metadata.version.clone();
+            if storage.workflows().get_version(to, item, &version).await.is_ok() {
+                return Err(format!("{to}/{item} {version} is already released; give the flow a new version to publish it again"));
             }
             storage.workflows().register(copy).await.map_err(|e| e.to_string())?;
-            Ok(json!({ "copied": format!("{to}/{item}"), "kind": "flow" }))
+            Ok(json!({ "copied": format!("{to}/{item}"), "kind": "flow", "version": version }))
         }
         "resource" => {
             let r = storage.resources().get(from, item).await.map_err(|_| format!("no resource {from}/{item}"))?;
@@ -382,6 +386,30 @@ impl TaskHandler for RegistryHandler {
                     .await
                     .map(TaskResult::new)
                     .map_err(|e| RuntimeError::task_failed(&task.name, e))
+            }
+            // A flow's releases, and which one callers without a pin get.
+            "versions" => {
+                let store = storage(ctx)?;
+                let (ns, name) = (s("namespace"), s("name"));
+                let g = flowr_policy::namespace::namespace_guard();
+                if g.enforcing() && g.access(&ctx.principal, &ns).await < flowr_policy::namespace::NsAccess::Read {
+                    return Err(RuntimeError::task_failed(&task.name, format!("no flow {ns}/{name} that you can see")));
+                }
+                let (versions, active) = store.workflows().versions(&ns, &name).await.map_err(|e| RuntimeError::task_failed(&task.name, e.to_string()))?;
+                Ok(TaskResult::new(json!({ "namespace": ns, "name": name, "versions": versions, "active": active })))
+            }
+            // Roll a flow back (or forward) to one of its releases.
+            "activate" => {
+                let store = storage(ctx)?;
+                let (ns, name, version) = (s("namespace"), s("name"), s("version"));
+                let g = flowr_policy::namespace::namespace_guard();
+                if g.enforcing() && g.access(&ctx.principal, &ns).await < flowr_policy::namespace::NsAccess::Write {
+                    return Err(RuntimeError::task_failed(&task.name, format!("activating a release of {ns}/{name} needs write access there")));
+                }
+                store.workflows().get_version(&ns, &name, &version).await
+                    .map_err(|_| RuntimeError::task_failed(&task.name, format!("{ns}/{name} has no release {version}")))?;
+                store.workflows().set_active_version(&ns, &name, &version).await.map_err(|e| RuntimeError::task_failed(&task.name, e.to_string()))?;
+                Ok(TaskResult::new(json!({ "namespace": ns, "name": name, "active": version })))
             }
             "move_resources" => {
                 let dry_run = with.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(true);

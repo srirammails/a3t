@@ -86,12 +86,12 @@ do:
           resource:
             type: Template
     then: create-same
-# A name is unique per project (spec namespace), so a project can hold a
-# release of a template another project also has.
+# A release is name + version, unique per project (spec namespace): a project
+# can hold a release of a template another has, and several versions of it.
 - create-same:
     set:
       _cr_same: >-
-        ${ [ .[] | select(((([(.spec_yaml // "") | capture("\n\\s+namespace:\\s*['\"]?(?<ns>[A-Za-z0-9_.-]+)")] | .[0]) // {}).ns) == $context._cr_ns) ] }
+        ${ [ .[] | select(((([(.spec_yaml // "") | capture("\n\\s+namespace:\\s*['\"]?(?<ns>[A-Za-z0-9_.-]+)")] | .[0]) // {}).ns) == $context._cr_ns and .version == $context._cr_version) ] }
     export:
       as: "."
 - create-decide:

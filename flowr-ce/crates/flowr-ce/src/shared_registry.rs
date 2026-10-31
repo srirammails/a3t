@@ -186,6 +186,15 @@ pub async fn seed(db: &dyn PlatformDb, local_path: &str) -> Result<Vec<(String, 
     Ok(copied)
 }
 
+/// Of a flow's version rows, the active one: the row whose version is the
+/// `active_version` they record, else the most recently updated.
+fn active_row(rows: &[Value]) -> Option<&Value> {
+    let s = |r: &Value, k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let newest = rows.iter().max_by_key(|r| s(r, "updated_at"))?;
+    let active = s(newest, "active_version");
+    rows.iter().find(|r| !active.is_empty() && s(r, "version") == active).or(Some(newest))
+}
+
 async fn rows(db: &dyn PlatformDb, table: &str, filter: &str) -> FlowResult<Vec<Value>> {
     let batches: Vec<RecordBatch> = db.query(table, Some(filter), ALL).await.map_err(storage_err)?;
     Ok(batches_to_json(&batches))
@@ -232,14 +241,15 @@ impl WorkflowStore for SharedWorkflows {
         insert(&*self.db, WORKFLOWS, json!({
             "namespace": ns, "name": name, "version": version, "active_version": version,
             "enabled": "true", "definition": def, "created_at": created, "updated_at": now(),
-        })).await
+        })).await?;
+        // Other versions stay (callers can pin them); the new one is active.
+        self.set_active_version(ns, name, version).await
     }
 
-    /// The most recently registered enabled version.
+    /// The active version (`active_version`), else the most recently registered.
     async fn get(&self, namespace: &str, name: &str) -> FlowResult<WorkflowRecord> {
         let rows = rows(&*self.db, WORKFLOWS, &format!("{} AND enabled = 'true'", flow_filter(namespace, name))).await?;
-        let newest = rows.iter().max_by_key(|r| r.get("updated_at").and_then(|u| u.as_str()).unwrap_or_default().to_string());
-        match newest {
+        match active_row(&rows) {
             Some(r) => parse_workflow(r),
             None => Err(FlowError::NotFound(format!("Workflow {namespace}/{name} not found"))),
         }
@@ -257,8 +267,23 @@ impl WorkflowStore for SharedWorkflows {
         namespaces(&*self.db, WORKFLOWS).await
     }
 
+    async fn versions(&self, namespace: &str, name: &str) -> FlowResult<(Vec<String>, String)> {
+        let rows = rows(&*self.db, WORKFLOWS, &flow_filter(namespace, name)).await?;
+        let active = active_row(&rows).and_then(|r| r.get("version").and_then(|v| v.as_str())).unwrap_or_default().to_string();
+        let mut v: Vec<String> = rows.iter().filter_map(|r| r.get("version").and_then(|v| v.as_str()).map(String::from)).collect();
+        v.sort();
+        v.dedup();
+        Ok((v, active))
+    }
+
     async fn list(&self, namespace: &str) -> FlowResult<Vec<WorkflowSummary>> {
-        let rows = rows(&*self.db, WORKFLOWS, &format!("namespace = {}", sql_quote(namespace))).await?;
+        let all = rows(&*self.db, WORKFLOWS, &format!("namespace = {}", sql_quote(namespace))).await?;
+        // One entry per flow: its active version.
+        let mut by_name: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
+        for r in all {
+            by_name.entry(r.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string()).or_default().push(r);
+        }
+        let rows: Vec<Value> = by_name.values().filter_map(|v| active_row(v).cloned()).collect();
         Ok(rows.iter().filter_map(|r| parse_workflow(r).ok()).map(|record| WorkflowSummary {
             step_count: record.parse().map(|wf| wf.tasks.len()).unwrap_or(0),
             namespace: record.metadata.namespace.clone(),
