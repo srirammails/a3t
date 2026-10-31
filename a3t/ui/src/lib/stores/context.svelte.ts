@@ -118,6 +118,15 @@ export function exposedProjects(kind?: ExposedKind): Project[] {
   return projects.filter((p) => (EXPOSED_ROLES as readonly string[]).includes(p.info?.role ?? '') && (!kind || p.info?.role === kind));
 }
 
+/// Whether you may change what is in a namespace: a project you administer, or a
+/// platform namespace (a3t / system) whose org you are an admin of.
+export function canAdminNamespace(ns: string | undefined): boolean {
+  if (!ns) return false;
+  if (['a3t', 'system'].includes(ns)) return myOrgs.some((o) => o.handle === ns && o.role === 'admin');
+  const p = projects.find((x) => x.name === ns);
+  return !!p?.info && (p.info.can_admin || p.info.role === 'owner' || p.info.role === 'developer');
+}
+
 /// Your projects with an exposure — where you can publish to.
 export function publishTargets(): Project[] {
   return projects.filter((p) => p.info?.can_admin && p.info?.policy?.exposure?.audience && p.info.policy.exposure.audience !== 'none');

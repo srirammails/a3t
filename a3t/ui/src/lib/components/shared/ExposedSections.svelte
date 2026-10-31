@@ -17,7 +17,7 @@
   let message = $state('');
 
   const LABEL: Record<ExposedKind, { title: string; hint: string }> = {
-    shared: { title: 'From A3T:', hint: 'Shared by the platform — use, clone or wire' },
+    shared: { title: 'Shared', hint: 'Shared by the platform — use, clone or wire' },
     training: { title: 'Training', hint: 'From the platform — examples to learn from and clone' },
     community: { title: 'Community', hint: "Exposed by other orgs — read, clone, run; not editable" },
   };
@@ -91,7 +91,9 @@
 {#if message}<div class="ex-msg">{message}</div>{/if}
 {#each ['shared', 'training', 'community'] as k (k)}
   {@const list = byKind(k as ExposedKind)}
-  <FoldSection title={`${LABEL[k as ExposedKind].title} ${noun}`} count={list.length} hint={LABEL[k as ExposedKind].hint} defaultOpen={k !== 'community'}>
+  {@const owners = [...new Set(exposedProjects(k as ExposedKind).map((p) => p.info?.owner).filter(Boolean))]}
+  {@const title = k === 'shared' && owners.length ? `${noun} from ${owners.map((o) => o === 'a3t' ? 'A3T' : o === 'system' ? 'System' : o).join(' & ')}` : `${LABEL[k as ExposedKind].title} ${noun}`}
+  <FoldSection {title} count={list.length} hint={LABEL[k as ExposedKind].hint} defaultOpen={k !== 'community'}>
     <div class="ex-grid">
       {#each list as it (it.key)}
         <EntityCard

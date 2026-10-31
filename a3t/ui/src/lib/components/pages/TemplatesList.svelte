@@ -14,7 +14,7 @@
   import AppHome from '$lib/shell/AppHome.svelte';
   import FoldSection from '$lib/components/shared/FoldSection.svelte';
   import ProjectPill from '$lib/components/shared/ProjectPill.svelte';
-  import { inContext, projectOf, getProject } from '$lib/stores/context.svelte.ts';
+  import { inContext, projectOf, getProject, canAdminNamespace } from '$lib/stores/context.svelte.ts';
 
   // Stacked sub-editors (unlimited depth)
   interface SubEditor { type: string; data?: any; closing?: boolean }
@@ -619,7 +619,7 @@ do:
                   </div>
                 </div>
                 <button class="tc-create-agent" onclick={(e) => { e.stopPropagation(); navigateTo('agents', 'Agents', { createFromTemplate: t.id }); }}>+ Create Agent</button>
-                {#if sec.key === 'my'}
+                {#if sec.key === 'my' || canAdminNamespace(t.namespace)}
                   <button class="tc-create-agent" onclick={(e) => { e.stopPropagation(); openPublish({ kind: 'template', from: t.namespace ?? 'default', ref: t.name, label: t.name,
                     template: { name: t.name, version: t.activeVersion, spec_yaml: t.spec_yaml, tags: (t.tags ?? []).join(','), vertical: t.vertical } }); }}>Publish…</button>
                 {/if}
