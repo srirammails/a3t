@@ -459,20 +459,23 @@ do:
     else loadConfig(r);
   }
 
+  function pickKind(category: string) {
+    createForCategory = category;
+    newResource.type = TYPES_BY_CATEGORY[category]?.[0]?.value ?? '';
+    newResource.config = '{}';
+  }
+
   function closePanel() {
     selected = null;
     isNewFlow = false;
   }
 
+  /// Open the create form for a kind of resource; with none (the "All" view)
+  /// the form asks for the kind first.
   function openCreate(category: string) {
     if (category === 'flows') { newFlow(); return; }
     createForCategory = category;
-    // Default type for the category
-    const typeMap: Record<string, string> = {
-      database: 'postgres', api: 'http', mcp: 'mcp',
-      functions: 'function', scripts: 'script', variables: 'variable', credentials: 'credential',
-    };
-    newResource = { name: '', namespace: getProject() || 'default', type: typeMap[category] ?? '', config: '{}' };
+    newResource = { name: '', namespace: getProject() || '', type: TYPES_BY_CATEGORY[category]?.[0]?.value ?? '', config: '{}' };
     createTab = 'details';
     showCreate = true;
   }
@@ -1076,7 +1079,7 @@ do:
     <PropertiesTree
       icon="+"
       color={CAT_COLORS[createForCategory] ?? '#999'}
-      name="New {catMeta(createForCategory).label.replace(/s$/, '')}"
+      name={createForCategory ? `New ${catMeta(createForCategory).label.replace(/s$/, '')}` : 'New resource'}
       meta={createForCategory}
       nodes={createTreeNodes}
       activeNode={createTab}
@@ -1088,7 +1091,14 @@ do:
           <h3>Details</h3>
           <div class="pf-kv">
             <label class="cf-field"><span>Name</span><input type="text" bind:value={newResource.name} placeholder="my-resource" /></label>
-            <label class="cf-field"><span>Namespace</span><input type="text" bind:value={newResource.namespace} /></label>
+            <label class="cf-field"><span>Namespace</span><input type="text" bind:value={newResource.namespace} placeholder="project" /></label>
+            <label class="cf-field"><span>Kind</span>
+              <select value={createForCategory} onchange={(e) => pickKind((e.currentTarget as HTMLSelectElement).value)}>
+                {#if !createForCategory}<option value="" disabled>Choose a kind…</option>{/if}
+                {#each Object.keys(TYPES_BY_CATEGORY) as c}<option value={c}>{catMeta(c).label}</option>{/each}
+              </select>
+            </label>
+            {#if createForCategory}
             <label class="cf-field"><span>Type</span>
               <select bind:value={newResource.type}>
                 {#each (TYPES_BY_CATEGORY[createForCategory] ?? []) as t}
@@ -1096,6 +1106,7 @@ do:
                 {/each}
               </select>
             </label>
+            {/if}
           </div>
         </div>
 
@@ -1126,9 +1137,9 @@ do:
       {/if}
       <!-- On every step: Create was only on Review, so it looked like there was no save. -->
       <div class="create-actions pf-footer">
-        {#if !newResource.name}<span class="pf-hint">Name the resource to create it.</span>{/if}
+        {#if !createForCategory}<span class="pf-hint">Choose what kind of resource it is.</span>{:else if !newResource.name}<span class="pf-hint">Name the resource to create it.</span>{/if}
         <button class="btn ghost" onclick={() => showCreate = false}>Cancel</button>
-        <button class="btn spec" disabled={creating || !newResource.name || !newResource.type} onclick={createResource}>
+        <button class="btn spec" disabled={creating || !newResource.name || !newResource.type || !newResource.namespace} onclick={createResource}>
           {creating ? 'Creating...' : 'Create Resource'}
         </button>
       </div>
@@ -1148,7 +1159,7 @@ do:
       </button>
     </div>
     <div class="screen-actions">
-      {#if $canCreate}<NewButton label="New resource" accent="ephemeral" onclick={() => openCreate(activeCategory === 'all' ? 'database' : activeCategory)} />{/if}
+      {#if $canCreate}<NewButton label="New resource" accent="ephemeral" onclick={() => openCreate(activeCategory === 'all' ? '' : activeCategory)} />{/if}
     </div>
   </div>
 </div>
