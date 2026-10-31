@@ -10,6 +10,8 @@
   import SlidePanel from '$lib/components/shared/SlidePanel.svelte';
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
   import AppHome from '$lib/shell/AppHome.svelte';
+  import FoldSection from '$lib/components/shared/FoldSection.svelte';
+  import ProjectPill from '$lib/components/shared/ProjectPill.svelte';
 
   // Stacked sub-editors (unlimited depth)
   interface SubEditor { type: string; data?: any; closing?: boolean }
@@ -170,6 +172,10 @@ do:
       published: r.published,
       spec_yaml: r.spec_yaml,
       created_at: r.created_at,
+      // The project lives in the definition (`document.namespace`).
+      namespace: (typeof r.spec_yaml === 'string'
+        ? r.spec_yaml.split(/\n(?=\S)/).find((b: string) => b.startsWith('document:'))?.match(/^\s+namespace:\s*['"]?([\w.-]+)/m)?.[1]
+        : undefined) as string | undefined,
     }));
   }
 
@@ -243,8 +249,8 @@ do:
   let communityTemplates = $derived(allTemplates.filter(t => t.source === 'community'));
 
   let tplSections = $derived([
-    { key: 'platform', label: 'Platform Templates', hint: 'Built-in A3T templates', items: platformTemplates },
-    { key: 'my', label: 'My Templates', hint: '', items: myTemplates },
+    { key: 'my', label: 'My Templates', hint: 'Yours to edit', items: myTemplates },
+    { key: 'platform', label: 'Shared Templates', hint: 'Built into A3T, usable in every project', items: platformTemplates },
     { key: 'training', label: 'Training Templates', hint: 'Learn A3T step by step', items: trainingTemplates },
     { key: 'community', label: 'Community Templates', hint: 'Shared by the community', items: communityTemplates },
   ]);
@@ -585,15 +591,8 @@ do:
     <!-- New templates now open in the edit slide-in panel (see newTemplate). -->
 
     <!-- Template sections — all always visible, folded when empty -->
-    {#each tplSections as sec}
-      <div class="tpl-group" class:tpl-empty={sec.items.length === 0}>
-        <button class="tpl-group-header" onclick={() => { if (sec.items.length > 0) sections[sec.key] = !sections[sec.key]; }}>
-          <svg class="tpl-chevron" class:open={sections[sec.key] && sec.items.length > 0} width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>
-          <h3>{sec.label}</h3>
-          <span class="tpl-group-count">{sec.items.length}</span>
-          {#if sec.hint}<span class="tpl-group-hint">{sec.hint}</span>{/if}
-        </button>
-        {#if sections[sec.key] && sec.items.length > 0}
+    {#each tplSections as sec (sec.key)}
+      <FoldSection title={sec.label} count={sec.items.length} hint={sec.hint} defaultOpen={sections[sec.key]}>
           <div class="card-grid">
             {#each sec.items as t}
               <div class="template-card">
@@ -609,6 +608,7 @@ do:
                     <div class="tc-footer">
                       <span class="mono dim" style="font-size: 11px;">v{t.activeVersion}</span>
                       {#if t.vertical}<span class="dim" style="font-size: 11px;">&middot; {t.vertical}</span>{/if}
+                      <ProjectPill project={t.namespace} />
                     </div>
                   </div>
                 </div>
@@ -616,8 +616,7 @@ do:
               </div>
             {/each}
           </div>
-        {/if}
-      </div>
+      </FoldSection>
     {/each}
   </div>
 
@@ -789,19 +788,6 @@ do:
   .create-form h3 { font-family: var(--font-serif); font-size: 16px; font-weight: 500; margin-bottom: 14px; }
   .cf-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 
-  .tpl-group { margin-bottom: 24px; }
-  .tpl-group-header {
-    display: flex; align-items: center; gap: 10px; width: 100%;
-    padding: 0 0 10px; border: none; background: none; cursor: pointer; text-align: left;
-  }
-  .tpl-group-header h3 { font-family: var(--font-serif); font-size: 16px; font-weight: 500; color: var(--text-1); }
-  .tpl-group-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); background: var(--bg-subtle); padding: 1px 6px; border-radius: 3px; }
-  .tpl-group-hint { font-size: 11px; color: var(--text-4); font-style: italic; margin-left: auto; }
-  .tpl-chevron { color: var(--text-4); transition: transform 0.2s; flex-shrink: 0; }
-  .tpl-chevron.open { transform: rotate(90deg); }
-  .tpl-empty { opacity: 0.5; }
-  .tpl-empty .tpl-group-header { cursor: default; }
-  .tpl-empty .tpl-chevron { opacity: 0; }
 
   .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
   .template-card { display: flex; flex-direction: column; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow-sm); transition: all 0.15s; overflow: hidden; position: relative; }

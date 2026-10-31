@@ -3,9 +3,10 @@
   /// shows. Platform namespaces (a3t, system) are offered only to a superadmin who
   /// turns on "Show platform"; everyone else works in their projects.
   import {
-    ALL, getProjects, getProject, getShowPlatform, setProject, setShowPlatform, loadProjects,
+    ALL, getProjects, getProject, getShowPlatform, setProject, setShowPlatform, loadProjects, canSee,
   } from '$lib/stores/context.svelte.ts';
   import { userRole } from '$lib/stores/auth';
+  import { navigateTo } from '$lib/stores/panels.svelte.ts';
 
   let open = $state(false);
   let query = $state('');
@@ -18,7 +19,7 @@
   const listed = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return getProjects()
-      .filter((p) => !p.platform || (canSeePlatform && showPlatform))
+      .filter((p) => (p.platform ? canSeePlatform && showPlatform : canSee(p)))
       .filter((p) => !q || p.name.toLowerCase().includes(q));
   });
 
@@ -63,17 +64,24 @@
       <input class="ps-search" placeholder="Find a project…" bind:value={query} onkeydown={onKey} autofocus />
       <button class="ps-item" class:active={project === ALL} role="option" aria-selected={project === ALL} onclick={() => pick(ALL)}>
         <span class="ps-name">All projects</span>
-        <span class="ps-sub">{getProjects().filter((p) => !p.platform).length}</span>
+        <span class="ps-sub">{getProjects().filter((p) => !p.platform && canSee(p)).length}</span>
       </button>
       <div class="ps-sep"></div>
       {#each listed as p (p.name)}
         <button class="ps-item" class:active={project === p.name} role="option" aria-selected={project === p.name} onclick={() => pick(p.name)}>
-          <span class="ps-name">{p.name}{#if p.platform}<span class="ps-tag">platform</span>{/if}</span>
+          <span class="ps-name">{p.record?.display_name || p.name}{#if p.platform}<span class="ps-tag">platform</span>{/if}</span>
           <span class="ps-sub">{counts(p)}</span>
         </button>
       {:else}
         <div class="ps-empty">No project matches “{query}”.</div>
       {/each}
+      <div class="ps-sep"></div>
+      <button class="ps-item ps-new" onclick={() => { open = false; navigateTo('projects', 'Projects', { create: true }); }}>
+        <span class="ps-name">+ New project</span>
+      </button>
+      <button class="ps-item" onclick={() => { open = false; navigateTo('projects', 'Projects'); }}>
+        <span class="ps-name">Manage projects…</span>
+      </button>
       {#if canSeePlatform}
         <div class="ps-sep"></div>
         <label class="ps-toggle">
@@ -129,6 +137,7 @@
   .ps-item.active { background: var(--spec-bg); color: var(--spec); font-weight: 550; }
   .ps-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ps-sub { font-size: 11px; color: var(--text-4); white-space: nowrap; flex: none; }
+  .ps-new .ps-name { color: var(--spec); font-weight: 550; }
   .ps-sep { height: 1px; background: var(--border); margin: 5px 2px; }
   .ps-empty { padding: 8px; font-size: 12px; color: var(--text-4); }
   .ps-toggle {

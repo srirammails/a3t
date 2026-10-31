@@ -7,8 +7,10 @@
 // The project is part of the URL (`/p/<project>/<app>/…`), so a link reproduces
 // what you saw; the last choice is remembered in this browser for a bare URL.
 
-import { mcpCall } from '$lib/services/api';
+import { get } from 'svelte/store';
+import { mcpCall, projectsApi, type ProjectRecord, type ProjectRole } from '$lib/services/api';
 import { bumpContext } from './apps.svelte.ts';
+import { currentUser, userRole } from './auth';
 
 export type Project = {
   name: string;
@@ -17,6 +19,9 @@ export type Project = {
   flows?: number;
   resources?: number;
   triggers?: number;
+  /// The Projects app's record (owner, members, …); absent for a namespace that
+  /// predates projects, such as `default`, which stays open to everyone.
+  record?: ProjectRecord | null;
 };
 
 /// What a list holds decides whether platform namespaces belong in it.
@@ -78,6 +83,24 @@ function syncUrl() {
 export function getProjects(): Project[] { return projects; }
 export function getProject(): string { return project; }
 export function getShowPlatform(): boolean { return showPlatform; }
+/// The current user's role in a project: `owner`/member role from its record,
+/// or null when they aren't in it. A project without a record has no members.
+export function roleIn(p: Project): ProjectRole | null {
+  const me = get(currentUser);
+  if (!me || !p.record) return null;
+  if (p.record.owner?.id === me.id) return 'owner';
+  const m = p.record.members?.find((x) => x.kind === 'user' && (x.id === me.id || x.id === me.email));
+  return m?.role ?? null;
+}
+
+/// Whether the dash offers a project: any project unless it is "members only",
+/// in which case its members and admins.
+export function canSee(p: Project): boolean {
+  if (!p.record?.policy?.members_only) return true;
+  const role = get(userRole);
+  return roleIn(p) != null || role === 'superadmin' || role === 'admin';
+}
+
 export function isPlatform(ns: string | undefined): boolean {
   return !!ns && projects.some((p) => p.name === ns && p.platform);
 }
@@ -85,7 +108,7 @@ export function isPlatform(ns: string | undefined): boolean {
 /// The namespaces a list of this kind loads, in the order to show them: the
 /// selected project (or every user project), then platform ones where they belong.
 export function namespacesFor(kind: ListKind): string[] {
-  const user = projects.filter((p) => !p.platform).map((p) => p.name);
+  const user = projects.filter((p) => !p.platform && canSee(p)).map((p) => p.name);
   const platform = projects.filter((p) => p.platform).map((p) => p.name);
   const base = project ? [project] : user;
   return kind === 'shared' || showPlatform ? [...base, ...platform.filter((n) => !base.includes(n))] : base;
@@ -151,7 +174,10 @@ export async function loadProjects(force = false) {
   const res = await mcpCall('list_projects', {});
   const list: Project[] | undefined = res.ok ? (res.data?.projects ?? undefined) : undefined;
   if (!list?.length) return; // keep the fallback
-  projects = [...list].sort((a, b) => Number(a.platform) - Number(b.platform) || a.name.localeCompare(b.name));
+  // Records come from each namespace; platform namespaces have none.
+  const records = await Promise.all(list.map((p) => (p.platform ? null : projectsApi.get(p.name).catch(() => null))));
+  projects = list.map((p, i) => ({ ...p, record: records[i] }))
+    .sort((a, b) => Number(a.platform) - Number(b.platform) || a.name.localeCompare(b.name));
   // A remembered project that no longer exists would show an empty dash.
   if (project && !projects.some((p) => p.name === project)) setProject(ALL);
   bumpContext();

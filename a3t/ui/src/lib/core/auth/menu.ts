@@ -22,6 +22,7 @@ export const MENU_CONFIG: MenuGroup[] = [
       // Dashboard is hidden for now. The `dashboard` panel type and its
       // /dashboard route still resolve, so a bookmark keeps working.
       { type: 'chat',       label: 'AI Chat',    tag: null, icon: 'chat',      roles: ALL_ROLES },
+      { type: 'projects',   label: 'Projects',   tag: null, icon: 'project',   roles: ALL_ROLES },
     ],
   },
   {

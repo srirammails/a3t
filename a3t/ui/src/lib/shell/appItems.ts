@@ -7,7 +7,7 @@
 
 import { mcpCall, fetchChatSessions, opsApi, canvasApi } from '$lib/services/api';
 import { RESOURCE_CATEGORIES, categorize } from '$lib/core/resources/categories';
-import { namespacesFor, inContext, canvasKind, type ListKind } from '$lib/stores/context.svelte.ts';
+import { namespacesFor, inContext, canvasKind, getProjects, getShowPlatform, loadProjects, canSee, roleIn, type ListKind } from '$lib/stores/context.svelte.ts';
 
 export type AppItem = {
   /// What navigation addresses. For chat this is the *client* conversation id,
@@ -116,7 +116,9 @@ export function groupByNamespace(items: AppItem[]): { ns: string; items: AppItem
 
 /// Lists that come back whole (not per namespace) and are filtered to the context.
 const FILTERED: Record<string, ListKind> = {
-  agents: 'owned', templates: 'shared', triggers: 'owned', executions: 'owned',
+  // Agents were stored in `a3t` by default, so they aren't platform internals:
+  // they stay visible with the platform hidden, split My/Shared by creator.
+  agents: 'shared', templates: 'shared', triggers: 'owned', executions: 'owned',
 };
 
 export async function loadAppItems(source: string): Promise<AppItem[]> {
@@ -136,6 +138,18 @@ async function loadAll(source: string): Promise<AppItem[]> {
     }));
   }
 
+  if (source === 'projects') {
+    await loadProjects();
+    return getProjects()
+      .filter((p) => (p.platform ? getShowPlatform() : canSee(p)))
+      .map((p) => ({
+        id: p.name,
+        label: p.record?.display_name || p.name,
+        namespace: p.name,
+        sub: [roleIn(p) ?? (p.record ? '' : 'open to everyone'),
+              `${p.flows ?? 0} flows · ${Math.max(0, (p.resources ?? 0) - (p.record ? 1 : 0))} resources`].filter(Boolean).join(' · '),
+      }));
+  }
   if (source === 'flows') {
     const out: AppItem[] = [];
     for (const ns of namespacesFor('owned')) {
@@ -165,6 +179,7 @@ async function loadAll(source: string): Promise<AppItem[]> {
       const res = await mcpCall('list_resources', { namespace: ns });
       if (!res.ok) continue;
       for (const r of rows(res.data, 'resources')) {
+        if (r.type === 'project') continue; // the Projects app's records
         const c = categorize(r.type ?? '');
         counts[c] = (counts[c] ?? 0) + 1;
       }

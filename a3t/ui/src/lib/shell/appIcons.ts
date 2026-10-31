@@ -5,6 +5,7 @@
 // Values are SVG path fragments, rendered inside a 16x16 `<svg>` by the caller.
 
 export const APP_ICONS: Record<string, string> = {
+    project:   '<path d="M1.5 4.5a1 1 0 011-1h3.5l1.5 1.5h6a1 1 0 011 1v6.5a1 1 0 01-1 1h-11a1 1 0 01-1-1z"/><path d="M5 9.5h6M5 11.5h3"/>',
     dashboard: '<rect x="2" y="2" width="5" height="5" rx="0.5"/><rect x="9" y="2" width="5" height="5" rx="0.5"/><rect x="2" y="9" width="5" height="5" rx="0.5"/><rect x="9" y="9" width="5" height="5" rx="0.5"/>',
     chat:      '<path d="M2 3h12a1 1 0 011 1v7a1 1 0 01-1 1H6l-3 2v-2H2a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M5 7h.01M8 7h.01M11 7h.01" stroke-width="2" stroke-linecap="round"/>',
     grid:      '<path d="M3 2h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M5 6h6M5 9h4"/>',

@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { inContext, namespacesFor } from '$lib/stores/context.svelte.ts';
+  import { inContext, namespacesFor, isPlatform } from '$lib/stores/context.svelte.ts';
+  import FoldSection from '$lib/components/shared/FoldSection.svelte';
+  import ProjectPill from '$lib/components/shared/ProjectPill.svelte';
   import { contextRev_ } from '$lib/stores/apps.svelte.ts';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
@@ -28,6 +30,8 @@
   let view = $state<'list' | 'editor'>('list');
   let loading = $state(true);
   let triggers = $state<Trigger[]>([]);
+  const myTriggers = $derived(triggers.filter((t: any) => !isPlatform(t.namespace)));
+  const sharedTriggers = $derived(triggers.filter((t: any) => isPlatform(t.namespace)));
   let availableFlows = $state<FlowSummary[]>([]);
   let editingTrigger = $state<Trigger | null>(null);
   let deleteTarget = $state<Trigger | null>(null);
@@ -345,26 +349,18 @@
   <AppHome appType="triggers" embedded />
 
 
-  <div class="trg-toolbar">
-    <h3 class="trg-title">Triggers</h3>
-    <span class="trg-count">{triggers.length}</span>
-  </div>
-
   {#if loading}
     <div class="trg-empty">Loading...</div>
-  {:else if triggers.length === 0}
-    <div class="trg-empty">
-      <p>No triggers yet.</p>
-      <button class="trg-create-btn" onclick={openCreate}>+ Create your first trigger</button>
-    </div>
   {:else}
+    {#snippet triggerRows(list: Trigger[])}
     <div class="trg-list">
-      {#each triggers as t}
+      {#each list as t}
         <div class="trg-card" role="button" tabindex="0" onclick={() => openEdit(t)} onkeydown={(e) => { if (e.key === 'Enter') openEdit(t); }}>
           <span class="trg-icon" style={typeStyle(t.config.type)}>{typeIcon(t.config.type)}</span>
           <div class="trg-body">
             <div class="trg-row1">
               <span class="trg-name">{t.name}</span>
+              <ProjectPill project={t.namespace} />
               <span class="trg-badge">{t.config.type}</span>
               {#if t.config.type === 'webhook'}<span class="trg-detail">{t.config.method ?? 'POST'} {t.config.path}</span>{/if}
               {#if t.config.type === 'cron'}<span class="trg-detail">{t.config.expression}</span>{/if}
@@ -391,6 +387,20 @@
         </div>
       {/each}
     </div>
+    {/snippet}
+
+    <FoldSection title="My Triggers" count={myTriggers.length} hint="Start this project's flows">
+      {@render triggerRows(myTriggers)}
+    </FoldSection>
+    {#if myTriggers.length === 0}
+      <div class="trg-empty">
+        <p>No triggers in this project yet.</p>
+        <button class="trg-create-btn" onclick={openCreate}>+ Create your first trigger</button>
+      </div>
+    {/if}
+    <FoldSection title="Shared Triggers" count={sharedTriggers.length} hint="The platform's own (shown with “Show platform”)">
+      {@render triggerRows(sharedTriggers)}
+    </FoldSection>
   {/if}
 </div>
 
@@ -586,9 +596,6 @@
   .screen-title { font-family: var(--font-serif); font-size: 24px; font-weight: 500; letter-spacing: -0.02em; }
   .screen-actions { display: flex; gap: 8px; }
   .trg-page { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 32px 40px; }
-  .trg-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-  .trg-title { font-family: var(--font-serif); font-size: 18px; font-weight: 500; color: var(--text-1); }
-  .trg-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); background: var(--bg-subtle); padding: 1px 6px; border-radius: 3px; }
   .trg-create-btn { display: flex; align-items: center; gap: 5px; padding: 6px 14px; border: 1px solid var(--runtime); border-radius: 6px; background: var(--runtime-bg); color: var(--runtime); font-size: 12px; font-weight: 550; cursor: pointer; }
   .trg-create-btn:hover { background: var(--runtime); color: white; }
   .trg-empty { padding: 60px 20px; text-align: center; color: var(--text-4); font-size: 14px; display: flex; flex-direction: column; align-items: center; gap: 12px; }

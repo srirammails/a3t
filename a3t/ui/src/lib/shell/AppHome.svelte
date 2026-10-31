@@ -1,6 +1,7 @@
 <script lang="ts">
-  /// An app's home: what it is for, plus the two lists you actually navigate by —
-  /// the latest few items and the ones you pinned.
+  /// An app's home: what it is for, plus the sections you navigate by, as
+  /// foldable groups of cards: Pinned (open only when something is pinned), then
+  /// Latest, and — for pages that don't render their own — My and Shared.
   ///
   /// Shown when an app is open with nothing selected. The context bar stays hidden
   /// here on purpose; choosing something from these lists is what reveals it, with
@@ -9,9 +10,24 @@
   import { APP_CONTEXT, contextLabel, trackOpen, getPins, isPinned, setPins, contextRev_ } from '$lib/stores/apps.svelte.ts';
   import { loadAppItems, type AppItem } from './appItems';
   import { setPin } from '$lib/services/api';
+  import { isPlatform } from '$lib/stores/context.svelte.ts';
+  import FoldSection from '$lib/components/shared/FoldSection.svelte';
+  import EntityCard from '$lib/components/shared/EntityCard.svelte';
 
-  let { appType, title = '', embedded = false }:
-    { appType: string; title?: string; embedded?: boolean } = $props();
+  type Section = 'my' | 'shared';
+  let { appType, title = '', embedded = false, sections = [] as Section[], myLabel = 'My items', sharedLabel = 'Shared' }:
+    { appType: string; title?: string; embedded?: boolean;
+      /// Extra sections after Pinned and Latest, for pages without their own.
+      sections?: Section[]; myLabel?: string; sharedLabel?: string } = $props();
+
+  /// Card colour per app, matching the accent the app's own cards use.
+  const COLOR: Record<string, string> = {
+    agents: '#1a7158', templates: '#5530a8', canvas: '#b45309', triggers: '#0f766e',
+    resources: '#3a5a85', 'flow-editor': '#5530a8', projects: '#5530a8', chat: '#3a5a85', executions: '#555',
+  };
+  const color = $derived(COLOR[appType] ?? '#555');
+  const initials = (label: string) => label.replace(/[^a-z0-9]+/gi, ' ').trim().split(' ')
+    .map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '?';
 
   /// What the app is for, in one line. Shown above the lists so an empty app still
   /// tells you what it does.
@@ -20,12 +36,13 @@
     'flow-editor': 'Author CNCF Serverless Workflow definitions with a graph, code and form view.',
     resources: 'Databases, LLMs, MCP servers, secrets — everything agents need, in one registry.',
     agents: 'Configured agents: their template, model and the tools they may use.',
+    projects: 'Namespaces you work in, who is in them, and the rules they run under.',
     templates: 'Reusable agent templates — the shape an agent is built from.',
     triggers: 'Webhooks and schedules that start your flows.',
     executions: 'Every run: status, timing, input and output.',
   };
 
-  const HOW_MANY = 5;
+  const HOW_MANY = 6;
 
   let items = $state<AppItem[]>([]);
   let loading = $state(true);
@@ -40,6 +57,9 @@
   const pinned = $derived(
     pinnedIds.map((id) => items.find((i) => i.id === id)).filter(Boolean).slice(0, HOW_MANY) as AppItem[],
   );
+  /// My: the projects' own items (and items with no project); Shared: the platform's.
+  const mine = $derived(items.filter((i) => !isPlatform(i.namespace)));
+  const shared = $derived(items.filter((i) => isPlatform(i.namespace)));
   /// A pin whose item no longer exists — worth showing rather than silently dropping.
   const missingPins = $derived(pinnedIds.filter((id) => !items.some((i) => i.id === id)).length);
 
@@ -63,13 +83,13 @@
     navigateToDetail(appType, title || contextLabel(appType), item.id);
   }
 
-  async function togglePin(e: MouseEvent, item: AppItem) {
-    e.stopPropagation();
+  async function togglePin(item: AppItem) {
     setPins(await setPin(appType, item.id, !isPinned(appType, item.id)));
   }
 </script>
 
 <div class="home" class:embedded>
+  <div class="home-body">
   {#if !embedded}
     <div class="home-head">
       <h1 class="home-title">{title || contextLabel(appType)}</h1>
@@ -82,55 +102,46 @@
   {:else if loading}
     <div class="home-note">Loading…</div>
   {:else}
-    <div class="home-lists">
-      <section class="home-col">
-        <h2 class="home-sub">Pinned</h2>
-        {#if pinned.length === 0}
-          <p class="home-empty">Nothing pinned yet — use the ★ on any item.</p>
-        {:else}
-          {#each pinned as item}
-            <!-- A row is a div, not a button: the pin is itself a button and nesting
-                 them makes the browser rewrite the markup out from under Svelte. -->
-            <div class="home-row">
-              <button class="home-open" onclick={() => open(item)} title={item.label}>
-                {#if item.badge}<span class="home-badge" style={item.badgeStyle}>{item.badge}</span>{/if}
-                <span class="home-text">
-                  <span class="home-label">{item.label}</span>
-                  {#if item.namespace || item.sub}<span class="home-meta">{[item.namespace, item.sub].filter(Boolean).join(' · ')}</span>{/if}
-                </span>
-              </button>
-              <button class="home-pin on" onclick={(e) => togglePin(e, item)} title="Unpin" aria-label="Unpin">★</button>
-            </div>
-          {/each}
-        {/if}
-        {#if missingPins > 0}
-          <p class="home-empty">{missingPins} pinned item{missingPins === 1 ? '' : 's'} no longer exist.</p>
-        {/if}
-      </section>
+    {#snippet cards(list: AppItem[])}
+      <div class="home-grid">
+        {#each list as item (item.id)}
+          <EntityCard
+            icon={item.badge ?? initials(item.label)}
+            {color}
+            iconStyle={item.badge ? item.badgeStyle ?? '' : ''}
+            name={item.label}
+            description={item.sub ?? ''}
+            tags={item.status ? [item.status] : []}
+            meta=""
+            actionLabel=""
+            project={item.namespace}
+            pinned={pinnedIds.includes(item.id)}
+            onpin={() => togglePin(item)}
+            onclick={() => open(item)}
+          />
+        {/each}
+      </div>
+    {/snippet}
 
-      <section class="home-col">
-        <h2 class="home-sub">Latest</h2>
-        {#if recent.length === 0}
-          <p class="home-empty">Nothing here yet.</p>
-        {:else}
-          {#each recent as item}
-            <!-- A row is a div, not a button: the pin is itself a button and nesting
-                 them makes the browser rewrite the markup out from under Svelte. -->
-            <div class="home-row">
-              <button class="home-open" onclick={() => open(item)} title={item.label}>
-                {#if item.badge}<span class="home-badge" style={item.badgeStyle}>{item.badge}</span>{/if}
-                <span class="home-text">
-                  <span class="home-label">{item.label}</span>
-                  {#if item.namespace || item.sub}<span class="home-meta">{[item.namespace, item.sub].filter(Boolean).join(' · ')}</span>{/if}
-                </span>
-              </button>
-              <button class="home-pin" onclick={(e) => togglePin(e, item)} title="Pin" aria-label="Pin">☆</button>
-            </div>
-          {/each}
-        {/if}
-      </section>
-    </div>
+    <FoldSection title="Pinned" count={pinned.length}
+                 hint={missingPins > 0 ? `${missingPins} pinned item${missingPins === 1 ? '' : 's'} no longer exist` : (pinned.length === 0 ? 'Pin anything with ☆' : '')}>
+      {@render cards(pinned)}
+    </FoldSection>
+    <FoldSection title="Latest" count={recent.length}>
+      {@render cards(recent)}
+    </FoldSection>
+    {#if sections.includes('my')}
+      <FoldSection title={myLabel} count={mine.length}>
+        {@render cards(mine)}
+      </FoldSection>
+    {/if}
+    {#if sections.includes('shared')}
+      <FoldSection title={sharedLabel} count={shared.length} hint="From the platform, usable in every project">
+        {@render cards(shared)}
+      </FoldSection>
+    {/if}
   {/if}
+  </div>
 </div>
 
 <style>
@@ -152,51 +163,7 @@
   .home-note { text-align: center; font-size: 12px; color: var(--text-4); padding: 24px; }
   .home-note.err { color: #dc2626; }
 
-  .home-lists {
-    max-width: 900px; margin: 0 auto;
-    display: grid; grid-template-columns: 1fr 1fr; gap: 28px;
-  }
-  /* One column when the pane is narrow — two would truncate every label. */
-  @media (max-width: 820px) {
-    .home-lists { grid-template-columns: 1fr; gap: 20px; }
-  }
-
-  .home-sub {
-    font-size: 10px; font-weight: 600; text-transform: uppercase;
-    letter-spacing: 0.07em; color: var(--text-4);
-    margin: 0 0 8px; padding-left: 2px;
-  }
-  .home-empty { margin: 0; font-size: 11.5px; color: var(--text-5); padding: 6px 2px; }
-
-  .home-row {
-    width: 100%; box-sizing: border-box;
-    display: flex; align-items: center; gap: 4px;
-    padding: 0 8px 0 0; margin-bottom: 4px;
-    border: 1px solid var(--border); border-radius: var(--r-sm);
-    background: var(--bg-surface);
-  }
-  .home-row:hover { border-color: var(--border-strong); }
-  .home-open {
-    flex: 1; min-width: 0;
-    display: flex; align-items: center; gap: 9px;
-    padding: 9px 10px;
-    border: none; background: transparent; cursor: pointer; text-align: left;
-  }
-  .home-badge {
-    flex: 0 0 auto; width: 20px; height: 20px; border-radius: 5px;
-    display: grid; place-items: center; font-size: 10px; font-weight: 600;
-  }
-  .home-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .home-label {
-    font-size: 12.5px; color: var(--text-1);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .home-meta { font-size: 10px; color: var(--text-4); }
-  .home-pin {
-    flex: 0 0 auto; width: 22px; height: 22px;
-    border: none; border-radius: 4px; background: transparent;
-    color: var(--text-5); cursor: pointer; font-size: 13px; line-height: 1;
-  }
-  .home-pin:hover { color: var(--text-1); background: var(--bg-subtle); }
-  .home-pin.on { color: var(--spec-ink, var(--text-1)); }
+  .home-body { max-width: 1100px; margin: 0 auto; }
+  .home.embedded .home-body { max-width: none; }
+  .home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 </style>

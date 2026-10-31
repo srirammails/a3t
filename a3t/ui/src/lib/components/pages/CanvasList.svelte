@@ -10,6 +10,7 @@
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
   import AppHome from '$lib/shell/AppHome.svelte';
   import EntityCard from '$lib/components/shared/EntityCard.svelte';
+  import FoldSection from '$lib/components/shared/FoldSection.svelte';
   import CanvasDesigner from '$lib/components/editor/CanvasDesigner.svelte';
   import { getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { onMount } from 'svelte';
@@ -17,6 +18,9 @@
   let loading = $state(true);
   let error = $state('');
   let canvases = $state<any[]>([]);
+  /// A canvas that deploys a flow is the project's; an unbound one is a preset.
+  const myCanvases = $derived(canvases.filter((c) => c.flowRef !== '—'));
+  const sharedCanvases = $derived(canvases.filter((c) => c.flowRef === '—'));
   let runtimes = $state<any[]>([]);
   let deployMsg = $state('');
   // Live k8s deployment status from the controller, keyed by flowRef.
@@ -157,48 +161,32 @@
   {:else if error}
     <div class="status-msg err">{error}</div>
   {:else}
-    <div class="agt-group" class:agt-empty={canvases.length === 0}>
-      <button class="agt-group-header">
-        <svg class="agt-chevron" class:open={canvases.length > 0} width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>
-        <h3>My Canvases</h3>
-        <span class="agt-group-count">{canvases.length}</span>
-      </button>
-      {#if canvases.length > 0}
-        <div class="card-grid">
-          {#each canvases as c}
-            <EntityCard
-              icon={(c.name ?? '?').slice(0, 2).toUpperCase()}
-              color="#3a6ea5"
-              name={c.name}
-              description="flow {c.flowRef}"
-              tags={c.live ? [c.mode, c.session, c.live.phase] : [c.mode, c.session, c.state]}
-              meta={c.live ? (c.live.runtime || c.placedRuntime || c.mode) : (controllerOn ? 'not deployed' : (c.placedRuntime ? '→ ' + c.placedRuntime : 'no runtime'))}
-              actionLabel="Deploy"
-              onclick={() => editCanvas(c)}
-              onaction={() => deployCanvas(c)}
-              ondelete={() => removeCanvas(c)}
-            />
-          {/each}
-        </div>
-      {/if}
-    </div>
+    {#snippet canvasCards(list: any[])}
+      <div class="card-grid">
+        {#each list as c (c.namespace + '/' + c.name)}
+          <EntityCard
+            icon={(c.name ?? '?').slice(0, 2).toUpperCase()}
+            color="#3a6ea5"
+            name={c.name}
+            description={c.flowRef === '—' ? 'preset — copy it to deploy a flow' : `flow ${c.flowRef}`}
+            tags={c.live ? [c.mode, c.session, c.live.phase] : [c.mode, c.session, c.state]}
+            meta={c.live ? (c.live.runtime || c.placedRuntime || c.mode) : (controllerOn ? 'not deployed' : (c.placedRuntime ? '→ ' + c.placedRuntime : 'no runtime'))}
+            project={c.namespace}
+            actionLabel="Deploy"
+            onclick={() => editCanvas(c)}
+            onaction={() => deployCanvas(c)}
+            ondelete={() => removeCanvas(c)}
+          />
+        {/each}
+      </div>
+    {/snippet}
 
-    <div class="agt-group agt-empty">
-      <button class="agt-group-header">
-        <svg class="agt-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0;"><path d="M6 4l4 4-4 4"/></svg>
-        <h3>Shared Canvases</h3>
-        <span class="agt-group-count">0</span>
-        <span class="agt-group-hint">Shared across teams</span>
-      </button>
-    </div>
-    <div class="agt-group agt-empty">
-      <button class="agt-group-header">
-        <svg class="agt-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0;"><path d="M6 4l4 4-4 4"/></svg>
-        <h3>Community Canvases</h3>
-        <span class="agt-group-count">0</span>
-        <span class="agt-group-hint">Open-source deployment specs</span>
-      </button>
-    </div>
+    <FoldSection title="My Canvases" count={myCanvases.length} hint="Deploy a flow in this project">
+      {@render canvasCards(myCanvases)}
+    </FoldSection>
+    <FoldSection title="Shared Canvases" count={sharedCanvases.length} hint="Presets — placement shapes every project can copy">
+      {@render canvasCards(sharedCanvases)}
+    </FoldSection>
   {/if}
 </div>
 
@@ -224,16 +212,4 @@
 
   .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
 
-  .agt-group { margin-bottom: 24px; }
-  .agt-group-header {
-    display: flex; align-items: center; gap: 10px; width: 100%;
-    padding: 0 0 10px; border: none; background: none; cursor: pointer; text-align: left;
-  }
-  .agt-group-header h3 { font-family: var(--font-serif); font-size: 16px; font-weight: 500; color: var(--text-1); }
-  .agt-group-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); background: var(--bg-subtle); padding: 1px 6px; border-radius: 3px; }
-  .agt-group-hint { font-size: 11px; color: var(--text-4); font-style: italic; margin-left: auto; }
-  .agt-chevron { color: var(--text-4); transition: transform 0.2s; flex-shrink: 0; }
-  .agt-chevron.open { transform: rotate(90deg); }
-  .agt-empty { opacity: 0.5; }
-  .agt-empty .agt-group-header { cursor: default; }
 </style>

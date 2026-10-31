@@ -55,6 +55,7 @@ function save(key: string, value: unknown) {
 /// no list tool for it on the server.
 export const APP_CONTEXT: Record<string, { label: string; source: string; focuses: boolean }> = {
   chat: { label: 'Conversations', source: 'sessions', focuses: true },
+  projects: { label: 'Projects', source: 'projects', focuses: true },
   agents: { label: 'Agents', source: 'agents', focuses: true },
   templates: { label: 'Templates', source: 'templates', focuses: true },
   'flow-editor': { label: 'Flows', source: 'flows', focuses: true },

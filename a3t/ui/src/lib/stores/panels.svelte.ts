@@ -21,6 +21,7 @@ let initialized = false;
 const TYPE_TO_PATH: Record<string, string> = {
   dashboard: '/dashboard',
   chat: '/chat',
+  projects: '/projects',
   templates: '/templates',
   agents: '/agents',
   canvas: '/canvas',
@@ -43,6 +44,7 @@ const TYPE_TO_PATH: Record<string, string> = {
 const PATH_TO_TYPE: Record<string, { type: string; title: string }> = {
   '/dashboard': { type: 'dashboard', title: 'Dashboard' },
   '/chat': { type: 'chat', title: 'AI Chat' },
+  '/projects': { type: 'projects', title: 'Projects' },
   '/templates': { type: 'templates', title: 'Templates' },
   '/agents': { type: 'agents', title: 'Agents' },
   '/canvas': { type: 'canvas', title: 'Canvas' },

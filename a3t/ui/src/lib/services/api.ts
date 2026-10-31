@@ -259,6 +259,45 @@ export const resources = {
     }),
 };
 
+// ── Projects ──
+// A project is a namespace plus its record: a `type: project` registry resource
+// named `project` in that namespace, holding the display name, owner, members and
+// environments. The namespace itself needs no creating — it exists once it holds
+// something, and the record is the first thing it holds.
+export type ProjectRole = 'owner' | 'developer' | 'operator' | 'viewer';
+export type ProjectMember = { kind: 'user' | 'group'; id: string; name?: string; role: ProjectRole };
+export type ProjectRecord = {
+  display_name?: string;
+  description?: string;
+  owner?: { id: string; email?: string; name?: string };
+  members?: ProjectMember[];
+  environments?: string[];
+  /// Project rules on top of the org baseline (Projects → Policy), by preset key.
+  policy?: Record<string, boolean>;
+  created_at?: string;
+};
+export const PROJECT_RECORD = 'project';
+
+export const projectsApi = {
+  /** The project's record, or null when the namespace has none (e.g. `default`). */
+  get: async (namespace: string): Promise<ProjectRecord | null> => {
+    const res = await mcpCall('get_resource', { namespace, name: PROJECT_RECORD });
+    return res.ok && res.data && typeof res.data === 'object' ? (res.data.config ?? null) : null;
+  },
+  create: (namespace: string, record: ProjectRecord) =>
+    request('/registry/resources', {
+      method: 'POST',
+      body: JSON.stringify({ name: PROJECT_RECORD, namespace, type: 'project', config: record }),
+    }),
+  update: (namespace: string, record: ProjectRecord) =>
+    request(`/registry/resources/${encodeURIComponent(namespace)}/${PROJECT_RECORD}`, {
+      method: 'PUT', body: JSON.stringify(record),
+    }),
+  /** Removes the record only; the caller checks the project is empty first. */
+  remove: (namespace: string) =>
+    request(`/registry/resources/${encodeURIComponent(namespace)}/${PROJECT_RECORD}`, { method: 'DELETE' }),
+};
+
 // ── Executions (run history — persisted in the storage backend) ──
 export const executions = {
   /** Recent runs, newest-first. Optional namespace/name filter + limit. */

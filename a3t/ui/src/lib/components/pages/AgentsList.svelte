@@ -12,6 +12,9 @@
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
   import AppHome from '$lib/shell/AppHome.svelte';
   import EntityCard from '$lib/components/shared/EntityCard.svelte';
+  import FoldSection from '$lib/components/shared/FoldSection.svelte';
+  import { currentUser } from '$lib/stores/auth';
+  import { getProject, inContext } from '$lib/stores/context.svelte.ts';
   import PropertiesTree from '$lib/components/shared/PropertiesTree.svelte';
   import DeleteConfirm from '$lib/components/shared/DeleteConfirm.svelte';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
@@ -25,6 +28,12 @@
   let propNode = $state('detail');
 
   let allAgents: any[] = $state([]);
+  /// In view for the project; split by who created them.
+  const visibleAgents = $derived(allAgents.filter((a) => inContext(a.namespace, 'shared')));
+  const myAgents = $derived(visibleAgents.filter((a) => a.created_by === $currentUser?.id));
+  const sharedAgents = $derived(visibleAgents.filter((a) => a.created_by !== $currentUser?.id));
+  /// New agents go into the selected project (`default` under "All projects").
+  const newNamespace = () => getProject() || 'default';
   let templates: { id: string; name: string; version: string; spec_yaml: string }[] = $state([]);
 
   // Default target flow (path) for an agent, derived from its template's spec document.
@@ -77,7 +86,7 @@
 
   // Create form — all references are selections (no loose strings)
   let newAgent = $state({
-    name: '', namespace: 'a3t', template_id: '', template_version: '1.0.0',
+    name: '', namespace: newNamespace(), template_id: '', template_version: '1.0.0',
     mode: 'session', target: '', ep_path: '',
     llm: 'a3t/claude-cli-max', mcp_servers: [] as string[], enabled_tools: null as string[] | null,
   });
@@ -86,7 +95,7 @@
   function newAgentPanel() {
     selected = '';
     newAgent = {
-      name: '', namespace: 'a3t', template_id: '', template_version: '1.0.0',
+      name: '', namespace: newNamespace(), template_id: '', template_version: '1.0.0',
       mode: 'session', target: '', ep_path: '', llm: 'a3t/claude-cli-max', mcp_servers: [],
     };
     creatingNew = true;
@@ -181,7 +190,7 @@
     const vars = { target, ep_path: epPath, mcp_servers: newAgent.mcp_servers, enabled_tools: newAgent.enabled_tools ?? null };
     const resource_bindings = JSON.stringify({ llm: newAgent.llm });
     const res = await execFlow('a3t-agents-create', 'a3t', {
-      org_id: 'org-default', user_id: 'usr-superadmin', timestamp: new Date().toISOString(),
+      org_id: 'org-default', user_id: $currentUser?.id ?? '', timestamp: new Date().toISOString(),
       data: {
         id, name: newAgent.name, namespace: newAgent.namespace,
         template_id: newAgent.template_id, template_version: newAgent.template_version,
@@ -202,7 +211,7 @@
         await loadTriggerOptions();
       }
       creatingNew = false;
-      newAgent = { name: '', namespace: 'a3t', template_id: '', template_version: '1.0.0', mode: 'session', target: '', ep_path: '', llm: 'a3t/claude-cli-max', mcp_servers: [], enabled_tools: null };
+      newAgent = { name: '', namespace: newNamespace(), template_id: '', template_version: '1.0.0', mode: 'session', target: '', ep_path: '', llm: 'a3t/claude-cli-max', mcp_servers: [], enabled_tools: null };
       await loadAgents();
       selectAgent(id);
     } else { error = res.error ?? 'Create failed'; }
@@ -768,49 +777,32 @@
 
   <!-- New agents now open in the edit slide-in panel (see newAgentPanel). -->
 
-  <div class="agt-group" class:agt-empty={allAgents.length === 0}>
-    <button class="agt-group-header" onclick={() => {}}>
-      <svg class="agt-chevron" class:open={allAgents.length > 0} width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>
-      <h3>My Agents</h3>
-      <span class="agt-group-count">{allAgents.length}</span>
-    </button>
-    {#if allAgents.length > 0}
-      <div class="card-grid">
-        {#each allAgents as a}
-          <EntityCard
-            icon={a.name.slice(0, 2).toUpperCase()}
-            color="#1a7158"
-            name={a.name}
-            description="from {a.template_id ?? 'no template'}"
-            tags={[a.mode, a.status]}
-            meta="v{a.template_version}"
-            actionLabel="Deploy to Canvas"
-            onclick={() => selectAgent(a.id)}
-            onaction={() => openAgentCanvas(a.id)}
-            ondelete={() => deleteTarget = { id: a.id, name: a.name }}
-      />
-        {/each}
-      </div>
-    {/if}
-  </div>
+  {#snippet agentCards(list: any[])}
+    <div class="card-grid">
+      {#each list as a (a.id)}
+        <EntityCard
+          icon={a.name.slice(0, 2).toUpperCase()}
+          color="#1a7158"
+          name={a.name}
+          description="from {a.template_id ?? 'no template'}"
+          tags={[a.mode, a.status]}
+          meta="v{a.template_version}"
+          project={a.namespace}
+          actionLabel="Deploy to Canvas"
+          onclick={() => selectAgent(a.id)}
+          onaction={() => openAgentCanvas(a.id)}
+          ondelete={() => deleteTarget = { id: a.id, name: a.name }}
+        />
+      {/each}
+    </div>
+  {/snippet}
 
-  <div class="agt-group agt-empty">
-    <button class="agt-group-header">
-      <svg class="agt-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0;"><path d="M6 4l4 4-4 4"/></svg>
-      <h3>Shared Agents</h3>
-      <span class="agt-group-count">0</span>
-      <span class="agt-group-hint">Agents shared across teams</span>
-    </button>
-  </div>
-
-  <div class="agt-group agt-empty">
-    <button class="agt-group-header">
-      <svg class="agt-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0;"><path d="M6 4l4 4-4 4"/></svg>
-      <h3>Community Agents</h3>
-      <span class="agt-group-count">0</span>
-      <span class="agt-group-hint">Open-source agent configs</span>
-    </button>
-  </div>
+  <FoldSection title="My Agents" count={myAgents.length} hint="Created by you">
+    {@render agentCards(myAgents)}
+  </FoldSection>
+  <FoldSection title="Shared Agents" count={sharedAgents.length} hint="Created by others, in projects you can see">
+    {@render agentCards(sharedAgents)}
+  </FoldSection>
 </div>
 
 <style>
@@ -828,18 +820,6 @@
 
   .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
 
-  .agt-group { margin-bottom: 24px; }
-  .agt-group-header {
-    display: flex; align-items: center; gap: 10px; width: 100%;
-    padding: 0 0 10px; border: none; background: none; cursor: pointer; text-align: left;
-  }
-  .agt-group-header h3 { font-family: var(--font-serif); font-size: 16px; font-weight: 500; color: var(--text-1); }
-  .agt-group-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); background: var(--bg-subtle); padding: 1px 6px; border-radius: 3px; }
-  .agt-group-hint { font-size: 11px; color: var(--text-4); font-style: italic; margin-left: auto; }
-  .agt-chevron { color: var(--text-4); transition: transform 0.2s; flex-shrink: 0; }
-  .agt-chevron.open { transform: rotate(90deg); }
-  .agt-empty { opacity: 0.5; }
-  .agt-empty .agt-group-header { cursor: default; }
 
   /* Create form */
   .create-form { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r); padding: 20px 24px; margin-bottom: 20px; }

@@ -390,6 +390,8 @@ do:
       const data = res?.data;
       if (data?.resources) {
         for (const r of data.resources) {
+          // A project's own record (Projects app) is not a resource to manage here.
+          if (r.type === 'project') continue;
           results.push({
             name: r.name, namespace: r.namespace ?? ns,
             type: r.type ?? 'unknown', category: categorize(r.type ?? ''),
@@ -1181,6 +1183,7 @@ do:
                     icon={catMeta(r.category).icon}
                     color={CAT_COLORS[r.category] ?? '#999'}
                     name={r.name}
+                    project={r.namespace}
                     description={r.description || r.type}
                     tags={[r.type, r.namespace]}
                     meta={r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}
@@ -1217,6 +1220,7 @@ do:
                   icon={catMeta(r.category).icon}
                   color={CAT_COLORS[r.category] ?? '#999'}
                   name={r.name}
+                    project={r.namespace}
                   description={r.description || r.type}
                   tags={[r.type, r.namespace]}
                   meta={r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}

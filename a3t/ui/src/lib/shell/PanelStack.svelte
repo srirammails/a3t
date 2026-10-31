@@ -23,6 +23,7 @@
   import EarlyAccessRequests from '$lib/components/pages/EarlyAccessRequests.svelte';
   import SettingsPage from '$lib/components/pages/SettingsPage.svelte';
   import SecurityPage from '$lib/components/pages/SecurityPage.svelte';
+  import ProjectsPage from '$lib/components/pages/ProjectsPage.svelte';
   import ExecutionsPage from '$lib/components/pages/ExecutionsPage.svelte';
   import LogsPage from '$lib/components/pages/LogsPage.svelte';
   import RuntimePage from '$lib/components/pages/RuntimePage.svelte';
@@ -80,6 +81,8 @@
       <SettingsPage />
     {:else if activePanel.type === 'security'}
       <SecurityPage />
+    {:else if activePanel.type === 'projects'}
+      <ProjectsPage />
     {:else if activePanel.type === 'executions'}
       <ExecutionsPage />
     {:else if activePanel.type === 'runtime' || activePanel.type === 'reconciliation'}
