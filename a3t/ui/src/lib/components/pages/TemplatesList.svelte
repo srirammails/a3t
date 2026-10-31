@@ -72,7 +72,7 @@
     } catch {}
     resSaving = false;
   }
-  import { can, canAny } from '$lib/stores/auth';
+  import { can, canAny, currentUser } from '$lib/stores/auth';
   import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { onMount } from 'svelte';
 
@@ -173,6 +173,7 @@ do:
       published: r.published,
       spec_yaml: r.spec_yaml,
       created_at: r.created_at,
+      created_by: r.created_by ?? '',
       // The project lives in the definition (`document.namespace`).
       namespace: (typeof r.spec_yaml === 'string'
         ? r.spec_yaml.split(/\n(?=\S)/).find((b: string) => b.startsWith('document:'))?.match(/^\s+namespace:\s*['"]?([\w.-]+)/m)?.[1]
@@ -246,14 +247,16 @@ do:
 
   /// The selected project's templates only (all of them under "All projects").
   let inView = $derived(allTemplates.filter(t => inContext(t.namespace, 'shared')));
-  let platformTemplates = $derived(inView.filter(t => t.source === 'platform'));
-  let myTemplates = $derived(inView.filter(t => t.source === 'my'));
-  let trainingTemplates = $derived(inView.filter(t => t.source === 'training'));
-  let communityTemplates = $derived(inView.filter(t => t.source === 'community'));
+  /// Mine: templates I created. Shared: everyone else's and the built-in ones;
+  /// training and community keep their own sections.
+  let myTemplates = $derived(inView.filter(t => t.created_by === $currentUser?.id));
+  let platformTemplates = $derived(inView.filter(t => t.created_by !== $currentUser?.id && t.source !== 'training' && t.source !== 'community'));
+  let trainingTemplates = $derived(inView.filter(t => t.created_by !== $currentUser?.id && t.source === 'training'));
+  let communityTemplates = $derived(inView.filter(t => t.created_by !== $currentUser?.id && t.source === 'community'));
 
   let tplSections = $derived([
-    { key: 'my', label: 'My Templates', hint: 'Yours to edit', items: myTemplates },
-    { key: 'platform', label: 'Shared Templates', hint: 'Built into A3T, usable in every project', items: platformTemplates },
+    { key: 'my', label: 'My Templates', hint: 'Created by you', items: myTemplates },
+    { key: 'platform', label: 'Shared Templates', hint: 'Created by others, and built into A3T', items: platformTemplates },
     { key: 'training', label: 'Training Templates', hint: 'Learn A3T step by step', items: trainingTemplates },
     { key: 'community', label: 'Community Templates', hint: 'Shared by the community', items: communityTemplates },
   ]);
@@ -307,7 +310,7 @@ do:
       if (!draftTemplate.name?.trim()) { saving = false; saveMsg = 'Name required'; return; }
       const res = await execFlow('a3t-templates-create', 'a3t', {
         org_id: 'org-default',
-        user_id: 'usr-superadmin',
+        user_id: $currentUser?.id ?? '',
         timestamp: new Date().toISOString(),
         data: {
           id: draftTemplate.id,
@@ -343,7 +346,7 @@ do:
     const res = await execFlow('a3t-templates-update', 'a3t', {
       id: template.id,
       org_id: 'org-default',
-      user_id: 'usr-superadmin',
+      user_id: $currentUser?.id ?? '',
       timestamp: new Date().toISOString(),
       data: {
         name: template.name,
@@ -369,7 +372,7 @@ do:
     const id = `tpl-${crypto.randomUUID().slice(0, 8)}`;
     const res = await execFlow('a3t-templates-create', 'a3t', {
       org_id: 'org-default',
-      user_id: 'usr-superadmin',
+      user_id: $currentUser?.id ?? '',
       timestamp: new Date().toISOString(),
       data: {
         id, name: newName, version: template.version,
