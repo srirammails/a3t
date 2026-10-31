@@ -222,8 +222,10 @@ export async function loadProjects(force = false) {
   for (const i of infos) if (!byName.has(i.namespace)) byName.set(i.namespace, { name: i.namespace, platform: false });
   projects = [...byName.values()]
     .map((p) => ({ ...p, info: infos.find((i) => i.namespace === p.name) }))
-    // A project you can't see is left out entirely, not shown as open.
+    // A project you can't see is left out entirely, not shown as open; so is an
+    // empty namespace from before projects (nothing in it, no project record).
     .filter((p) => p.info || p.platform || !hidden.has(p.name))
+    .filter((p) => p.info || p.platform || (p.flows ?? 0) + (p.resources ?? 0) + (p.triggers ?? 0) > 0)
     .sort((a, b) => Number(a.platform) - Number(b.platform) || a.name.localeCompare(b.name));
   // A remembered project that no longer exists would show an empty dash.
   if (project && !projects.some((p) => p.name === project)) setProject(ALL);

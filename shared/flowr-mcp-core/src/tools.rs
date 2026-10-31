@@ -1854,9 +1854,9 @@ pub const PLATFORM_NAMESPACES: &[&str] = &["a3t", "system"];
 pub const PLATFORM_PROJECTS: &[&str] = &["a3t-test", "system-tests"];
 
 /// Every namespace in the registry, as a project: the union of the namespaces
-/// holding flows, resources and triggers, plus `default`, with each one's counts.
+/// holding flows, resources and triggers, plus the platform's, with each one's counts.
 async fn list_projects(storage: &dyn StorageBackend, principal: &flowr_policy::Principal) -> CallToolResult {
-    let mut names: std::collections::BTreeSet<String> = ["default".to_string()].into();
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for ns in PLATFORM_NAMESPACES { names.insert(ns.to_string()); }
     match storage.workflows().namespaces().await {
         Ok(n) => names.extend(n),
