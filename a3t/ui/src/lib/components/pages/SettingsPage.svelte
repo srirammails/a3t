@@ -58,17 +58,21 @@
     loaded = true;
   }
 
-  // A runtime-seeded `_menu` may predate newer Infrastructure leaves; make sure the
-  // Logs & Retention and Storage Backend leaves are always present.
+  // A runtime-seeded `_menu` may predate newer leaves; make sure these are always
+  // present: Logs & Retention and Storage Backend under Infrastructure, and
+  // Organisations under General.
   function ensureInfraLeaves() {
     const nav = navData.map(g => ({ ...g, items: [...g.items] }));
-    let infra = nav.find(g => g.label === 'Infrastructure');
-    if (!infra) { infra = { label: 'Infrastructure', icon: 'server', items: [] }; nav.push(infra); }
-    const want: Leaf[] = [
-      { key: 'infra.backend', label: 'Storage Backend', icon: 'database', ee: true },
-      { key: 'infra.logs', label: 'Logs & Retention', icon: 'audit' },
+    const want: { group: string; icon: string; leaf: Leaf }[] = [
+      { group: 'Infrastructure', icon: 'server', leaf: { key: 'infra.backend', label: 'Storage Backend', icon: 'database', ee: true } },
+      { group: 'Infrastructure', icon: 'server', leaf: { key: 'infra.logs', label: 'Logs & Retention', icon: 'audit' } },
+      { group: 'General', icon: 'general', leaf: { key: 'general.orgs', label: 'Organisations', icon: 'users' } },
     ];
-    for (const leaf of want) if (!infra.items.some(it => it.key === leaf.key)) infra.items.push(leaf);
+    for (const { group, icon, leaf } of want) {
+      let g = nav.find(x => x.label === group);
+      if (!g) { g = { label: group, icon, items: [] }; nav.push(g); }
+      if (!g.items.some(it => it.key === leaf.key)) g.items.push(leaf);
+    }
     navData = nav;
   }
   async function saveSetting(key: string, value: string): Promise<boolean> {
