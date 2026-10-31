@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { inContext, namespacesFor, isPlatform } from '$lib/stores/context.svelte.ts';
+  import { inContext, namespacesFor, isPlatform, itemProject, getProject } from '$lib/stores/context.svelte.ts';
   import FoldSection from '$lib/components/shared/FoldSection.svelte';
   import ProjectPill from '$lib/components/shared/ProjectPill.svelte';
   import { contextRev_ } from '$lib/stores/apps.svelte.ts';
@@ -30,8 +30,8 @@
   let view = $state<'list' | 'editor'>('list');
   let loading = $state(true);
   let triggers = $state<Trigger[]>([]);
-  const myTriggers = $derived(triggers.filter((t: any) => !isPlatform(t.namespace)));
-  const sharedTriggers = $derived(triggers.filter((t: any) => isPlatform(t.namespace)));
+  const myTriggers = $derived(triggers.filter((t: any) => !isPlatform(t.project)));
+  const sharedTriggers = $derived(triggers.filter((t: any) => isPlatform(t.project)));
   let availableFlows = $state<FlowSummary[]>([]);
   let editingTrigger = $state<Trigger | null>(null);
   let deleteTarget = $state<Trigger | null>(null);
@@ -41,7 +41,7 @@
   let formDesc = $state('');
   let formType = $state<'webhook' | 'cron' | 'event'>('webhook');
   let formEnabled = $state(true);
-  let formNs = $state('default');
+  let formNs = $state(getProject() || 'default');
   let formPath = $state('/');
   let formMethod = $state('POST');
   let formMsgTemplate = $state('');
@@ -163,7 +163,10 @@
       if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = []; } }
       // list_triggers returns { count, triggers: [...] }
       const all: Trigger[] = Array.isArray(d) ? d : (d?.triggers ?? d?.rows ?? []);
-      triggers = all.filter((t: any) => inContext(t.namespace));
+      // Users' triggers saved in `a3t` before projects (agent endpoints) are `default`'s.
+      triggers = all
+        .map((t: any) => ({ ...t, project: itemProject('trigger', t.namespace, t) }))
+        .filter((t: any) => inContext(t.project));
     } else triggers = [];
     loading = false;
   }
@@ -207,7 +210,7 @@
 
   // ── Form helpers ──
   function resetForm() {
-    formName = ''; formDesc = ''; formType = 'webhook'; formEnabled = true; formNs = 'default';
+    formName = ''; formDesc = ''; formType = 'webhook'; formEnabled = true; formNs = getProject() || 'default';
     formPath = '/'; formMethod = 'POST'; formMsgTemplate = '';
     formCron = '*/5 * * * *'; formCronMsg = ''; formTimezone = '';
     formEventSource = ''; formEventFilter = '';
@@ -360,7 +363,7 @@
           <div class="trg-body">
             <div class="trg-row1">
               <span class="trg-name">{t.name}</span>
-              <ProjectPill project={t.namespace} />
+              <ProjectPill project={(t as any).project ?? t.namespace} />
               <span class="trg-badge">{t.config.type}</span>
               {#if t.config.type === 'webhook'}<span class="trg-detail">{t.config.method ?? 'POST'} {t.config.path}</span>{/if}
               {#if t.config.type === 'cron'}<span class="trg-detail">{t.config.expression}</span>{/if}

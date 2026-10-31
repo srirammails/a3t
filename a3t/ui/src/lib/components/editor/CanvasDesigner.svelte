@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { getProject } from '$lib/stores/context.svelte.ts';
   // Canvas editor — a canvas is ONE flow's DEPLOYMENT metadata (not a multi-agent
   // graph). See .ai/A3T_CANVAS_SPEC.md §3. It emits the a3t.io/v1alpha1 CanvasSpec:
   //   { flowRef, placement{mode,runtimeSelector,namespace}, lifecycle{state,scaling,restart}, health{dependsOn,onDependencyDown} }
@@ -54,7 +55,8 @@
 
   let activeSection = $state('designer');
   let name = $state('');
-  let namespace = $state('default');
+  // A new canvas belongs to the selected project.
+  let namespace = $state(getProject() || 'default');
   let description = $state('');
 
   // §3 CanvasSpec, held as flat form state.

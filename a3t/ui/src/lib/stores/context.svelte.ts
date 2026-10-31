@@ -112,12 +112,43 @@ export function canSee(_p: Project): boolean {
   return true;
 }
 
-/// The project an agent or template belongs to. Before projects, the dash saved
-/// users' agents and templates in `a3t`; those are `default`'s (the pre-projects
-/// namespace), and only what the platform itself made (`created_by: system`)
-/// stays in the platform's namespace.
+/// Kinds of items the dash lists, for [`itemProject`].
+export type ItemKind = 'agent' | 'template' | 'flow' | 'execution' | 'resource' | 'trigger';
+
+/// The project an item shows under. Usually its namespace — but before projects
+/// the dash saved users' work in the platform's `a3t` namespace, and that work
+/// is `default`'s (the pre-projects namespace). What the platform itself ships
+/// stays platform: built-in agents and templates (`created_by: system`), its
+/// `a3t-*` / `adb-*` flows and their runs, shared infrastructure (LLMs, MCP
+/// servers, databases, ADB), canvas presets (`preset-*`), and triggers that
+/// only start platform flows.
+export function itemProject(
+  kind: ItemKind,
+  ns: string | undefined,
+  item: { name?: string; type?: string; created_by?: string; targets?: { name?: string; namespace?: string }[] } = {},
+): string | undefined {
+  if (!ns || !isPlatform(ns)) return ns;
+  const platformFlow = (n?: string, space?: string) => space === 'system' || /^(a3t|adb)-/.test(n ?? '');
+  switch (kind) {
+    case 'agent':
+    case 'template':
+      return item.created_by === 'system' ? ns : 'default';
+    case 'flow':
+    case 'execution':
+      return platformFlow(item.name, ns) ? ns : 'default';
+    case 'resource':
+      return item.type === 'canvas' && !(item.name ?? '').startsWith('preset-') ? 'default' : ns;
+    case 'trigger': {
+      const targets = item.targets ?? [];
+      const platformOnly = targets.length > 0 && targets.every((t) => platformFlow(t.name, t.namespace));
+      return !(item.name ?? '').startsWith('agent-') && platformOnly ? ns : 'default';
+    }
+  }
+}
+
+/// `itemProject` for an agent or template.
 export function projectOf(ns: string | undefined, createdBy?: string): string | undefined {
-  return ns && isPlatform(ns) && createdBy !== 'system' ? 'default' : ns;
+  return itemProject('agent', ns, { created_by: createdBy });
 }
 
 export function isPlatform(ns: string | undefined): boolean {
@@ -141,10 +172,10 @@ export function inContext(ns: string | undefined, kind: ListKind = 'owned'): boo
   return namespacesFor(kind).includes(ns) || (!project && !projects.some((p) => p.name === ns));
 }
 
-/// A canvas that deploys a flow is the project's; an unbound one is a preset,
-/// shared like a template.
-export function canvasKind(r: { config?: { flowRef?: string } }): ListKind {
-  return r.config?.flowRef ? 'owned' : 'shared';
+/// A preset canvas (`preset-*`) is shared like a template; any other is the
+/// project's.
+export function canvasKind(r: { name?: string }): ListKind {
+  return (r.name ?? '').startsWith('preset-') ? 'shared' : 'owned';
 }
 
 /// A stable key for "what the lists are showing", for pages that cache a load.

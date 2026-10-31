@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { inContext, canvasKind } from '$lib/stores/context.svelte.ts';
+  import { inContext, canvasKind, itemProject } from '$lib/stores/context.svelte.ts';
   import { contextRev_ } from '$lib/stores/apps.svelte.ts';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
@@ -18,9 +18,9 @@
   let loading = $state(true);
   let error = $state('');
   let canvases = $state<any[]>([]);
-  /// A canvas that deploys a flow is the project's; an unbound one is a preset.
-  const myCanvases = $derived(canvases.filter((c) => c.flowRef !== '—'));
-  const sharedCanvases = $derived(canvases.filter((c) => c.flowRef === '—'));
+  /// Presets (`preset-*`) are shared placement shapes; every other canvas is mine.
+  const myCanvases = $derived(canvases.filter((c) => canvasKind(c) === 'owned'));
+  const sharedCanvases = $derived(canvases.filter((c) => canvasKind(c) === 'shared'));
   let runtimes = $state<any[]>([]);
   let deployMsg = $state('');
   // Live k8s deployment status from the controller, keyed by flowRef.
@@ -49,13 +49,15 @@
       }
     }
     if (cv.ok) {
-      canvases = (Array.isArray(cv.data) ? cv.data : (cv.data?.resources ?? [])).filter((r: any) => inContext(r.namespace, canvasKind(r))).map((r: any) => {
+      canvases = (Array.isArray(cv.data) ? cv.data : (cv.data?.resources ?? []))
+        .map((r: any) => ({ ...r, project: itemProject('resource', r.namespace, { ...r, type: 'canvas' }) }))
+        .filter((r: any) => inContext(r.project, canvasKind(r))).map((r: any) => {
         const cfg = r.config ?? {};
         const placement = cfg.placement ?? {};
         const placed = resolveRuntime(placement);
         const flowRef = cfg.flowRef ?? '—';
         return {
-          name: r.name, namespace: r.namespace, config: cfg,
+          name: r.name, namespace: r.namespace, project: r.project, config: cfg,
           flowRef,
           mode: placement.mode ?? 'shared',
           state: cfg.lifecycle?.state ?? 'running',
@@ -171,7 +173,7 @@
             description={c.flowRef === '—' ? 'preset — copy it to deploy a flow' : `flow ${c.flowRef}`}
             tags={c.live ? [c.mode, c.session, c.live.phase] : [c.mode, c.session, c.state]}
             meta={c.live ? (c.live.runtime || c.placedRuntime || c.mode) : (controllerOn ? 'not deployed' : (c.placedRuntime ? '→ ' + c.placedRuntime : 'no runtime'))}
-            project={c.namespace}
+            project={c.project ?? c.namespace}
             actionLabel="Deploy"
             onclick={() => editCanvas(c)}
             onaction={() => deployCanvas(c)}

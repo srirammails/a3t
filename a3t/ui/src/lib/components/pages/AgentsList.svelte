@@ -205,7 +205,7 @@
       if (!usingExisting) {
         const [tns, tname] = target.includes('/') ? [target.split('/')[0], target.split('/').slice(1).join('/')] : ['a3t', target];
         await mcpCall('create_trigger', {
-          name: `agent-${id}-chat`, namespace: 'a3t',
+          name: `agent-${id}-chat`, namespace: newAgent.namespace,
           config: { type: 'webhook', path: epPath },
           targets: [{ type: 'workflow', namespace: tns, name: tname }],
           enabled: true,
@@ -227,7 +227,8 @@
     if (res.ok) {
       // Remove the agent's endpoint (webhook trigger), if any
       try {
-        const tr = await mcpCall('list_triggers', { namespace: 'a3t' });
+        // The endpoint is in the agent's project (or `a3t`, for older agents).
+        const tr = await mcpCall('list_triggers', {});
         const list = Array.isArray(tr.data) ? tr.data : (tr.data?.triggers ?? []);
         const trig = list.find((t: any) => t?.config?.path === `/agent/${agentId}/chat`);
         if (trig?.id) await mcpCall('delete_trigger', { id: trig.id });

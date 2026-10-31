@@ -17,7 +17,7 @@
   import { navigateTo, getActivePanel } from '$lib/stores/panels.svelte.ts';
   import { can, currentUser } from '$lib/stores/auth';
   import { onMount } from 'svelte';
-  import { namespacesFor } from '$lib/stores/context.svelte.ts';
+  import { namespacesFor, inContext, itemProject, getProject } from '$lib/stores/context.svelte.ts';
   import { contextRev_ } from '$lib/stores/apps.svelte.ts';
   import * as YAML from 'yaml';
 
@@ -31,6 +31,8 @@
   // Raw data
   interface Resource {
     name: string; namespace: string; type: string; category: string;
+    /// The project it shows under (itemProject); `namespace` is where it's stored.
+    project?: string;
     description: string; created_at: string; created_by: string;
     tags: string[]; healthy: boolean; config?: Record<string, any>;
   }
@@ -191,7 +193,7 @@
   let showCreate = $state(false);
   let createForCategory = $state('');
   let createTab = $state('details');
-  let newResource = $state({ name: '', namespace: 'a3t', type: '', config: '{}' });
+  let newResource = $state({ name: '', namespace: getProject() || 'default', type: '', config: '{}' });
 
   // Starting config for a new resource of a type; replaced when the type changes,
   // until the user edits it.
@@ -258,7 +260,7 @@ do:
   let flowDirty = $state(false);
   let flowDeploying = $state(false);
   let isNewFlow = $state(false);
-  let flowMeta = $state({ name: '', namespace: 'a3t', version: '1.0.0', description: '' });
+  let flowMeta = $state({ name: '', namespace: getProject() || 'default', version: '1.0.0', description: '' });
   let flowMetaDirty = $state(false);
 
   // ── Flow execution history (Logs tab) ──
@@ -337,7 +339,7 @@ do:
 
   function newFlow() {
     isNewFlow = true;
-    flowMeta = { name: '', namespace: 'a3t', version: '1.0.0', description: '' };
+    flowMeta = { name: '', namespace: getProject() || 'default', version: '1.0.0', description: '' };
     flowMetaDirty = false;
     flowYaml = DEFAULT_FLOW_YAML;
     flowYamlLoading = false;
@@ -345,7 +347,7 @@ do:
     panelTab = 'overview';
     resetTestState();
     selected = {
-      name: 'new-flow', namespace: 'a3t', type: 'workflow', category: 'flows',
+      name: 'new-flow', namespace: getProject() || 'default', type: 'workflow', category: 'flows',
       description: '', created_at: '', created_by: '', tags: [], healthy: true,
     };
   }
@@ -380,8 +382,9 @@ do:
 
   // ── Fetch ──
   async function fetchAllResources() {
-    // Resources include the platform's shared ones (LLMs, ADB, MCP); flows are the project's.
-    const namespaces = namespacesFor('shared');
+    // Platform namespaces too: users' resources and flows saved there before
+    // projects are `default`'s (itemProject); only the selected project's are kept.
+    const namespaces = namespacesFor('picker');
     const results: Resource[] = [];
 
     // Fetch resources
@@ -392,8 +395,10 @@ do:
         for (const r of data.resources) {
           // A project's own record (Projects app) is not a resource to manage here.
           if (r.type === 'project') continue;
+          const project = itemProject('resource', r.namespace ?? ns, r);
+          if (!inContext(project, 'shared')) continue;
           results.push({
-            name: r.name, namespace: r.namespace ?? ns,
+            name: r.name, namespace: r.namespace ?? ns, project,
             type: r.type ?? 'unknown', category: categorize(r.type ?? ''),
             description: r.description ?? '', created_at: r.created_at ?? '',
             created_by: r.created_by ?? '', tags: r.tags ?? [], healthy: true,
@@ -404,13 +409,15 @@ do:
     }
 
     // Fetch workflows and show them under "flows" category
-    for (const ns of namespacesFor('owned')) {
+    for (const ns of namespacesFor('picker')) {
       const res = await flowsMcp.list(ns);
       const data = res?.data;
       if (data?.workflows) {
         for (const wf of data.workflows) {
+          const project = itemProject('flow', wf.namespace ?? ns, wf);
+          if (!inContext(project, 'owned')) continue;
           results.push({
-            name: wf.name, namespace: wf.namespace ?? ns,
+            name: wf.name, namespace: wf.namespace ?? ns, project,
             type: 'workflow', category: 'flows',
             description: `v${wf.version} · ${wf.step_count} steps`,
             created_at: '', created_by: '',
@@ -463,7 +470,7 @@ do:
       database: 'postgres', api: 'http', mcp: 'mcp',
       functions: 'function', scripts: 'script', variables: 'variable', credentials: 'credential',
     };
-    newResource = { name: '', namespace: 'a3t', type: typeMap[category] ?? '', config: '{}' };
+    newResource = { name: '', namespace: getProject() || 'default', type: typeMap[category] ?? '', config: '{}' };
     createTab = 'details';
     showCreate = true;
   }
@@ -1183,7 +1190,7 @@ do:
                     icon={catMeta(r.category).icon}
                     color={CAT_COLORS[r.category] ?? '#999'}
                     name={r.name}
-                    project={r.namespace}
+                    project={r.project ?? r.namespace}
                     description={r.description || r.type}
                     tags={[r.type, r.namespace]}
                     meta={r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}
@@ -1220,7 +1227,7 @@ do:
                   icon={catMeta(r.category).icon}
                   color={CAT_COLORS[r.category] ?? '#999'}
                   name={r.name}
-                    project={r.namespace}
+                    project={r.project ?? r.namespace}
                   description={r.description || r.type}
                   tags={[r.type, r.namespace]}
                   meta={r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}

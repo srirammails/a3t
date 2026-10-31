@@ -7,7 +7,7 @@
 
 import { mcpCall, fetchChatSessions, opsApi, canvasApi } from '$lib/services/api';
 import { RESOURCE_CATEGORIES, categorize } from '$lib/core/resources/categories';
-import { namespacesFor, inContext, canvasKind, projectOf, getProjects, getShowPlatform, loadProjects, canSee, roleIn, type ListKind } from '$lib/stores/context.svelte.ts';
+import { namespacesFor, inContext, canvasKind, projectOf, itemProject, getProjects, getShowPlatform, loadProjects, canSee, roleIn, type ListKind } from '$lib/stores/context.svelte.ts';
 
 export type AppItem = {
   /// What navigation addresses. For chat this is the *client* conversation id,
@@ -151,16 +151,20 @@ async function loadAll(source: string): Promise<AppItem[]> {
       }));
   }
   if (source === 'flows') {
+    // Platform namespaces too: users' flows saved there before projects are
+    // `default`'s (itemProject); the filter below keeps the selected project's.
     const out: AppItem[] = [];
-    for (const ns of namespacesFor('owned')) {
+    for (const ns of namespacesFor('picker')) {
       const res = await mcpCall('list_flows', { namespace: ns });
       if (!res.ok) continue;
       for (const r of rows(res.data, 'workflows', 'flows')) {
+        const project = itemProject('flow', r.namespace ?? ns, { name: r.name });
+        if (!inContext(project, 'owned')) continue;
         out.push({
           // "~" not "/": the id becomes a single URL path segment.
           id: `${r.namespace ?? ns}~${r.name}`,
           label: r.name,
-          namespace: r.namespace ?? ns,
+          namespace: project,
           sub: [r.version ? `v${r.version}` : '',
                 r.step_count != null ? `${r.step_count} step${r.step_count === 1 ? '' : 's'}` : '']
             .filter(Boolean).join(' · '),
@@ -175,19 +179,21 @@ async function loadAll(source: string): Promise<AppItem[]> {
     // Fixed categories, always all shown — a zero is information. Counts come from
     // the same two sources the Resources page merges.
     const counts: Record<string, number> = {};
-    for (const ns of namespacesFor('shared')) {
+    for (const ns of namespacesFor('picker')) {
       const res = await mcpCall('list_resources', { namespace: ns });
       if (!res.ok) continue;
       for (const r of rows(res.data, 'resources')) {
         if (r.type === 'project') continue; // the Projects app's records
+        if (!inContext(itemProject('resource', r.namespace ?? ns, r), 'shared')) continue;
         const c = categorize(r.type ?? '');
         counts[c] = (counts[c] ?? 0) + 1;
       }
     }
     let flowCount = 0;
-    for (const ns of namespacesFor('owned')) {
+    for (const ns of namespacesFor('picker')) {
       const fl = await mcpCall('list_flows', { namespace: ns });
-      if (fl.ok) flowCount += rows(fl.data, 'workflows', 'flows').length;
+      if (fl.ok) flowCount += rows(fl.data, 'workflows', 'flows')
+        .filter((f: any) => inContext(itemProject('flow', f.namespace ?? ns, f), 'owned')).length;
     }
     counts.flows = flowCount;
     counts.all = Object.entries(counts).filter(([k]) => k !== 'all')
@@ -227,10 +233,12 @@ async function loadAll(source: string): Promise<AppItem[]> {
   if (source === 'canvases') {
     const res = await canvasApi.list();
     if (!res.ok) throw new Error(res.error || 'Could not load canvases');
-    return rows(res.data, 'resources').filter((r: any) => inContext(r.namespace, canvasKind(r))).map((r: any) => {
+    return rows(res.data, 'resources')
+      .map((r: any) => ({ ...r, project: itemProject('resource', r.namespace || undefined, { ...r, type: 'canvas' }) }))
+      .filter((r: any) => inContext(r.project, canvasKind(r))).map((r: any) => {
       const c = r.config ?? {};
       return {
-        id: r.name, label: r.name, namespace: r.namespace || undefined,
+        id: r.name, label: r.name, namespace: r.project,
         sub: c.flowRef ? `deploys ${c.flowRef}` : (c.shared === false ? 'your copy · unbound' : 'preset'),
         status: c.flowRef ? 'active' : undefined,
       };
@@ -244,7 +252,7 @@ async function loadAll(source: string): Promise<AppItem[]> {
     if (!res.ok) throw new Error(res.error ?? 'list_triggers failed');
     return rows(res.data, 'triggers').map((r: any) => ({
       id: r.id ?? r.name, label: r.name ?? r.id, sub: r.config?.type ?? r.type ?? '',
-      namespace: r.namespace || undefined, status: r.status || undefined,
+      namespace: itemProject('trigger', r.namespace || undefined, r), status: r.status || undefined,
     }));
   }
   if (source === 'executions') {
@@ -252,7 +260,7 @@ async function loadAll(source: string): Promise<AppItem[]> {
     if (!res.ok) throw new Error(res.error ?? 'list_executions failed');
     return rows(res.data, 'executions').map((r: any) => ({
       id: r.instance_id, label: r.name ?? r.instance_id,
-      namespace: r.namespace || undefined,
+      namespace: itemProject('execution', r.namespace || undefined, r),
       sub: [r.status, r.started_at ? relTime(r.started_at) : ''].filter(Boolean).join(' · '),
       status: r.status ? String(r.status).toLowerCase() : undefined,
     }));

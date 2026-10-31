@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { inContext } from '$lib/stores/context.svelte.ts';
+  import { inContext, itemProject } from '$lib/stores/context.svelte.ts';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   // Executions — the run history persisted in the storage backend. Lists recent
   // workflow instances (list_executions), with a detail drawer per run
@@ -42,7 +42,8 @@
     loading = false;
   }
 
-  let shown = $derived(rows.filter(r => inContext((r as any).namespace)
+  // Runs of users' flows saved in `a3t` before projects are `default`'s.
+  let shown = $derived(rows.filter(r => inContext(itemProject('execution', (r as any).namespace, r as any))
     && (fStatus === 'all' || r.status?.toLowerCase() === fStatus)));
 
   async function openDetail(r: Exec) {
