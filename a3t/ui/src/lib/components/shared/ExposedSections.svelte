@@ -83,16 +83,30 @@
     if (res.ok) bumpContext();
   }
 
+  /// One card per release (name + version): passed on from system to a3t, the
+  /// same template is exposed twice; keep the copy your own org released.
+  const deduped = $derived.by(() => {
+    const mine = getProjects().find((x) => x.name === target)?.info?.owner;
+    const ownerOf = (ns: string) => getProjects().find((x) => x.name === ns)?.info?.owner;
+    const best = new Map<string, Item>();
+    for (const it of items) {
+      const k = `${it.name}@${it.sub}`;
+      const cur = best.get(k);
+      if (!cur || (ownerOf(it.namespace) === mine && ownerOf(cur.namespace) !== mine)) best.set(k, it);
+    }
+    return [...best.values()];
+  });
+
   const byKind = (k: ExposedKind) => {
     const ns = new Set(exposedProjects(k).map((p) => p.name));
-    return items.filter((i) => ns.has(i.namespace));
+    return deduped.filter((i) => ns.has(i.namespace));
   };
 </script>
 
 {#if message}<div class="ex-msg">{message}</div>{/if}
 {#each ['shared', 'training', 'community'] as k (k)}
   {@const list = byKind(k as ExposedKind)}
-  {@const owners = [...new Set(exposedProjects(k as ExposedKind).map((p) => p.info?.owner).filter(Boolean))]}
+  {@const owners = [...new Set((list.length ? list.map((i) => getProjects().find((p) => p.name === i.namespace)) : exposedProjects(k as ExposedKind)).map((p) => p?.info?.owner).filter(Boolean))]}
   {@const title = k === 'shared' && owners.length ? `${noun} from ${owners.map((o) => o === 'a3t' ? 'A3T' : o === 'system' ? 'System' : o).join(' & ')}` : `${LABEL[k as ExposedKind].title} ${noun}`}
   <FoldSection {title} count={list.length} hint={LABEL[k as ExposedKind].hint} defaultOpen={k !== 'community'}>
     <div class="ex-grid">

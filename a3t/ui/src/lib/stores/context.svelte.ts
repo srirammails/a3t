@@ -131,7 +131,10 @@ function exposureFor(p: Project): ExposedKind | null {
   const ex = p.info?.policy?.exposure;
   if (!p.info || !ex?.audience || ex.audience === 'none' || p.name === project) return null;
   const orgs = viewingOrgs();
-  if (p.info.owner_kind === 'org' && orgs.includes(p.info.owner)) return null;
+  // With no project selected, your org's own projects are already in your
+  // lists. With one selected, a sibling project's release reaches it like
+  // any other org's: a3t-examples sees what a3t-shared exposes.
+  if (!project && p.info.owner_kind === 'org' && orgs.includes(p.info.owner)) return null;
   const reaches = ex.audience === 'public' || (ex.orgs ?? []).some((o: string) => orgs.includes(o));
   return reaches ? ((ex.kind ?? 'community') as ExposedKind) : null;
 }
