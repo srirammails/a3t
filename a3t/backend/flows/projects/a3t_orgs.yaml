@@ -37,8 +37,10 @@ do:
       table: orgs
       limit: 1000
       _resource: a3t/a3t-platform-db
+    # One row per org id: an install that seeded twice has duplicates; the
+    # oldest row is the org.
     export:
-      as: '{_orgs: .}'
+      as: '{_orgs: (group_by(.id) | map(sort_by(.created_at) | .[0]))}'
 - load-members:
     call: lancedb
     with:
