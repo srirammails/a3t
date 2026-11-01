@@ -255,6 +255,17 @@ fn kill_points(namespace: &str, name: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A step input as journaled for people: values over 64 KiB are replaced by
+/// their size (replay never reads inputs).
+fn shown(input: &Value) -> Value {
+    let size = input.to_string().len();
+    if size > 64 * 1024 {
+        json!({ "_truncated": true, "bytes": size })
+    } else {
+        input.clone()
+    }
+}
+
 fn halted(why: &str) -> RuntimeError {
     RuntimeError::Halted(why.to_string())
 }
@@ -438,8 +449,8 @@ impl JournalHook {
         false
     }
 
-    async fn pause(&self, key: &str, when: &str, reason: String) -> RuntimeError {
-        let rec = Record::Paused { step_key: key.to_string(), when: when.to_string(), reason };
+    async fn pause(&self, key: &str, when: &str, reason: String, input: &Value) -> RuntimeError {
+        let rec = Record::Paused { step_key: key.to_string(), when: when.to_string(), reason, input: shown(input) };
         match self.commit(vec![rec]).await {
             Ok(()) => self.stop(Halt::Paused),
             Err(e) => e,
@@ -489,7 +500,7 @@ impl StepHook for JournalHook {
                         "in-doubt side effect: step {key} started but did not record a result before the run was interrupted; \
                          it may or may not have taken effect"
                     );
-                    self.commit(vec![Record::StepFailed { step_key: key, attempt, error: Value::String(error.clone()), retryable: false, duration_us: 0 }])
+                    self.commit(vec![Record::StepFailed { step_key: key, attempt, error: Value::String(error.clone()), retryable: false, duration_us: 0, input: shown(input) }])
                         .await?;
                     return Ok(StepReplay::Failed { error });
                 }
@@ -502,7 +513,7 @@ impl StepHook for JournalHook {
         let edited = if self.debug {
             // The stepping mode holds until it pauses (a pause ends this attempt).
             if let Some(reason) = self.pause_before(&key, input) {
-                return Err(self.pause(&key, "before", reason).await);
+                return Err(self.pause(&key, "before", reason, input).await);
             }
             self.edits.lock().unwrap().remove(&key)
         } else {
@@ -523,6 +534,7 @@ impl StepHook for JournalHook {
                         class: StepClass::Pure,
                         duration_us: 0,
                         directive: "continue".into(),
+                        input: shown(input),
                     };
                     self.commit(vec![rec]).await?;
                     return Ok(StepReplay::Completed { output: input.clone(), context: None, directive: "continue".into() });
@@ -580,10 +592,10 @@ impl StepHook for JournalHook {
                         now
                     }
                 };
-                (Record::StepCompleted { step_key: key.clone(), attempt, output: output.clone(), context, class, duration_us, directive: directive.to_string() }, "after")
+                (Record::StepCompleted { step_key: key.clone(), attempt, output: output.clone(), context, class, duration_us, directive: directive.to_string(), input: shown(input) }, "after")
             }
             StepOutcome::Failed { error } => {
-                (Record::StepFailed { step_key: key.clone(), attempt, error: Value::String(error.to_string()), retryable: false, duration_us }, "on_error")
+                (Record::StepFailed { step_key: key.clone(), attempt, error: Value::String(error.to_string()), retryable: false, duration_us, input: shown(input) }, "on_error")
             }
         };
         let pause = if self.debug && !self.resuming_from(&key, when) { self.breakpoint(&key, when, input) } else { None };
@@ -601,7 +613,7 @@ impl StepHook for JournalHook {
         self.commit(vec![rec]).await?;
         self.kill("after_completed", &key)?;
         if let Some(reason) = pause {
-            return Err(self.pause(&key, when, reason).await);
+            return Err(self.pause(&key, when, reason, input).await);
         }
         Ok(())
     }

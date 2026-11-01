@@ -274,8 +274,8 @@ fn steps_of(entries: &[JournalEntry]) -> (Vec<Value>, Option<Value>) {
                 m.insert("edited".into(), json!(true));
                 steps.insert(step_key.clone(), m);
             }
-            Record::Paused { step_key, when, reason } => {
-                paused = Some(json!({ "step_key": step_key, "when": when, "reason": reason, "seq": e.seq, "at": e.at }));
+            Record::Paused { step_key, when, reason, input } => {
+                paused = Some(json!({ "step_key": step_key, "when": when, "reason": reason, "seq": e.seq, "at": e.at, "input": mask(input) }));
             }
             Record::DebugCommand { .. } => paused = None,
             _ => {}

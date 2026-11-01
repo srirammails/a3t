@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use futures::StreamExt;
-use serde_json::json;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::engine::*;
@@ -73,7 +73,7 @@ fn completed(key: &str) -> Record {
         output: json!(1),
         context: json!({}),
         class: StepClass::Pure,
-        duration_us: 1, directive: String::new(),
+        duration_us: 1, directive: String::new(), input: Value::Null,
     }
 }
 
@@ -305,7 +305,7 @@ async fn debug_requests_only_on_paused_debug_runs<S: EngineStore>(s: &S) {
     // Claim the debug run (the plain one is claimed too); pause it.
     let claimed = s.claim_runs(DEFAULT_POOL, "w", 5, LEASE).await.unwrap();
     let (lease, _, epoch) = claimed.into_iter().find(|(_, t, _)| t.run_id == id).unwrap();
-    s.append(id, epoch, &[Record::Paused { step_key: "/do/1/x".into(), when: "before".into(), reason: "breakpoint".into() }]).await.unwrap();
+    s.append(id, epoch, &[Record::Paused { step_key: "/do/1/x".into(), when: "before".into(), reason: "breakpoint".into(), input: Value::Null }]).await.unwrap();
     s.release(id, epoch, RunPhase::Suspended, RunOutcome::default(), &lease).await.unwrap();
     s.request(id, RunRequest::Debug { command: json!({ "step_over": true }), by: "u1".into() }).await.unwrap();
     let kinds: Vec<_> = s.read_from(id, 0).await.unwrap().into_iter().map(|e| e.record).collect();

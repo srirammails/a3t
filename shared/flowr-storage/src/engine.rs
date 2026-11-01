@@ -346,8 +346,20 @@ pub enum Record {
         duration_us: u64,
         #[serde(default)]
         directive: String,
+        /// The step's input, for people (replay never reads it); large values
+        /// are cut down to their size.
+        #[serde(default)]
+        input: Value,
     },
-    StepFailed { step_key: String, attempt: u32, error: Value, retryable: bool, duration_us: u64 },
+    StepFailed {
+        step_key: String,
+        attempt: u32,
+        error: Value,
+        retryable: bool,
+        duration_us: u64,
+        #[serde(default)]
+        input: Value,
+    },
     StepScheduled { step_key: String, pool: String },
     TimerSet { wait_id: String, fire_at: DateTime<Utc> },
     WaitForEvents { wait_id: String, correlation: Value },
@@ -356,7 +368,14 @@ pub enum Record {
     ApprovalDecided { wait_id: String, decision: Value, by: String },
     SubflowStarted { step_key: String, child_run: RunId },
     SubflowCompleted { step_key: String, child_run: RunId, output: Value },
-    Paused { step_key: String, when: String, reason: String },
+    Paused {
+        step_key: String,
+        when: String,
+        reason: String,
+        /// Before a step: the input it is about to run with.
+        #[serde(default)]
+        input: Value,
+    },
     DebugCommand { command: Value, by: String },
     DebugEdit { step_key: String, input: Value, by: String },
     Suspended,
