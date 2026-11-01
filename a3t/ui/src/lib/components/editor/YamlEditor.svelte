@@ -8,7 +8,9 @@
   import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
   import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 
-  let { value = '', onchange, readOnly = false }: { value: string; onchange?: (val: string) => void; readOnly?: boolean } = $props();
+  /// `reveal`: a line to select and scroll to; `n` makes a repeat request a change.
+  let { value = '', onchange, readOnly = false, reveal = null }:
+    { value: string; onchange?: (val: string) => void; readOnly?: boolean; reveal?: { line: number; n: number } | null } = $props();
 
   let editorContainer: HTMLDivElement;
   let view: EditorView;
@@ -73,7 +75,16 @@
     });
 
     view = new EditorView({ state, parent: editorContainer });
+    goto(reveal);
   });
+
+  function goto(r: { line: number } | null) {
+    if (!view || !r) return;
+    const line = view.state.doc.line(Math.max(1, Math.min(r.line, view.state.doc.lines)));
+    view.dispatch({ selection: { anchor: line.from, head: line.to }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) });
+    view.focus();
+  }
+  $effect(() => goto(reveal));
 
   onDestroy(() => {
     view?.destroy();

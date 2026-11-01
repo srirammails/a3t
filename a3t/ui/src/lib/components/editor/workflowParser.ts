@@ -43,6 +43,9 @@ export interface NTask {
   'export.as'?: string;
   then?: string;
   metadata?: any;
+  /// The step key the engine reports and breakpoints name (`/loop/send`):
+  /// parent names joined, loop / branch / try scopes left out.
+  key?: string;
 }
 
 type Category = 'switch' | 'fork' | 'for' | 'try' | 'do' | 'leaf';
@@ -119,15 +122,25 @@ function normaliseCncfEntry(entry: any): NTask {
   // fork: { branches }
   if (def.fork !== undefined) {
     const forkDef = typeof def.fork === 'object' ? def.fork : {};
-    const branches = (forkDef.branches ?? def.branches ?? []).map((b: any) => ({
-      name: b.name ?? 'branch',
-      do: normaliseTasks(b.do ?? []),
-    }));
+    // CNCF branches are named tasks (`- a: { do: [...] }`); a branch that is a
+    // single task is a one-step branch.
+    const branches = (forkDef.branches ?? def.branches ?? []).map((b: any) => {
+      if (b?.do && b.name) return { name: b.name, do: normaliseTasks(b.do) };
+      const name = Object.keys(b ?? {})[0] ?? 'branch';
+      const inner = b?.[name];
+      return { name, do: Array.isArray(inner?.do) ? normaliseTasks(inner.do) : normaliseTasks([b]) };
+    });
     return { name, type: 'fork', config: { branches }, ...common };
   }
   // try: { try, catch }
   if (def.try !== undefined) {
-    return { name, type: 'try', config: { do: normaliseTasks(def.try ?? []), catch: def.catch }, ...common };
+    // `catch:` is one block (`{ errors, do }`); older flows list several.
+    // The body is a list (CNCF) or `{ do, catch }` (FlowR); either may hold the catch.
+    const body = Array.isArray(def.try) ? def.try : def.try?.do ?? [];
+    const katch = def.catch ?? def.try?.catch;
+    const catches = (Array.isArray(katch) ? katch : katch ? [katch] : [])
+      .map((c: any) => ({ ...c, errors: c?.errors?.with ? [c.errors.with.type ?? 'error'] : c?.errors, do: normaliseTasks(c?.do ?? []) }));
+    return { name, type: 'try', config: { do: normaliseTasks(body), catch: catches }, ...common };
   }
   // wait
   if (def.wait !== undefined) {
@@ -162,6 +175,23 @@ export function normaliseTasks(raw: any[]): NTask[] {
     if (entry.name && entry.type) return entry as NTask;  // flowr format
     return normaliseCncfEntry(entry);
   });
+}
+
+/// Give every task its engine step key (see `NTask.key`).
+function assignKeys(tasks: NTask[], prefix = ''): void {
+  for (const t of Array.isArray(tasks) ? tasks : []) {
+    if (!t || typeof t !== 'object') continue;
+    const key = `${prefix}/${t.name}`;
+    t.key = key;
+    const cat = category(t.type);
+    if (cat === 'do') assignKeys(Array.isArray(t.config) ? t.config : [], key);
+    else if (cat === 'for') assignKeys(t.config?.do ?? [], key);
+    else if (cat === 'try') {
+      assignKeys(t.config?.do ?? [], key);
+      for (const c of t.config?.catch ?? []) assignKeys(c?.do ?? [], key);
+    } else if (cat === 'fork') for (const b of t.config?.branches ?? []) assignKeys(b?.do ?? [], key);
+    else if (cat === 'switch') for (const c of Array.isArray(t.config) ? t.config : []) assignKeys(c?.then ?? [], key);
+  }
 }
 
 // ── Graph builder ────────────────────────────────────────────────
@@ -258,6 +288,9 @@ function layoutSequence(g: GraphBuilder, tasks: NTask[], centerX: number, startY
     }
 
     if (!r) continue;
+    // The task's own node (leaf, or the header of a block) carries its key.
+    const own = g.nodes.find((n) => n.id === r!.entryId);
+    if (own && task.key) own.data = { ...own.data, stepKey: task.key };
 
     // Connect previous → current entry
     for (const pid of prevExitIds) {
@@ -725,6 +758,7 @@ export function parseWorkflowToGraph(parsed: any): WorkflowGraph {
     }
   }
 
+  assignKeys(tasks);
   const g = new GraphBuilder();
 
   const startId = g.id('start');

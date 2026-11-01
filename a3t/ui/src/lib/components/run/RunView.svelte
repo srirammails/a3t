@@ -5,8 +5,12 @@
   /// the next step's input. Reads the engine's run tools; polls while live.
   import { untrack } from 'svelte';
   import { runsApi, type DebugCommand } from '$lib/services/api';
+  import { nodeKey, type FlowDebug } from './debugState.svelte.ts';
 
-  let { runId, flowSteps = [], onrerun }: { runId: string; flowSteps?: string[]; onrerun?: (id: string) => void } = $props();
+  /// `shared`: the flow's state shared with the editor graph — this view
+  /// publishes the run's position to it and shows the step picked there.
+  let { runId, flowSteps = [], onrerun, shared = null }:
+    { runId: string; flowSteps?: string[]; onrerun?: (id: string) => void; shared?: FlowDebug | null } = $props();
 
   type Step = { step_key: string; status: string; class?: string; duration_us?: number; attempts?: number; edited?: boolean;
                 started_at?: string; completed_at?: string; seq?: number; error?: any; fire_at?: string };
@@ -32,6 +36,7 @@
     if (!r.ok) { error = r.error ?? 'Could not load the run'; return; }
     error = '';
     run = r.data;
+    shared?.show(r.data);
     if (j.ok && Array.isArray(j.data?.entries) && j.data.entries.length) entries = [...entries, ...j.data.entries];
   }
 
@@ -61,6 +66,19 @@
     if (paused && !out.some((s) => s.step_key === paused.step_key)) out.push({ step_key: paused.step_key, status: 'paused' });
     return out;
   });
+  // A step picked on the graph: show its latest iteration here.
+  $effect(() => {
+    const want = shared?.focus;
+    if (!want) return;
+    const hit = [...rows].reverse().find((s) => nodeKey(s.step_key) === want);
+    untrack(() => {
+      tab = 'steps';
+      selected = hit?.step_key ?? null;
+      message = hit ? '' : `${want} has not run in this run.`;
+      shared!.focus = null;
+    });
+  });
+
   function recordsOf(key: string): Entry[] {
     return entries.filter((e) => e.record?.step_key === key || e.record?.wait_id === key);
   }

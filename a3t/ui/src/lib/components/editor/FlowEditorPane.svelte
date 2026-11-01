@@ -14,9 +14,13 @@
   import JoinNode from './JoinNode.svelte';
   import FlowMarkerNode from './FlowMarkerNode.svelte';
   import YamlEditor from './YamlEditor.svelte';
+  import GraphFollow from './GraphFollow.svelte';
   import SchemaForm from './SchemaForm.svelte';
   import AgentTemplateEditor from './AgentTemplateEditor.svelte';
   import { parseWorkflowToGraph, isAgentTemplateYaml } from './workflowParser';
+  import { runsApi, type Breakpoint, type DebugCommand } from '$lib/services/api';
+  import { lineOfStep } from '$lib/components/studio/flow';
+  import type { FlowDebug } from '$lib/components/run/debugState.svelte.ts';
 
   let {
     initialYaml = '',
@@ -30,6 +34,9 @@
     aiKind = 'flow',
     aiName = '',
     part = null,
+    debug = null,
+    onrun,
+    onshowrun,
   }: {
     initialYaml: string;
     onchange?: (val: string) => void;
@@ -53,6 +60,12 @@
     /// studio puts Form and AI in its own panels): `main` = Graph | Code,
     /// `form`, or `ai`. Instances stay in step through `initialYaml`/`onchange`.
     part?: 'main' | 'form' | 'ai' | null;
+    /// The flow's breakpoints and shown run (studio): marked on the graph and
+    /// driven from its context menu.
+    debug?: FlowDebug | null;
+    /// Context menu → Run / Debug, and → show a step in the Runs panel.
+    onrun?: (debug: boolean) => void;
+    onshowrun?: () => void;
   } = $props();
 
   const nodeTypes = {
@@ -221,6 +234,62 @@
   let nodes = $derived.by<Node[]>(() => baseGraph?.nodes ?? []);
   let edges = $derived.by<Edge[]>(() => baseGraph?.edges ?? []);
 
+  // ── Breakpoints and the run's position on the graph ──
+  let shownNodes = $derived.by<Node[]>(() => {
+    if (!debug) return nodes;
+    const marks = debug.marks, current = debug.current, bps = debug.breakpoints;
+    return nodes.map((n) => {
+      const k = n.data?.stepKey as string | undefined;
+      if (!k) return n;
+      const bp = bps.find((b) => b.step_key === k);
+      const cls = [bp && `bp bp-${bp.when ?? 'before'}`, marks[k] && `st-${marks[k]}`, current === k && 'here'].filter(Boolean).join(' ');
+      return cls ? { ...n, class: cls } : n;
+    });
+  });
+
+  /// The node the shown run stands at, kept in view.
+  const currentNode = $derived(debug?.current ? nodes.find((n) => n.data?.stepKey === debug!.current)?.id ?? null : null);
+
+  // ── Context menu ──
+  type Menu = { x: number; y: number; key?: string; label?: string };
+  let menu = $state<Menu | null>(null);
+  let note = $state('');
+  let reveal = $state<{ line: number; n: number } | null>(null);
+  let revealN = 0;
+
+  function openMenu(event: MouseEvent, node?: any) {
+    event.preventDefault();
+    menu = { x: event.clientX, y: event.clientY, key: node?.data?.stepKey, label: node?.data?.label };
+  }
+  /// Close the menu and run its action on the step it was opened on (taken
+  /// before closing: the menu's own fields go with it); a returned string or a
+  /// throw is shown as a note.
+  function act(f: (key: string) => unknown) {
+    const key = menu?.key ?? '';
+    menu = null;
+    void (async () => {
+      note = '';
+      try { const err = await f(key); if (typeof err === 'string' && err) note = err; } catch (e) { note = (e as Error).message; }
+    })();
+  }
+  const bpOf = (k: string) => debug?.breakpoints.find((b) => b.step_key === k);
+  const bpToggle = (when: Breakpoint['when']) => act((k) => debug!.toggle(k, when));
+  async function command(c: DebugCommand, key?: string) {
+    const r = await runsApi.debug(debug!.runId!, c, key);
+    return r.ok ? '' : r.error ?? 'Command failed';
+  }
+  function gotoCode(key?: string) {
+    leftMode = 'code';
+    soloMode = 'code';
+    const line = key ? lineOfStep(yamlSource, key) : null;
+    if (line) reveal = { line, n: ++revealN };
+  }
+  function showInRun(key: string) {
+    debug!.focus = key;
+    onshowrun?.();
+  }
+  function onMenuKey(e: KeyboardEvent) { if (e.key === 'Escape') menu = null; }
+
   // Handle node clicks — toggle port expansion
   function handleNodeClick({ event, node }: { event: MouseEvent | TouchEvent; node: any }) {
     // Clicking a sub-node spawned by port expansion — scroll form
@@ -254,20 +323,72 @@
         {#if baseGraph.meta.hasExtensions}<span class="wf-meta-tag ext">{baseGraph.meta.extensionCount} ext</span>{/if}
       </div>
     {/if}
-    <SvelteFlow {nodes} {edges} {nodeTypes} fitView onnodeclick={handleNodeClick}
+    <SvelteFlow nodes={shownNodes} {edges} {nodeTypes} fitView onnodeclick={handleNodeClick}
+      onnodecontextmenu={({ event, node }) => openMenu(event, node)} onpanecontextmenu={({ event }) => openMenu(event)}
       nodesDraggable={!readOnly} nodesConnectable={!readOnly} elementsSelectable={!readOnly}>
       <Background />
       <Controls />
       {#if showMiniMap}<MiniMap />{/if}
+      <GraphFollow nodeId={currentNode} />
     </SvelteFlow>
+    {#if debug?.runId && Object.keys(debug.marks).length}
+      <div class="run-legend" title="The run selected in the Runs panel">
+        <span class="lg done">ran</span><span class="lg failed">failed</span><span class="lg running">running</span><span class="lg paused">paused</span>
+      </div>
+    {/if}
+    {#if note}<button class="graph-note" onclick={() => (note = '')} title="Dismiss">{note}</button>{/if}
   {:else}
     <div class="fep-empty">No steps to visualize — add <code>steps:</code> or <code>do:</code> tasks</div>
   {/if}
 {/snippet}
 
 {#snippet codeView()}
-  <YamlEditor value={yamlSource} onchange={onCodeChange} {readOnly} />
+  <YamlEditor value={yamlSource} onchange={onCodeChange} {readOnly} {reveal} />
 {/snippet}
+
+{#snippet contextMenu(m: Menu)}
+  <div class="cm-overlay" role="presentation" onclick={() => (menu = null)} oncontextmenu={(e) => { e.preventDefault(); menu = null; }}></div>
+  <div class="cm" role="menu" style="left: {Math.min(m.x, window.innerWidth - 250)}px; top: {Math.min(m.y, window.innerHeight - 320)}px">
+    {#if m.key}
+      {@const bp = bpOf(m.key)}
+      <div class="cm-head"><span>{m.label}</span><code>{m.key}</code></div>
+      {#if debug}
+        <button role="menuitem" onclick={() => bpToggle('before')}><span class="cm-ic bp">●</span>{bp?.when === 'before' || (bp && !bp.when) ? 'Remove breakpoint' : 'Break before this step'}</button>
+        <button role="menuitem" onclick={() => bpToggle('after')}><span class="cm-ic bp">◐</span>{bp?.when === 'after' ? 'Remove break after' : 'Break after this step'}</button>
+        <button role="menuitem" onclick={() => bpToggle('on_error')}><span class="cm-ic bp">⚠</span>{bp?.when === 'on_error' ? 'Remove break on error' : 'Break if this step fails'}</button>
+        {#if debug.paused}
+          <hr />
+          <button role="menuitem" onclick={() => act((k) => command('run_to', k))}><span class="cm-ic">⇥</span>Run to here</button>
+          <button role="menuitem" onclick={() => act(() => command('continue'))}><span class="cm-ic">⏵</span>Continue</button>
+          <button role="menuitem" onclick={() => act(() => command('step_over'))}><span class="cm-ic">↷</span>Step over</button>
+        {/if}
+        {#if debug.runId}
+          <hr />
+          <button role="menuitem" onclick={() => act(showInRun)}><span class="cm-ic">☰</span>Show input and output in run</button>
+        {/if}
+      {/if}
+      <hr />
+      <button role="menuitem" onclick={() => act(gotoCode)}><span class="cm-ic">{'</>'}</span>Go to code</button>
+      <button role="menuitem" onclick={() => act((k) => navigator.clipboard?.writeText(k))}><span class="cm-ic">⧉</span>Copy step key</button>
+    {:else}
+      {#if onrun}
+        <button role="menuitem" onclick={() => act(() => onrun!(false))}><span class="cm-ic">▶</span>Run…</button>
+        <button role="menuitem" onclick={() => act(() => onrun!(true))}><span class="cm-ic">🐞</span>Debug…</button>
+      {/if}
+      {#if debug?.paused}
+        <button role="menuitem" onclick={() => act(() => command('continue'))}><span class="cm-ic">⏵</span>Continue the paused run</button>
+      {/if}
+      {#if debug?.breakpoints.length}
+        <button role="menuitem" onclick={() => act(() => debug!.clear())}><span class="cm-ic bp">○</span>Clear all breakpoints ({debug.breakpoints.length})</button>
+      {/if}
+      {#if onrun || debug?.paused || debug?.breakpoints.length}<hr />{/if}
+      <button role="menuitem" onclick={() => act(() => gotoCode())}><span class="cm-ic">{'</>'}</span>Show code</button>
+    {/if}
+  </div>
+{/snippet}
+
+<svelte:window onkeydown={onMenuKey} />
+{#if menu}{@render contextMenu(menu)}{/if}
 
 {#snippet formView()}
   {#if parsed === null && yamlSource}
@@ -434,7 +555,7 @@
   .fep-tab.active { background: var(--bg-surface); color: var(--text-1); box-shadow: var(--shadow-sm); }
   .fep-tab:hover:not(.active) { color: var(--text-2); }
 
-  .fep-pane-body { flex: 1; overflow: hidden; }
+  .fep-pane-body { flex: 1; overflow: hidden; position: relative; }
 
   .fep-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-4); font-size: 13px; flex-direction: column; gap: 4px; }
   .fep-empty code { font-family: var(--font-mono); background: var(--bg-subtle); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
@@ -448,6 +569,51 @@
   .wf-meta-format { font-weight: 600; color: var(--spec, #5530a8); text-transform: uppercase; letter-spacing: 0.05em; }
   .wf-meta-tag { color: var(--text-3); background: var(--bg-surface); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); }
   .wf-meta-tag.ext { color: var(--checkpoint-ink, #8a5112); background: var(--checkpoint-bg, #fbf0e0); border-color: #f5dbb8; }
+
+  /* Breakpoints and the shown run's state, on the graph's nodes */
+  .fep :global(.svelte-flow__node.bp::before) {
+    content: ''; position: absolute; top: -6px; left: -6px; z-index: 3; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--err, #d92d20); border: 2px solid var(--bg-surface, #fff); box-shadow: 0 0 0 1px var(--err, #d92d20);
+  }
+  .fep :global(.svelte-flow__node.bp-after::before) { background: linear-gradient(90deg, var(--bg-surface, #fff) 50%, var(--err, #d92d20) 50%); }
+  .fep :global(.svelte-flow__node.bp-on_error::before) { border-radius: 2px; transform: rotate(45deg); }
+  .fep :global(.svelte-flow__node[class*='st-']) { border-radius: 10px; }
+  .fep :global(.svelte-flow__node.st-done) { box-shadow: 0 0 0 2px var(--ok, #15803d); }
+  .fep :global(.svelte-flow__node.st-failed) { box-shadow: 0 0 0 2px var(--err, #d92d20); }
+  .fep :global(.svelte-flow__node.st-waiting) { box-shadow: 0 0 0 2px var(--warn, #b45309); }
+  .fep :global(.svelte-flow__node.st-running) { box-shadow: 0 0 0 3px var(--spec, #5530a8); animation: fep-pulse 1.2s ease-in-out infinite; }
+  .fep :global(.svelte-flow__node.st-paused) { box-shadow: 0 0 0 3px var(--warn, #b45309), 0 0 0 7px rgba(180, 83, 9, 0.18); }
+  .fep :global(.svelte-flow__node.here::after) {
+    content: ''; position: absolute; top: 50%; right: -10px; transform: translate(100%, -50%); z-index: 3;
+    font: 600 10.5px var(--font-mono); white-space: nowrap; padding: 2px 6px; border-radius: 3px; color: #fff; background: var(--warn, #b45309);
+  }
+  .fep :global(.svelte-flow__node.here.st-running::after) { background: var(--spec, #5530a8); }
+  .fep :global(.svelte-flow__node.here.st-paused::after) { content: '⏸ paused here'; }
+  .fep :global(.svelte-flow__node.here.st-running::after) { content: '● running'; }
+  .fep :global(.svelte-flow__node.here.st-waiting::after) { content: '⏳ waiting'; }
+  @keyframes fep-pulse { 50% { box-shadow: 0 0 0 6px rgba(85, 48, 168, 0.25); } }
+
+  .run-legend { position: absolute; top: 34px; right: 10px; z-index: 5; display: flex; gap: 8px; padding: 4px 8px; font-size: 10.5px;
+                background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-3); }
+  .lg::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+  .lg.done::before { background: var(--ok, #15803d); } .lg.failed::before { background: var(--err, #d92d20); }
+  .lg.running::before { background: var(--spec, #5530a8); } .lg.paused::before { background: var(--warn, #b45309); }
+  .graph-note { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 6; max-width: 70%; border: 0; cursor: pointer;
+                padding: 6px 12px; border-radius: var(--r-sm); background: var(--err-bg, #fde8e8); color: var(--err, #b42318); font-size: 12px; }
+
+  /* Context menu */
+  .cm-overlay { position: fixed; inset: 0; z-index: 90; }
+  .cm { position: fixed; z-index: 91; min-width: 230px; max-width: 300px; display: flex; flex-direction: column; padding: 4px;
+        background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); font-size: 12.5px; }
+  .cm-head { display: flex; flex-direction: column; gap: 1px; padding: 5px 8px 6px; border-bottom: 1px solid var(--border); margin-bottom: 3px; }
+  .cm-head span { font-weight: 600; color: var(--text-1); }
+  .cm-head code { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-4); overflow: hidden; text-overflow: ellipsis; }
+  .cm button { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 5px 8px; border-radius: 4px;
+               cursor: pointer; text-align: left; color: var(--text-1); font-size: 12.5px; }
+  .cm button:hover { background: var(--bg-subtle); }
+  .cm-ic { width: 16px; text-align: center; color: var(--text-3); font-size: 11px; }
+  .cm-ic.bp { color: var(--err, #d92d20); }
+  .cm hr { border: 0; border-top: 1px solid var(--border); margin: 3px 0; }
 
   /* AI chat placeholder */
   .fep-ai { display: flex; flex-direction: column; height: 100%; }

@@ -142,7 +142,7 @@
     {:else}
       {#key active.id}
         {#if active.kind === 'flow'}
-          <FlowDocument doc={active} onrun={run} ondeployed={(ns, name) => deployed(active, ns, name)} />
+          <FlowDocument doc={active} onrun={run} ondeployed={(ns, name) => deployed(active, ns, name)} onshowrun={() => studio.reveal('bottom', 'runs')} />
         {:else}
           <ItemPreview doc={active} />
         {/if}

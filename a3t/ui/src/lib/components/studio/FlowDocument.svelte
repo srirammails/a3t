@@ -4,13 +4,19 @@
   /// tabs never loses an edit.
   import { flows as flowsMcp, mcpCall } from '$lib/services/api';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
+  import { flowDebug } from '$lib/components/run/debugState.svelte.ts';
   import { parse, type Doc } from './flow';
 
-  let { doc, onrun, ondeployed }: {
+  let { doc, onrun, ondeployed, onshowrun }: {
     doc: Doc;
     onrun: (debug: boolean) => void;
     ondeployed: (ns: string, name: string) => void;
+    /// Bring up the Runs panel (a step picked on the graph is shown there).
+    onshowrun?: () => void;
   } = $props();
+
+  /// Breakpoints and the run shown below, marked on the graph (deployed flows).
+  const debug = $derived(doc.isNew ? null : flowDebug(doc.ns, doc.name));
 
   let busy = $state(false);
   let message = $state('');
@@ -77,7 +83,8 @@
   </div>
   <div class="fd-body">
     {#if doc.loaded || doc.isNew}
-      <FlowEditorPane part="main" aiKind="flow" aiName={`${doc.ns}/${doc.name}`} initialYaml={doc.yaml ?? ''} onchange={(v: string) => (doc.yaml = v)} />
+      <FlowEditorPane part="main" aiKind="flow" aiName={`${doc.ns}/${doc.name}`} initialYaml={doc.yaml ?? ''} onchange={(v: string) => (doc.yaml = v)}
+        {debug} onrun={blocked ? undefined : onrun} {onshowrun} />
     {:else}
       <div class="loading">Loading {doc.ns}/{doc.name}…</div>
     {/if}

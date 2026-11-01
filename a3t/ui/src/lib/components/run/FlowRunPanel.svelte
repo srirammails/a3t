@@ -6,7 +6,8 @@
   /// browser.
   import { untrack } from 'svelte';
   import RunView from './RunView.svelte';
-  import { flows, runsApi, executions, type Breakpoint } from '$lib/services/api';
+  import { flows, runsApi, executions } from '$lib/services/api';
+  import { flowDebug } from './debugState.svelte.ts';
 
   let { ns, name, schema = null, steps = [], dialogOpen = $bindable(false), debugMode = $bindable(false) }:
     { ns: string; name: string; schema?: any; steps?: string[]; dialogOpen?: boolean; debugMode?: boolean } = $props();
@@ -23,7 +24,8 @@
 
   // ── Input ──
   const storeKey = $derived(`a3t.run.input.${ns}/${name}`);
-  const bpKey = $derived(`a3t.run.breakpoints.${ns}/${name}`);
+  /// Breakpoints and the shown run, shared with the editor graph.
+  const shared = $derived(flowDebug(ns, name));
   const fields = $derived.by(() => {
     const props = schema?.document?.properties ?? schema?.properties;
     if (!props || typeof props !== 'object') return null;
@@ -39,7 +41,6 @@
   let inputText = $state('{}');
   let formValues = $state<Record<string, any>>({});
   let inputError = $state('');
-  let breakpoints = $state<Breakpoint[]>([]);
   let pauseOnStart = $state(false);
 
   function read<T>(key: string, fallback: T): T {
@@ -56,11 +57,10 @@
 
   $effect(() => {
     if (!dialogOpen) return;
-    const f = fields, sk = storeKey, bk = bpKey;
+    const f = fields, sk = storeKey;
     untrack(() => {
       mode = f ? 'form' : 'json';
       seed(read(sk, {}));
-      breakpoints = read<Breakpoint[]>(bk, []);
     });
   });
 
@@ -82,10 +82,8 @@
   }
 
   // ── Breakpoints ──
-  const isSet = (k: string) => breakpoints.some((b) => b.step_key === k);
-  function toggle(k: string) {
-    breakpoints = isSet(k) ? breakpoints.filter((b) => b.step_key !== k) : [...breakpoints, { step_key: k, when: 'before' }];
-  }
+  const isSet = (k: string) => shared.has(k);
+  const toggle = (k: string) => void shared.toggle(k);
 
   // ── Runs ──
   async function loadRuns(more = false) {
@@ -116,12 +114,19 @@
     return () => { if (poll) clearInterval(poll); };
   });
 
+  // No run shown (or an older server without step views): nothing on the graph.
+  $effect(() => {
+    const fd = shared;
+    if (!selected || legacy) untrack(() => fd.show(null));
+  });
+
   async function run() {
     const input = collectInput();
     if (input === undefined) return;
     starting = true; message = '';
     write(storeKey, input);
-    if (debugMode) write(bpKey, breakpoints);
+    if (debugMode) shared.save();
+    const breakpoints = $state.snapshot(shared.breakpoints);
     let id: string | undefined;
     if (!legacy) {
       const r = await runsApi.start({ namespace: ns, name, input, debug: debugMode, ...(debugMode ? { breakpoints, pause_on_start: pauseOnStart } : {}) });
@@ -166,7 +171,7 @@
   <div class="rp-detail">
     {#if message}<div class="rp-msg">{message}</div>{/if}
     {#if selected && !legacy}
-      <RunView runId={selected} flowSteps={steps} onrerun={(id) => { selected = id; void loadRuns(); }} />
+      <RunView runId={selected} flowSteps={steps} {shared} onrerun={(id) => { selected = id; void loadRuns(); }} />
     {:else if selected}
       <div class="rp-empty">This server keeps no step journal yet; step views need the updated FlowR.</div>
     {:else}
@@ -217,7 +222,7 @@
               <button class="bp-dot" onclick={() => toggle(k)} title={isSet(k) ? 'Remove breakpoint' : 'Add breakpoint'}>{isSet(k) ? '●' : '○'}</button>
               <span class="mono">{k}</span>
               {#if isSet(k)}
-                {@const bp = breakpoints.find((b) => b.step_key === k)!}
+                {@const bp = shared.breakpoints.find((b) => b.step_key === k)!}
                 <select bind:value={bp.when}><option value="before">before</option><option value="after">after</option><option value="on_error">on error</option></select>
                 <input class="cond" placeholder="condition (jq on the step input)" bind:value={bp.condition} />
               {/if}

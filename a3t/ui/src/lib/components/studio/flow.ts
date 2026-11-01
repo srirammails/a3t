@@ -42,7 +42,11 @@ export function stepKeys(tasks: any, prefix = ''): string[] {
         out.push(...stepKeys(task.try.do ?? task.try, key));
         out.push(...stepKeys(task.try.catch?.do ?? task.catch?.do, key));
       }
-      if (task.fork?.branches) out.push(...stepKeys(task.fork.branches, key));
+      // Branch names are not part of the key (the engine runs branch `i` at
+      // `fork[i]`): a branch's steps sit directly under the fork.
+      for (const b of Array.isArray(task.fork?.branches) ? task.fork.branches : []) {
+        for (const inner of Object.values<any>(b ?? {})) out.push(...stepKeys(inner?.do, key));
+      }
     }
   }
   return out;
@@ -73,3 +77,40 @@ export function problems(yaml: string | undefined): Problem[] {
 export function newFlowYaml(ns: string, n: number): string {
   return `document:\n  dsl: 1.0.3\n  namespace: ${ns}\n  name: new-flow${n > 1 ? `-${n}` : ''}\n  version: 1.0.0\ndo:\n- hello:\n    set:\n      message: Hello\n`;
 }
+
+/// The line (1-based) where a step is named in the flow's YAML, for "go to
+/// code" from the graph: each segment of the key is the nearest such key
+/// under the one before it.
+export function lineOfStep(yaml: string | undefined, stepKey: string): number | null {
+  let doc: YAML.Document;
+  try { doc = YAML.parseDocument(yaml ?? ''); } catch { return null; }
+  let scope: unknown = doc.get('do', true) ?? doc.contents;
+  let at: number | null = null;
+  for (const seg of stepKey.split('/').filter(Boolean)) {
+    const pair = nearest(scope, seg);
+    if (!pair) return at === null ? null : lineAt(yaml ?? '', at);
+    at = (pair.key as any)?.range?.[0] ?? at;
+    scope = pair.value;
+  }
+  return at === null ? null : lineAt(yaml ?? '', at);
+}
+
+/// The shallowest `name:` pair under a node (breadth first).
+function nearest(root: unknown, name: string): YAML.Pair | null {
+  let level: unknown[] = [root];
+  while (level.length) {
+    const next: unknown[] = [];
+    for (const n of level) {
+      if (YAML.isMap(n)) {
+        for (const p of n.items) {
+          if (YAML.isScalar(p.key) && String(p.key.value) === name) return p;
+          next.push(p.value);
+        }
+      } else if (YAML.isSeq(n)) next.push(...n.items);
+    }
+    level = next;
+  }
+  return null;
+}
+
+const lineAt = (text: string, offset: number) => text.slice(0, offset).split('\n').length;
