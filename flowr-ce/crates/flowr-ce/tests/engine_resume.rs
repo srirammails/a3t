@@ -34,15 +34,21 @@ fn init() {
 }
 
 type Hits = Arc<Mutex<HashMap<String, usize>>>;
+/// Idempotency-Key headers received, per tag.
+type Keys = Arc<Mutex<HashMap<String, Vec<String>>>>;
 
-async fn effect_server() -> (String, Hits) {
+async fn effect_server() -> (String, Hits, Keys) {
     let hits: Hits = Arc::default();
-    let h = hits.clone();
+    let keys: Keys = Arc::default();
+    let (h, k) = (hits.clone(), keys.clone());
     let app = axum::Router::new().route(
         "/hit/:tag",
-        axum::routing::post(move |axum::extract::Path(tag): axum::extract::Path<String>| {
-            let h = h.clone();
+        axum::routing::post(move |axum::extract::Path(tag): axum::extract::Path<String>, headers: axum::http::HeaderMap| {
+            let (h, k) = (h.clone(), k.clone());
             async move {
+                if let Some(v) = headers.get("idempotency-key").and_then(|v| v.to_str().ok()) {
+                    k.lock().unwrap().entry(tag.clone()).or_default().push(v.to_string());
+                }
                 let mut m = h.lock().unwrap();
                 let n = m.entry(tag).or_insert(0);
                 *n += 1;
@@ -53,7 +59,7 @@ async fn effect_server() -> (String, Hits) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    (format!("http://{addr}"), hits)
+    (format!("http://{addr}"), hits, keys)
 }
 
 fn charge_flow(name: &str, base: &str, task_meta: &str) -> String {
@@ -116,6 +122,7 @@ do:
 struct World {
     s: Arc<dyn StorageBackend>,
     hits: Hits,
+    keys: Keys,
     _dir: tempfile::TempDir,
 }
 
@@ -127,7 +134,7 @@ async fn world_with(worker: bool) -> World {
     init();
     let dir = tempfile::tempdir().unwrap();
     let s = flowr_ce::init_storage_with(dir.path().to_str().unwrap(), true).await.unwrap();
-    let (base, hits) = effect_server().await;
+    let (base, hits, keys) = effect_server().await;
     let retry = "      metadata: { a3t: { stepClass: idempotent, inDoubt: retry } }";
     let mut flows = vec![guarded_flow(&base), EPHEMERAL.to_string()];
     for (n, meta) in [("f1", ""), ("f2", ""), ("f3", ""), ("f4", ""), ("f4r", retry), ("f5", "")] {
@@ -139,7 +146,7 @@ async fn world_with(worker: bool) -> World {
     if worker {
         flowr_ce::spawn_worker(s.clone());
     }
-    World { s, hits, _dir: dir }
+    World { s, hits, keys, _dir: dir }
 }
 
 impl World {
@@ -251,6 +258,10 @@ async fn an_idempotent_step_can_be_retried_when_in_doubt() {
         })
         .collect();
     assert_eq!(attempts, [0, 1], "the retry is a new attempt of the same step");
+    let keys = w.keys.lock().unwrap().get("f4r").cloned().unwrap_or_default();
+    assert_eq!(keys.len(), 2, "both sends carried an Idempotency-Key");
+    assert_eq!(keys[0], keys[1], "the same key, so the receiver can drop the repeat");
+    assert_eq!(keys[0], format!("{}/charge", st.instance_id));
 }
 
 /// An in-doubt fault is an ordinary error: the flow's try/catch handles it.

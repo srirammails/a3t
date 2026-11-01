@@ -168,6 +168,12 @@ pub trait StepHook: Send + Sync {
     async fn before_step(&self, key: &str, task: &NamedTask, input: &Value) -> crate::error::Result<StepReplay>;
     async fn after_step(&self, key: &str, task: &NamedTask, input: &Value, outcome: StepOutcome<'_>, duration_us: u64)
         -> crate::error::Result<()>;
+
+    /// The idempotency key for the step at `key` — the same on every attempt —
+    /// sent with its HTTP call so a receiver can drop a repeat.
+    fn idempotency_key(&self, _key: &str) -> Option<String> {
+        None
+    }
 }
 
 impl FlowDirective {

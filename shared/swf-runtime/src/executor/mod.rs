@@ -498,6 +498,22 @@ impl WorkflowExecutor {
                     if let Some(ref with_val) = ct.with {
                         ct.with = Some(self.eval_value_recursive(with_val, &input, &ctx.context)?);
                     }
+                    // A journaled HTTP step carries its idempotency key, unless
+                    // the flow sets the header itself.
+                    if matches!(ct.target, swf_parser::CallTarget::Http(_)) {
+                        if let Some(idem) = self.step_hook.as_ref().and_then(|h| h.idempotency_key(task_path)) {
+                            let with = ct.with.get_or_insert_with(|| serde_json::json!({}));
+                            if let Some(w) = with.as_object_mut() {
+                                let headers = w.entry("headers").or_insert_with(|| serde_json::json!({}));
+                                if let Some(h) = headers.as_object_mut() {
+                                    let set = h.keys().any(|k| k.eq_ignore_ascii_case("idempotency-key"));
+                                    if !set {
+                                        h.insert("Idempotency-Key".into(), Value::String(idem));
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 let handler_name = match &call_task.target {

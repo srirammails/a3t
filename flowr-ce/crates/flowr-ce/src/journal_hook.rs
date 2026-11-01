@@ -650,6 +650,10 @@ impl StepHook for JournalHook {
         }
         Ok(())
     }
+
+    fn idempotency_key(&self, path: &str) -> Option<String> {
+        Some(format!("{}{}", self.run, self.key(path)))
+    }
 }
 
 #[cfg(test)]
