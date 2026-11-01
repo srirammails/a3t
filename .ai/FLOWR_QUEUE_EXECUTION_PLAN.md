@@ -48,7 +48,7 @@ Sizes: S ≤ 1 day, M a few days, L about a week of focused work.
 | 6 — M7 (part) | Retention: finished runs + journals purged after `FLOWR_RUN_RETENTION_DAYS` (30), in the contract and conformance suite. Pure steps flushed at least every 250 ms for live views. | see git log |
 | U2–U4 | Flow Editor 🐞 Debug + breakpoints; Runs panel with RunView (live status, debug controls, edit input, Steps + inspector, Timeline, Journal, Checkpoints with re-run from here, Input/Output); Executions on the run store (server-side filters, cursor). Verified in a browser against a local FlowR CE. Falls back to the execution list on servers without the run store. | see git log |
 
-**Deferred (not in this CE checkpoint):**
+**Deferred (not in this CE checkpoint)** — tracked with ids in [FLOWR_ENGINE_LIMITATIONS.md](FLOWR_ENGINE_LIMITATIONS.md):
 - Durable `listen` and human approvals (still in-process; a restart loses a pending approval) — needs the `InputManager` moved onto `waits` + `RunRequest` wake-ups.
 - Subflows with their own journal scope (a `run: workflow` step is one effect step in its parent; a crash inside it is an in-doubt parent step).
 - Cron `schedules` table (misfire policy, dedupe across restarts); cron ticks already enqueue durable runs.
