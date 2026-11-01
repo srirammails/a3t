@@ -232,3 +232,19 @@ Every debug command, edit and operation is audit-logged with the principal (the 
 2. Allow a time-boxed breakpoint on a production run (an operator pauses the next run of a flow)? Proposal: no in v1; use a debug run with a copied input.
 3. Log capture per step: keep the last N lines per step in the journal store, or query the log backend by `run_id`/`step_key`? Proposal: last 200 lines per step in the store; full logs stay in the cluster log backend.
 4. Where do presets live for personal projects? Proposal: same `run-preset` resource, in the personal project.
+
+---
+
+## 14. Studio shell (reusable) and Flow Studio — added 1 Nov 2026
+
+A reusable IDE-style shell (`a3t/ui/src/lib/components/studio/`) for A3T apps — Flow Studio first; DB Console, Logs and Runtime next.
+
+- **`StudioShell`**: optional left and right regions, the editor area, and an optional bottom region under it. Each region is a tabbed panel group (`Region`) that resizes by dragging its splitter, **minimizes to a stack** on its edge (vertical labels left/right, a strip at the bottom; click a label to bring that panel back), and **maximizes** to fill the studio (⤢ or double-click a tab; Esc restores). The editor area maximizes the same way.
+- **`Studio`** (`layout.svelte.ts`): the layout per app (`new Studio('<app>')`), kept per browser under `a3t.studio.<app>`.
+- **`DocTabs`**: open documents with close buttons (● for unsaved), middle-click to close, double-click to maximize the editor.
+- An app supplies its panels (id, title, what they render, an optional badge) and its editor area.
+
+**Flow Studio** (replaces the Flow Editor page; the shell's flat flow list is gone):
+- **Explorer** (left): per project — **Flows**, **Resources** with a folder per kind (LLM, Databases, MCP Servers, Secrets, …), **Triggers**, **Templates**, **Canvases**; counts, a filter, remembered folder state; one node per project when several are in view; **+** on Flows starts a new flow in that project.
+- **Editor area**: flows open as tabs (graph / code / form, the Run/Debug split button and Deploy per tab); other items open as read-only previews with *Open in <app>*. Open tabs are remembered (texts reload from the server).
+- **Bottom**: **Runs** (the run panel and run view for the active flow; Run/Debug brings it up) and **Problems** (YAML errors, a missing `document` field, no steps, duplicate step names; the count shows on the tab).

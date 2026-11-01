@@ -1,285 +1,186 @@
 <script lang="ts">
+  /// Flow Studio: the flow editor as a small IDE on the reusable studio shell.
+  /// Explorer (left: the project's flows, resources by kind, triggers,
+  /// templates, canvases), open documents in tabs (flows edit in graph / code /
+  /// form; other items preview), and Runs / Problems below. Every region resizes,
+  /// minimizes to its edge and maximizes; the layout and open tabs are kept.
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
-  import NewButton from '$lib/components/shared/NewButton.svelte';
-  import * as YAML from 'yaml';
-  import { flows as flowsMcp } from '$lib/services/api';
-  import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
+  import StudioShell from '$lib/components/studio/StudioShell.svelte';
+  import Explorer from '$lib/components/studio/Explorer.svelte';
+  import DocTabs from '$lib/components/studio/DocTabs.svelte';
+  import FlowDocument from '$lib/components/studio/FlowDocument.svelte';
+  import ItemPreview from '$lib/components/studio/ItemPreview.svelte';
   import FlowRunPanel from '$lib/components/run/FlowRunPanel.svelte';
-  import { onMount } from 'svelte';
+  import { Studio } from '$lib/components/studio/layout.svelte.ts';
+  import { parse, problems, stepKeys, newFlowYaml, type Doc, type OpenItem } from '$lib/components/studio/flow';
   import { getActivePanel } from '$lib/stores/panels.svelte.ts';
+  import { getProject } from '$lib/stores/context.svelte.ts';
 
-  // The flow browser lived here as a slide-out panel; the shell's context pane
-  // lists every flow now, so this page takes its selection from the URL
-  // (/flow-editor/<namespace>~<name>) instead of owning a second list.
-  let availableFlows: { name: string; namespace: string; version: string; step_count: number }[] = $state([]);
-  /// The context pane addresses a flow as "<namespace>~<name>": a slash would be
-  /// read as another path segment.
-  function keyFromSelection(sel: string | undefined): string {
-    return sel && sel.includes('~') ? sel.replace('~', '/') : '';
-  }
-  let selectedFlowKey = $state(keyFromSelection(getActivePanel()?.props?.selectedId));
-  let loading = $state(false);
-  let dirty = $state(false);
-
-  // The source of truth — YAML string
-  let yamlSource = $state(`namespace: a3t
-name: new-flow
-version: "1.0.0"
-description: ""
-enabled: true
-steps:
-  - name: step-1
-    type: set
-    config:
-      hello: world
-`);
-
-  // Parse for graph + form
-  let parsed = $derived.by(() => {
-    try { return YAML.parse(yamlSource) ?? {}; } catch { return null; }
+  const studio = new Studio('flows', {
+    left: { size: 280, minimized: false, active: 'explorer' },
+    bottom: { size: 320, minimized: true, active: 'runs' },
   });
 
+  // ── Open documents (kept per browser; texts reload from the server) ──
+  const TABS_KEY = 'a3t.studio.flows.tabs';
+  const ICONS: Record<string, string> = { flow: 'ƒ', resource: '◆', trigger: '⚡', template: '▤', canvas: '▦' };
 
-  // ── Run (console spec U1) ──
-  /// A run executes the saved flow, so Run needs a saved, unchanged flow.
+  function restore(): { docs: Doc[]; active: string | null } {
+    try {
+      const v = JSON.parse(localStorage.getItem(TABS_KEY) ?? 'null');
+      if (v && Array.isArray(v.docs)) {
+        const docs = v.docs.filter((d: Doc) => !d.isNew).map((d: Doc) => ({ ...d, yaml: undefined, saved: undefined, loaded: false }));
+        return { docs, active: docs.some((d: Doc) => d.id === v.active) ? v.active : docs[0]?.id ?? null };
+      }
+    } catch { /* private window */ }
+    return { docs: [], active: null };
+  }
+  const restored = restore();
+  let docs = $state<Doc[]>(restored.docs);
+  let activeId = $state<string | null>(restored.active);
+  let newCount = 0;
+
+  function persist() {
+    try {
+      localStorage.setItem(TABS_KEY, JSON.stringify({ active: activeId, docs: docs.filter((d) => !d.isNew).map(({ id, kind, ns, name, data }) => ({ id, kind, ns, name, data: kind === 'flow' ? undefined : data })) }));
+    } catch { /* private window */ }
+  }
+
+  const idOf = (it: OpenItem) => `${it.kind}:${it.ns}/${it.id ?? it.name}`;
+
+  function open(it: OpenItem) {
+    const id = idOf(it);
+    if (!docs.some((d) => d.id === id)) docs.push({ id, kind: it.kind, ns: it.ns, name: it.name, data: it.data, loaded: it.kind !== 'flow' });
+    activeId = id;
+    persist();
+  }
+
+  function close(id: string) {
+    const d = docs.find((x) => x.id === id);
+    if (d?.kind === 'flow' && (d.yaml ?? '') !== (d.saved ?? '') && !confirm(`${d.name} has changes that are not deployed. Close it anyway?`)) return;
+    const i = docs.findIndex((x) => x.id === id);
+    docs.splice(i, 1);
+    if (activeId === id) activeId = docs[Math.min(i, docs.length - 1)]?.id ?? null;
+    persist();
+  }
+
+  function newFlow(ns?: string) {
+    newCount += 1;
+    const n = ns || getProject() || 'a3t';
+    const yaml = newFlowYaml(n, newCount);
+    const doc: Doc = { id: `flow:new:${newCount}`, kind: 'flow', ns: n, name: newCount > 1 ? `new-flow-${newCount}` : 'new-flow', yaml, saved: '', isNew: true };
+    docs.push(doc);
+    activeId = doc.id;
+  }
+
+  function deployed(doc: Doc, ns: string, name: string) {
+    const id = `flow:${ns}/${name}`;
+    const other = docs.findIndex((d) => d.id === id && d !== doc);
+    if (other >= 0) docs.splice(other, 1);
+    doc.id = id; doc.ns = ns; doc.name = name; doc.isNew = false; doc.loaded = true;
+    activeId = id;
+    persist();
+  }
+
+  // A flow named in the address (/flow-editor/<ns>~<name>) opens on arrival.
+  const sel = getActivePanel()?.props?.selectedId as string | undefined;
+  if (sel && sel.includes('~')) {
+    const [ns, name] = sel.split('~');
+    open({ kind: 'flow', ns, name });
+  }
+
+  const active = $derived(docs.find((d) => d.id === activeId) ?? null);
+  const activeFlow = $derived(active?.kind === 'flow' ? active : null);
+  const parsed = $derived(activeFlow ? parse(activeFlow.yaml).doc : null);
+  const issues = $derived(activeFlow?.loaded || activeFlow?.isNew ? problems(activeFlow.yaml) : []);
+  const tabs = $derived(docs.map((d) => ({
+    id: d.id, title: d.name, icon: ICONS[d.kind], hint: `${d.kind} ${d.ns}/${d.name}`,
+    dirty: d.kind === 'flow' && (d.isNew || (d.loaded && (d.yaml ?? '') !== (d.saved ?? ''))),
+  })));
+
+  // ── Run / Debug: the bottom Runs panel ──
   let runDialog = $state(false);
   let runDebug = $state(false);
-  let runsOpen = $state(false);
-  const runTarget = $derived.by(() => {
-    if (!selectedFlowKey) return null;
-    const [ns, name] = selectedFlowKey.split('/');
-    return { ns, name };
-  });
-  const inputSchema = $derived(parsed?.input?.schema ?? null);
-  function openRun(debug = false) { runDebug = debug; runsOpen = true; runDialog = true; }
-
-  /// One split button: the main part starts the last chosen mode, ▾ picks.
-  let runMode = $state<'run' | 'debug'>((() => { try { return localStorage.getItem('a3t.flow.runMode') === 'debug' ? 'debug' : 'run'; } catch { return 'run'; } })());
-  let runMenu = $state(false);
-  function pickMode(m: 'run' | 'debug') {
-    runMode = m; runMenu = false;
-    try { localStorage.setItem('a3t.flow.runMode', m); } catch { /* private window */ }
-    openRun(m === 'debug');
-  }
-  const runBlocked = $derived(!runTarget ? 'Open a saved flow to run it' : dirty ? 'Deploy your changes first — a run uses the saved flow' : '');
-
-  /// The flow's steps as the engine keys them for breakpoints (loop and
-  /// branch scopes left out): `/a`, `/loop/send`, `/guard/charge`.
-  function stepKeys(tasks: any, prefix = ''): string[] {
-    const out: string[] = [];
-    for (const item of Array.isArray(tasks) ? tasks : []) {
-      if (!item || typeof item !== 'object') continue;
-      for (const [name, task] of Object.entries<any>(item)) {
-        const key = `${prefix}/${name}`;
-        out.push(key);
-        if (!task || typeof task !== 'object') continue;
-        if (Array.isArray(task.do)) out.push(...stepKeys(task.do, key));
-        if (task.try) {
-          out.push(...stepKeys(task.try.do ?? task.try, key));
-          out.push(...stepKeys(task.try.catch?.do ?? task.catch?.do, key));
-        }
-        if (task.fork?.branches) out.push(...stepKeys(task.fork.branches, key));
-      }
-    }
-    return out;
-  }
-  const flowSteps = $derived(stepKeys(parsed?.do));
-
-  // ── Load flows list ──
-  onMount(async () => {
-    // Load the flow the context pane asked for before listing, so the editor is
-    // populated as soon as possible.
-    if (selectedFlowKey) loadFlow(selectedFlowKey);
-    for (const ns of ['a3t', 'default']) {
-      const res = await flowsMcp.list(ns);
-      if (res?.data?.workflows) {
-        for (const f of res.data.workflows) {
-          availableFlows.push({
-            name: f.name,
-            namespace: f.namespace ?? ns,
-            version: f.version ?? '1.0.0',
-            step_count: f.step_count ?? 0,
-          });
-        }
-      }
-    }
-    availableFlows = [...availableFlows];
-  });
-
-  // ── Load selected flow ──
-  async function loadFlow(key: string) {
-    if (!key) return;
-    const [ns, name] = key.split('/');
-    loading = true;
-    try {
-      const res = await flowsMcp.get(name, ns);
-      if (res?.data) {
-        const text = typeof res.data === 'string' ? res.data : res.data.text ?? '';
-        const match = text.match(/```yaml\n([\s\S]*?)```/);
-        if (match) {
-          yamlSource = match[1].trim();
-        } else {
-          yamlSource = text;
-        }
-        dirty = false;
-      }
-    } catch (e) {
-      console.error('Failed to load flow:', e);
-    } finally {
-      loading = false;
-    }
-  }
-
-  function newFlow() {
-    selectedFlowKey = '';
-    yamlSource = `namespace: a3t\nname: new-flow\nversion: "1.0.0"\ndescription: ""\nenabled: true\nsteps:\n  - name: step-1\n    type: set\n    config:\n      hello: world\n`;
-    dirty = false;
-  }
-
-  function onYamlChange(val: string) {
-    yamlSource = val;
-    dirty = true;
-  }
-
-  // ── Deploy flow ──
-  async function deployFlow() {
-    if (!parsed) return;
-    loading = true;
-    try {
-      if (selectedFlowKey) {
-        const [ns, name] = selectedFlowKey.split('/');
-        await flowsMcp.get(name, ns);
-      }
-
-      const res = await import('$lib/services/api').then(m => m.mcpCall('create_flow', { yaml: yamlSource }));
-      if (res.ok) {
-        dirty = false;
-        // CNCF flows name themselves under `document:`; older drafts at the top.
-        const name = parsed.document?.name ?? parsed.name;
-        const ns = parsed.document?.namespace ?? parsed.namespace ?? 'default';
-        selectedFlowKey = `${ns}/${name}`;
-        if (!availableFlows.find(f => f.namespace === ns && f.name === name)) {
-          availableFlows = [...availableFlows, { name, namespace: ns, version: parsed.version ?? '1.0.0', step_count: parsed.steps?.length ?? 0 }];
-        }
-      }
-    } catch (e) {
-      console.error('Deploy failed:', e);
-    } finally {
-      loading = false;
-    }
+  function run(debug: boolean) {
+    runDebug = debug;
+    studio.reveal('bottom', 'runs');
+    runDialog = true;
   }
 </script>
 
-<div class="flow-editor">
-  <!-- Toolbar -->
-  <div class="editor-toolbar">
-    <SubmenuToggle appType="flow-editor" />
-    <!-- Which flow is open. Choosing one is the context pane's job now, so this
-         is a label rather than a menu button. -->
-    <span class="file-menu-btn as-label">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 2h6l4 4v8a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M9 2v4h4"/></svg>
-      <span class="file-menu-label">{selectedFlowKey || 'Untitled flow'}</span>
-    </span>
-    <NewButton label="New flow" accent="spec" size="sm" onclick={newFlow} title="Start a new flow" />
-
-    <span style="flex: 1;"></span>
-
-    {#if dirty}<span class="dirty-badge">unsaved</span>{/if}
-
-    <div class="split">
-      <button class="btn sm split-main" disabled={!!runBlocked || loading} onclick={() => openRun(runMode === 'debug')}
-        title={runBlocked || (runMode === 'debug' ? 'Debug: breakpoints, stepping, step inputs and outputs' : 'Run with inputs')}>
-        {runMode === 'debug' ? '🐞 Debug' : '▶ Run'}
-      </button>
-      <button class="btn sm split-caret" disabled={!runTarget || loading} onclick={() => (runMenu = !runMenu)} aria-label="Run, debug or show runs" aria-haspopup="menu" aria-expanded={runMenu}>▾</button>
-      {#if runMenu}
-        <div class="split-overlay" role="presentation" onclick={() => (runMenu = false)}></div>
-        <div class="split-menu" role="menu">
-          <button role="menuitem" class:on={runMode === 'run'} disabled={!!runBlocked} onclick={() => pickMode('run')}>
-            <span>▶ Run</span><small>Run with inputs</small>
-          </button>
-          <button role="menuitem" class:on={runMode === 'debug'} disabled={!!runBlocked} onclick={() => pickMode('debug')}>
-            <span>🐞 Debug</span><small>Breakpoints, stepping, step inputs and outputs</small>
-          </button>
-          <div class="split-sep"></div>
-          <button role="menuitem" onclick={() => { runsOpen = !runsOpen; runMenu = false; }}>
-            <span>{runsOpen ? 'Hide runs' : 'Show runs'}</span><small>This flow's runs, newest first</small>
-          </button>
-        </div>
-      {/if}
-    </div>
-    <button class="btn spec sm" disabled={loading || !dirty} onclick={deployFlow}>
-      {loading ? 'Deploying...' : 'Deploy'}
-    </button>
-  </div>
-
-  <div class="editor-content">
-    <!-- Editor body -->
-    <div class="editor-body">
-      <FlowEditorPane aiKind="flow" aiName={selectedFlowKey} initialYaml={yamlSource} onchange={onYamlChange} />
-    </div>
-    {#if runsOpen && runTarget}
-      <div class="run-dock">
-        <FlowRunPanel ns={runTarget.ns} name={runTarget.name} schema={inputSchema} steps={flowSteps} bind:dialogOpen={runDialog} bind:debugMode={runDebug} />
-      </div>
-    {/if}
-  </div>
+<div class="fs">
+  <StudioShell
+    {studio}
+    left={{ panels: [{ id: 'explorer', title: 'Explorer' }], panel: leftPanel }}
+    bottom={{ panels: [{ id: 'runs', title: 'Runs' }, { id: 'problems', title: 'Problems' }], panel: bottomPanel, badge: (id) => (id === 'problems' && issues.length ? issues.length : null) }}
+    center={centerArea}
+  />
 </div>
 
+{#snippet leftPanel(_id: string)}
+  <Explorer onopen={open} onnewflow={(ns) => newFlow(ns)} activeId={activeId ?? ''} />
+{/snippet}
+
+{#snippet centerArea()}
+  <div class="center-head">
+    <SubmenuToggle appType="flow-editor" />
+    <DocTabs {studio} {tabs} active={activeId} onselect={(id) => { activeId = id; persist(); }} onclose={close}>
+      {#snippet actions()}
+        <button class="new" onclick={() => newFlow()} title="New flow">+ New flow</button>
+      {/snippet}
+    </DocTabs>
+  </div>
+  <div class="center-body">
+    {#if !active}
+      <div class="empty">
+        <p>Open a flow from the Explorer, or start a new one.</p>
+        <button class="btn spec sm" onclick={() => newFlow()}>+ New flow</button>
+      </div>
+    {:else}
+      {#key active.id}
+        {#if active.kind === 'flow'}
+          <FlowDocument doc={active} onrun={run} ondeployed={(ns, name) => deployed(active, ns, name)} />
+        {:else}
+          <ItemPreview doc={active} />
+        {/if}
+      {/key}
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet bottomPanel(id: string)}
+  {#if id === 'runs'}
+    {#if activeFlow && !activeFlow.isNew}
+      <FlowRunPanel ns={activeFlow.ns} name={activeFlow.name} schema={parsed?.input?.schema ?? null} steps={stepKeys(parsed?.do)} bind:dialogOpen={runDialog} bind:debugMode={runDebug} />
+    {:else}
+      <div class="note">{activeFlow ? 'Deploy this flow to run it.' : 'Open a flow to see its runs.'}</div>
+    {/if}
+  {:else}
+    {#if !activeFlow}
+      <div class="note">Open a flow to check it.</div>
+    {:else if !issues.length}
+      <div class="note ok">No problems in {activeFlow.name}.</div>
+    {:else}
+      <ul class="problems">
+        {#each issues as p}<li class={p.level}><span>{p.level === 'error' ? '✗' : '!'}</span>{p.message}</li>{/each}
+      </ul>
+    {/if}
+  {/if}
+{/snippet}
+
 <style>
-  .flow-editor { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-
-  /* Toolbar */
-  .editor-toolbar {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 16px; border-bottom: 1px solid var(--border);
-    background: var(--bg-surface); flex-shrink: 0;
-  }
-
-  .file-menu-btn.as-label { cursor: default; background: transparent; }
-  .file-menu-btn {
-    display: flex; align-items: center; gap: 6px;
-    padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--r-sm);
-    background: var(--bg-surface); color: var(--text-2); font-size: 12px;
-    font-family: var(--font-mono); cursor: pointer; transition: all 0.12s;
-  }
-  .file-menu-btn:hover { background: var(--bg-subtle); color: var(--text-1); border-color: var(--border-strong); }
-  .file-menu-label { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  .split { position: relative; display: inline-flex; }
-  /* Run is the secondary action (outlined); Deploy is the primary (solid). */
-  .split-main, .split-caret { background: var(--bg-surface); color: var(--spec); border: 1px solid var(--spec); }
-  .split-main:hover:not(:disabled), .split-caret:hover:not(:disabled) { background: var(--spec-bg); }
-  .split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-  .split-caret { border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 7px; padding-right: 7px; border-left: 0; }
-  .split-sep { height: 1px; background: var(--border); margin: 4px 0; }
-  .split-menu button:disabled { opacity: 0.45; cursor: default; }
-  .split-overlay { position: fixed; inset: 0; z-index: 50; }
-  .split-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 51; min-width: 250px; display: flex; flex-direction: column;
-                background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); padding: 4px; }
-  .split-menu button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 0; background: transparent; padding: 7px 10px; border-radius: var(--r-sm); cursor: pointer; text-align: left; color: var(--text-1); font-size: 13px; }
-  .split-menu button:hover, .split-menu button.on { background: var(--bg-subtle); }
-  .split-menu small { color: var(--text-3); font-size: 11.5px; }
-
-  .dirty-badge { font-family: var(--font-mono); font-size: 10px; color: var(--warn); background: var(--warn-bg); padding: 2px 6px; border-radius: 3px; }
-
-  /* Editor content — hosts panel + editor side by side */
-  .editor-content { flex: 1; overflow: hidden; position: relative; display: flex; flex-direction: column; }
-  .run-dock { height: 46%; min-height: 240px; flex-shrink: 0; }
-
-  /* Overlay */
-
-  /* Flow browser panel */
-  @keyframes panelSlideIn { from { transform: translateX(-100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-
-
-
-
-
-
-
-
-
-  /* Editor body */
-  .editor-body { flex: 1; overflow: hidden; position: relative; }
+  .fs { height: 100%; min-height: 0; }
+  .center-head { display: flex; align-items: center; gap: 4px; padding-left: 6px; background: var(--bg-page); border-bottom: 1px solid var(--border); }
+  .center-head :global(.tabs) { flex: 1; border-bottom: 0; }
+  .center-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .center-body > :global(*) { flex: 1; min-height: 0; }
+  .new { border: 0; background: transparent; color: var(--spec); font-size: 12px; padding: 0 10px; cursor: pointer; white-space: nowrap; }
+  .new:hover { background: var(--bg-subtle); }
+  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-3); }
+  .note { padding: 14px; color: var(--text-4); font-size: 12.5px; }
+  .note.ok { color: var(--ok, #15803d); }
+  .problems { list-style: none; margin: 0; padding: 8px 12px; font-size: 12.5px; }
+  .problems li { display: flex; gap: 8px; padding: 3px 0; }
+  .problems li.error span { color: var(--err, #b42318); }
+  .problems li.warning span { color: var(--warn, #b45309); }
 </style>
