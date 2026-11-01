@@ -60,6 +60,12 @@ pub enum RuntimeError {
     /// Internal error
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// The run stops here without failing: paused at a breakpoint, its worker
+    /// lost the run, or (in crash tests) the worker died. Not an error of the
+    /// flow, so `try`/`catch` never catches it.
+    #[error("run halted: {0}")]
+    Halted(String),
 }
 
 impl RuntimeError {

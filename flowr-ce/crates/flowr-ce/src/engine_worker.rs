@@ -29,7 +29,7 @@ use flowr_storage::engine::*;
 use flowr_storage::StorageBackend;
 use flowr_types::{ExecutionRequest, ExecutionStatus};
 
-use crate::journal_hook::JournalHook;
+use crate::journal_hook::{Halt, JournalHook};
 
 /// Run lease (30 s; `FLOWR_RUN_LEASE_MS` for tests), renewed every third of it.
 fn lease() -> Duration {
@@ -129,7 +129,7 @@ async fn run_claimed(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineSto
     }
 
     // What already happened, and the version it is pinned to.
-    let hook = match JournalHook::load(engine.clone(), run_id, epoch, &row.namespace, &row.flow).await {
+    let hook = match JournalHook::load(engine.clone(), &row, epoch).await {
         Ok(h) => h,
         Err(e) => {
             release(RunPhase::Faulted, RunOutcome { output: None, error: Some(format!("could not read the run journal: {e}")) }).await;
@@ -148,7 +148,8 @@ async fn run_claimed(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineSto
             return;
         }
     };
-    let ephemeral = row.durability == Durability::Ephemeral || declared_ephemeral(&record);
+    // A debug run always keeps its journal: pauses live there.
+    let ephemeral = !row.debug && (row.durability == Durability::Ephemeral || declared_ephemeral(&record));
     let resumed = task.attempts > 1 || !hook.is_fresh();
     if ephemeral && task.attempts > 1 {
         warn!(%run_id, attempts = task.attempts, "ephemeral run interrupted: its previous worker stopped before it finished");
@@ -195,10 +196,33 @@ async fn run_claimed(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineSto
     let result = crate::run_request(storage, request, false, step_hook).await;
     done.store(true, Ordering::SeqCst);
     keeper.abort();
-    if hook.killed() {
-        // Crash test: behave as a dead process — no more writes; the lease runs out.
-        warn!(%run_id, "worker stopped at a kill point (crash test)");
-        return;
+    match hook.halt() {
+        Some(Halt::Killed) => {
+            // Crash test: behave as a dead process — no more writes; the lease runs out.
+            warn!(%run_id, "worker stopped at a kill point (crash test)");
+            return;
+        }
+        Some(Halt::Lost) => {
+            warn!(%run_id, "the run is no longer this worker's; leaving it");
+            return;
+        }
+        Some(Halt::Paused) => {
+            info!(%run_id, "debug run paused");
+            release(RunPhase::Suspended, RunOutcome::default()).await;
+            return;
+        }
+        Some(Halt::Timer(fire_at)) => {
+            // Wake it when the timer fires, on whichever worker is free.
+            let wake = NewTask::resume(run_id, &row.namespace, Some(format!("{run_id}:timer:{}", fire_at.timestamp_millis())), fire_at);
+            if let Err(e) = engine.enqueue(wake).await {
+                error!(%run_id, error = %e, "could not schedule the timer; the run stays owned until its lease runs out and is retried");
+                return;
+            }
+            info!(%run_id, %fire_at, "run waiting on a timer");
+            release(RunPhase::Waiting, RunOutcome::default()).await;
+            return;
+        }
+        None => {}
     }
 
     let (phase, outcome) = match result {

@@ -260,7 +260,11 @@ impl WorkflowExecutor {
                 crate::traits::StepReplay::Failed { error } => {
                     return Err(RuntimeError::TaskFailed { task: named_task.name.clone(), message: error });
                 }
-                crate::traits::StepReplay::Run => {
+                run @ (crate::traits::StepReplay::Run | crate::traits::StepReplay::RunWith { .. }) => {
+                    let task_input = match run {
+                        crate::traits::StepReplay::RunWith { input } => input,
+                        _ => task_input,
+                    };
                     let started = std::time::Instant::now();
                     let res = self.run_task_body(named_task, task_idx, &current, task_input.clone(), ctx, &task_path).await;
                     let us = started.elapsed().as_micros() as u64;
@@ -764,6 +768,7 @@ impl WorkflowExecutor {
     ) -> Result<TaskResult> {
         match self.execute_task_list(&try_task.tasks, input.clone(), ctx, &format!("{}/try", task_path)).await {
             Ok(output) => Ok(TaskResult::new(output)),
+            Err(err @ RuntimeError::Halted(_)) => Err(err),
             Err(err) => {
                 if let Some(ref catch) = try_task.catch {
                     // TODO: match error filter

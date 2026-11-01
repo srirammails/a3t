@@ -141,6 +141,8 @@ pub trait TaskHandler: Send + Sync {
 pub enum StepReplay {
     /// Execute the task.
     Run,
+    /// Execute the task with this input instead (edited while paused before it).
+    RunWith { input: Value },
     /// The task already completed in an earlier attempt of this run: use what
     /// it produced instead of running it again. `context` is the run context
     /// after the task (without `_principal`), or `None` if it did not change.

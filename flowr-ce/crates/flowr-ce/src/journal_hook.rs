@@ -1,30 +1,39 @@
-//! The run journal as a step hook (`.ai/FLOWR_QUEUE_CHECKPOINT_SPEC.md` §5.4–5.7,
-//! plan stage 4).
+//! The run journal as a step hook (`.ai/FLOWR_QUEUE_CHECKPOINT_SPEC.md` §5.4–5.9,
+//! §5.17; plan stages 4–5).
 //!
 //! Every task of a durable run is recorded; a run that resumes after its worker
 //! died replays from the journal, so completed steps are not executed again.
 //!
-//! - **Pure** steps (`set`, `switch`, containers, waits) are recorded when they
-//!   complete, batched into the next commit — no extra disk sync.
+//! - **Pure** steps (`set`, `switch`, containers, short waits) are recorded when
+//!   they complete, batched into the next commit — no extra disk sync.
 //! - **Other** steps (calls, `run`, `emit`, `listen`) write `StepStarted`
 //!   durably *before* they run, then their completion. A step that started but
 //!   never completed is in doubt: read steps run again; an idempotent step whose
 //!   `metadata.a3t.inDoubt` is `retry` runs again under the same idempotency key;
 //!   anything else faults with `in-doubt side effect` (the default), which the
 //!   flow's `try`/`catch` can handle.
+//! - **Waits** longer than `FLOWR_INLINE_WAIT_MAX_MS` (5 s) are durable timers:
+//!   the run lets go and is woken when the timer fires, on any worker.
+//! - **Debug runs** pause at breakpoints (before / after / on error, with an
+//!   optional condition on the step input and a hit count) and on stepping
+//!   commands; a pause is durable — the run lets go until a command arrives.
+//!   An input edited while paused before a step is used for that step.
 //! - Context is recorded only when it changed (null otherwise); containers
 //!   always record it, since replaying one skips its inner steps.
-//! - Every write carries the run's epoch: a worker that lost the run is fenced
-//!   and the run stops here.
+//! - Every write carries the run's epoch: a worker that lost the run is fenced.
 //!
-//! Values are journaled as they are (replay needs them exactly) and masked when
-//! read.
+//! Stopping — a pause, a timer, a lost run, a crash-test kill — raises
+//! `RuntimeError::Halted`, which `try`/`catch` never catches, and nothing is
+//! written after it. Values are journaled as they are (replay needs them
+//! exactly) and masked when read.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use flowr_storage::engine::*;
@@ -41,6 +50,42 @@ enum Prior {
     Started { attempt: u32 },
 }
 
+/// Why the run stopped at a step without finishing.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Halt {
+    /// A debug pause: wait for a command.
+    Paused,
+    /// A durable timer: wake at this time.
+    Timer(DateTime<Utc>),
+    /// The run belongs to another worker now, or the journal could not be written.
+    Lost,
+    /// Crash test: act as a dead process.
+    Killed,
+}
+
+/// How a debug run continues from its last pause.
+#[derive(Debug, Clone, PartialEq)]
+enum Mode {
+    /// Run to the next breakpoint.
+    Continue,
+    /// Pause before the very next step.
+    StepInto,
+    /// Pause before the next step outside this one.
+    StepOver(String),
+    /// Pause before the next step outside this one's parent.
+    StepOut(String),
+    /// Pause before this step.
+    RunTo(String),
+}
+
+#[derive(Debug, Clone)]
+struct Breakpoint {
+    step_key: String,
+    when: String,
+    condition: Option<String>,
+    hit: Option<u32>,
+}
+
 pub(crate) struct JournalHook {
     engine: Arc<dyn EngineStore>,
     run: RunId,
@@ -49,14 +94,26 @@ pub(crate) struct JournalHook {
     prefix: String,
     prior: Mutex<HashMap<String, Prior>>,
     attempts: Mutex<HashMap<String, u32>>,
+    /// Durable timers already set, by step key.
+    timers: Mutex<HashMap<String, DateTime<Utc>>>,
     pending: Mutex<Vec<Record>>,
     /// The context after the last recorded step.
     last_context: Mutex<Value>,
     /// The definition version recorded when the run first started.
     pinned: Option<String>,
+    // Debug runs
+    debug: bool,
+    breakpoints: Vec<Breakpoint>,
+    hits: Mutex<HashMap<usize, u32>>,
+    /// The pause this attempt resumes from — not paused at again.
+    resumed_from: Mutex<Option<(String, String)>>,
+    mode: Mutex<Mode>,
+    edits: Mutex<HashMap<String, Value>>,
+    // Stopping
+    halt: Mutex<Option<Halt>>,
+    stopped: AtomicBool,
     /// Crash-test kill points for this run (`FLOWR_KILL_AT`), first attempt only.
     kill_at: Vec<(String, String)>,
-    killed: std::sync::atomic::AtomicBool,
 }
 
 /// What kind of step a task is, for in-doubt handling.
@@ -87,6 +144,19 @@ fn is_container(task: &NamedTask) -> bool {
     matches!(task.task, Task::Do(_) | Task::For(_) | Task::Fork(_) | Task::Try(_))
 }
 
+fn wait_of(task: &NamedTask) -> Option<std::time::Duration> {
+    match &task.task {
+        Task::Wait(w) => Some(std::time::Duration::from_secs(
+            w.seconds.unwrap_or(0) + w.minutes.unwrap_or(0) * 60 + w.hours.unwrap_or(0) * 3600 + w.days.unwrap_or(0) * 86400,
+        )),
+        _ => None,
+    }
+}
+
+fn inline_wait_max() -> std::time::Duration {
+    std::time::Duration::from_millis(std::env::var("FLOWR_INLINE_WAIT_MAX_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(5_000))
+}
+
 fn hash_of(v: &impl Hash) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     v.hash(&mut h);
@@ -99,6 +169,76 @@ fn without_principal(context: &Value) -> Value {
         o.remove("_principal");
     }
     c
+}
+
+/// A step key as a breakpoint names it: loop and branch indices, revisit
+/// counts and `try`/`catch`/`for`/`fork` scopes left out (`/loop/for[3]/send#2`
+/// → `/loop/send`), so a breakpoint on a node in the editor matches every
+/// iteration.
+pub(crate) fn node_key(key: &str) -> String {
+    let mut out = String::new();
+    for seg in key.split('/').filter(|s| !s.is_empty()) {
+        let seg = seg.split('#').next().unwrap_or(seg);
+        let base = seg.split('[').next().unwrap_or(seg);
+        if seg.contains('[') && matches!(base, "for" | "fork") {
+            continue;
+        }
+        if matches!(seg, "try" | "catch") {
+            continue;
+        }
+        out.push('/');
+        out.push_str(seg);
+    }
+    out
+}
+
+fn bp_matches(bp_key: &str, key: &str) -> bool {
+    if bp_key == "*" || bp_key == key {
+        return true;
+    }
+    let node = node_key(key);
+    if bp_key.starts_with('/') {
+        node_key(bp_key) == node
+    } else {
+        node.rsplit('/').next() == Some(bp_key)
+    }
+}
+
+fn is_under(key: &str, scope: &str) -> bool {
+    key.len() > scope.len() && key.starts_with(scope) && key.as_bytes()[scope.len()] == b'/'
+}
+
+fn parent_of(key: &str) -> String {
+    key.rsplit_once('/').map(|(p, _)| p.to_string()).unwrap_or_default()
+}
+
+fn parse_breakpoints(v: Option<&Value>) -> Vec<Breakpoint> {
+    v.and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter(|b| b.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true))
+                .filter_map(|b| {
+                    Some(Breakpoint {
+                        step_key: b.get("step_key")?.as_str()?.to_string(),
+                        when: b.get("when").and_then(|w| w.as_str()).unwrap_or("before").to_string(),
+                        condition: b.get("condition").and_then(|c| c.as_str()).filter(|c| !c.is_empty()).map(String::from),
+                        hit: b.get("hit").and_then(|h| h.as_u64()).map(|h| h as u32),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn mode_of(command: &Value, paused_at: &str) -> Mode {
+    let name = command.get("command").and_then(|c| c.as_str()).or_else(|| command.as_str()).unwrap_or("continue");
+    match name {
+        "step_into" => Mode::StepInto,
+        "step_over" => Mode::StepOver(paused_at.to_string()),
+        "step_out" => Mode::StepOut(paused_at.to_string()),
+        "run_to" => command.get("step_key").and_then(|k| k.as_str()).map(|k| Mode::RunTo(k.to_string())).unwrap_or(Mode::Continue),
+        _ => Mode::Continue,
+    }
 }
 
 /// `FLOWR_KILL_AT=ns/flow:point:key,…` — where a crash test stops the worker
@@ -115,18 +255,23 @@ fn kill_points(namespace: &str, name: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn fenced(e: StoreError) -> RuntimeError {
-    RuntimeError::TaskFailed { task: "journal".into(), message: format!("run journal: {e}") }
+fn halted(why: &str) -> RuntimeError {
+    RuntimeError::Halted(why.to_string())
 }
 
 impl JournalHook {
     /// Load the run's journal: what already happened decides what replays.
-    pub(crate) async fn load(engine: Arc<dyn EngineStore>, run: RunId, epoch: Epoch, namespace: &str, name: &str)
-        -> std::result::Result<Self, StoreError> {
+    pub(crate) async fn load(engine: Arc<dyn EngineStore>, row: &RunRow, epoch: Epoch) -> std::result::Result<Self, StoreError> {
+        let run = row.run_id;
         let mut prior = HashMap::new();
         let mut attempts = HashMap::new();
+        let mut timers = HashMap::new();
         let mut last_context = json!({});
         let mut pinned = None;
+        let mut paused: Option<(String, String)> = None;
+        let mut mode = Mode::Continue;
+        let mut resumed_from = None;
+        let mut edits = HashMap::new();
         for e in engine.read_from(run, 0).await? {
             match e.record {
                 Record::RunStarted { version, .. } if !version.is_empty() => pinned = Some(version),
@@ -145,6 +290,23 @@ impl JournalHook {
                     let error = error.as_str().map(str::to_string).unwrap_or_else(|| error.to_string());
                     prior.insert(step_key, Prior::Failed { error });
                 }
+                Record::TimerSet { wait_id, fire_at } => {
+                    timers.insert(wait_id, fire_at);
+                }
+                Record::Paused { step_key, when, .. } => {
+                    paused = Some((step_key, when));
+                    edits.clear();
+                    resumed_from = None;
+                }
+                Record::DebugEdit { step_key, input, .. } => {
+                    edits.insert(step_key, input);
+                }
+                Record::DebugCommand { command, .. } => {
+                    if let Some((k, w)) = paused.take() {
+                        mode = mode_of(&command, &k);
+                        resumed_from = Some((k, w));
+                    }
+                }
                 _ => {}
             }
         }
@@ -152,14 +314,22 @@ impl JournalHook {
             engine,
             run,
             epoch,
-            prefix: format!("{namespace}/{name}"),
+            prefix: format!("{}/{}", row.namespace, row.flow),
             prior: Mutex::new(prior),
             attempts: Mutex::new(attempts),
+            timers: Mutex::new(timers),
             pending: Mutex::new(Vec::new()),
             last_context: Mutex::new(last_context),
             pinned,
-            kill_at: if epoch == 1 { kill_points(namespace, name) } else { Vec::new() },
-            killed: std::sync::atomic::AtomicBool::new(false),
+            debug: row.debug,
+            breakpoints: if row.debug { parse_breakpoints(row.breakpoints.as_ref()) } else { Vec::new() },
+            hits: Mutex::new(HashMap::new()),
+            resumed_from: Mutex::new(resumed_from),
+            mode: Mutex::new(mode),
+            edits: Mutex::new(edits),
+            halt: Mutex::new(None),
+            stopped: AtomicBool::new(false),
+            kill_at: if epoch == 1 { kill_points(&row.namespace, &row.flow) } else { Vec::new() },
         })
     }
 
@@ -168,23 +338,35 @@ impl JournalHook {
         self.pinned.is_none() && self.prior.lock().unwrap().is_empty()
     }
 
-    /// Whether a crash-test kill point stopped this run: the worker must act
-    /// as a dead process — no further writes, no release.
-    pub(crate) fn killed(&self) -> bool {
-        self.killed.load(std::sync::atomic::Ordering::SeqCst)
+    /// The version the run started on; a resume runs exactly that definition.
+    pub(crate) fn pinned_version(&self) -> Option<String> {
+        self.pinned.clone()
     }
 
-    fn kill(&self, point: &str, key: &str) -> Result<()> {
-        if self.kill_at.iter().any(|(p, k)| p == point && k == key) {
-            self.killed.store(true, std::sync::atomic::Ordering::SeqCst);
-            return Err(RuntimeError::TaskFailed { task: key.to_string(), message: format!("killed at {point} (crash test)") });
+    /// Why the run stopped without finishing, if it did.
+    pub(crate) fn halt(&self) -> Option<Halt> {
+        self.halt.lock().unwrap().clone()
+    }
+
+    fn stop(&self, why: Halt) -> RuntimeError {
+        let text = format!("{why:?}");
+        self.halt.lock().unwrap().get_or_insert(why);
+        self.stopped.store(true, Ordering::SeqCst);
+        halted(&text)
+    }
+
+    fn check_stopped(&self) -> Result<()> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(halted("stopped"));
         }
         Ok(())
     }
 
-    /// The version the run started on; a resume runs exactly that definition.
-    pub(crate) fn pinned_version(&self) -> Option<String> {
-        self.pinned.clone()
+    fn kill(&self, point: &str, key: &str) -> Result<()> {
+        if self.kill_at.iter().any(|(p, k)| p == point && k == key) {
+            return Err(self.stop(Halt::Killed));
+        }
+        Ok(())
     }
 
     fn key<'a>(&self, path: &'a str) -> &'a str {
@@ -195,18 +377,21 @@ impl JournalHook {
         std::mem::take(&mut *self.pending.lock().unwrap())
     }
 
-    /// Commit buffered pure records and `records` (with optional outbox rows).
-    async fn commit(&self, records: Vec<Record>, outbox: Vec<(String, Value)>) -> Result<()> {
+    /// Commit buffered pure records and `records`.
+    async fn commit(&self, records: Vec<Record>) -> Result<()> {
+        self.check_stopped()?;
         let mut all = self.take_pending();
         all.extend(records);
-        if all.is_empty() && outbox.is_empty() {
+        if all.is_empty() {
             return Ok(());
         }
-        self.engine
-            .commit_step(self.run, self.epoch, StepCommit { records: all, checkpoint: None, outbox })
-            .await
-            .map(|_| ())
-            .map_err(fenced)
+        match self.engine.commit_step(self.run, self.epoch, StepCommit { records: all, checkpoint: None, outbox: vec![] }).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::warn!(run = %self.run, error = %e, "run journal write refused; stopping the run here");
+                Err(self.stop(Halt::Lost))
+            }
+        }
     }
 
     /// Record the start of the run (its pinned version), and its end.
@@ -215,11 +400,75 @@ impl JournalHook {
         all.push(rec);
         self.engine.append(self.run, self.epoch, &all).await.map(|_| ())
     }
+
+    /// Breakpoints matching `key` at `when`, counting hits; whether to pause.
+    fn breakpoint(&self, key: &str, when: &str, input: &Value) -> Option<String> {
+        for (i, bp) in self.breakpoints.iter().enumerate() {
+            if bp.when != when || !bp_matches(&bp.step_key, key) {
+                continue;
+            }
+            if let Some(cond) = &bp.condition {
+                let engine = flowr_core::ExpressionEngine::new();
+                let scope = flowr_core::Scope::builder().build();
+                if engine.eval(input, cond, &scope).ok() != Some(Value::Bool(true)) {
+                    continue;
+                }
+            }
+            let n = {
+                let mut hits = self.hits.lock().unwrap();
+                let h = hits.entry(i).or_insert(0);
+                *h += 1;
+                *h
+            };
+            if bp.hit.is_some_and(|want| want != n) {
+                continue;
+            }
+            return Some(format!("breakpoint {when} {}", bp.step_key));
+        }
+        None
+    }
+
+    /// The pause this attempt resumed from is not paused at again.
+    fn resuming_from(&self, key: &str, when: &str) -> bool {
+        let mut r = self.resumed_from.lock().unwrap();
+        if r.as_ref().is_some_and(|(k, w)| k == key && w == when) {
+            *r = None;
+            return true;
+        }
+        false
+    }
+
+    async fn pause(&self, key: &str, when: &str, reason: String) -> RuntimeError {
+        let rec = Record::Paused { step_key: key.to_string(), when: when.to_string(), reason };
+        match self.commit(vec![rec]).await {
+            Ok(()) => self.stop(Halt::Paused),
+            Err(e) => e,
+        }
+    }
+
+    /// A debug run: pause before `key`?
+    fn pause_before(&self, key: &str, input: &Value) -> Option<String> {
+        if self.resuming_from(key, "before") {
+            return None;
+        }
+        let stepped = match &*self.mode.lock().unwrap() {
+            Mode::Continue => false,
+            Mode::StepInto => true,
+            Mode::StepOver(at) => !is_under(key, at) && key != at,
+            Mode::StepOut(at) => !is_under(key, &parent_of(at)),
+            Mode::RunTo(target) => bp_matches(target, key),
+        };
+        if stepped {
+            return Some("step".into());
+        }
+        self.breakpoint(key, "before", input)
+    }
 }
 
 #[async_trait]
 impl StepHook for JournalHook {
     async fn before_step(&self, path: &str, task: &NamedTask, input: &Value) -> Result<StepReplay> {
+        self.check_stopped()?;
         let key = self.key(path).to_string();
         let class = class_of(task);
         let prior = self.prior.lock().unwrap().remove(&key);
@@ -240,40 +489,86 @@ impl StepHook for JournalHook {
                         "in-doubt side effect: step {key} started but did not record a result before the run was interrupted; \
                          it may or may not have taken effect"
                     );
-                    self.commit(
-                        vec![Record::StepFailed { step_key: key, attempt, error: Value::String(error.clone()), retryable: false, duration_us: 0 }],
-                        vec![],
-                    )
-                    .await?;
+                    self.commit(vec![Record::StepFailed { step_key: key, attempt, error: Value::String(error.clone()), retryable: false, duration_us: 0 }])
+                        .await?;
                     return Ok(StepReplay::Failed { error });
                 }
                 self.attempts.lock().unwrap().insert(key.clone(), attempt + 1);
             }
             None => {}
         }
+
+        // Debug: pause here?
+        let edited = if self.debug {
+            // The stepping mode holds until it pauses (a pause ends this attempt).
+            if let Some(reason) = self.pause_before(&key, input) {
+                return Err(self.pause(&key, "before", reason).await);
+            }
+            self.edits.lock().unwrap().remove(&key)
+        } else {
+            None
+        };
+
+        // A durable timer: set it, or it has fired.
+        if let Some(d) = wait_of(task).filter(|d| *d > inline_wait_max()) {
+            let set = self.timers.lock().unwrap().get(&key).copied();
+            let now = Utc::now();
+            match set {
+                Some(fire_at) if fire_at <= now => {
+                    let rec = Record::StepCompleted {
+                        step_key: key,
+                        attempt: 0,
+                        output: input.clone(),
+                        context: Value::Null,
+                        class: StepClass::Pure,
+                        duration_us: 0,
+                        directive: "continue".into(),
+                    };
+                    self.commit(vec![rec]).await?;
+                    return Ok(StepReplay::Completed { output: input.clone(), context: None, directive: "continue".into() });
+                }
+                Some(fire_at) => return Err(self.stop(Halt::Timer(fire_at))),
+                None => {
+                    let fire_at = now + chrono::Duration::from_std(d).unwrap_or(chrono::Duration::MAX);
+                    self.commit(vec![Record::TimerSet { wait_id: key.clone(), fire_at }]).await?;
+                    self.timers.lock().unwrap().insert(key, fire_at);
+                    return Err(self.stop(Halt::Timer(fire_at)));
+                }
+            }
+        }
+
         if class != StepClass::Pure {
             self.kill("before_step_started", &key)?;
             let attempt = *self.attempts.lock().unwrap().get(&key).unwrap_or(&0);
+            let input_used = edited.as_ref().unwrap_or(input);
             let started = Record::StepStarted {
                 idem_key: format!("{}{}", self.run, key),
-                input_hash: hash_of(&input.to_string()),
-                step_key: key,
+                input_hash: hash_of(&input_used.to_string()),
+                step_key: key.clone(),
                 attempt,
             };
             // Durable before the step runs.
-            let k = key_of(&started);
-            self.commit(vec![started], vec![]).await?;
-            self.kill("after_step_started", &k)?;
+            self.commit(vec![started]).await?;
+            self.kill("after_step_started", &key)?;
         }
-        Ok(StepReplay::Run)
+        Ok(match edited {
+            Some(input) => StepReplay::RunWith { input },
+            None => StepReplay::Run,
+        })
     }
 
-    async fn after_step(&self, path: &str, task: &NamedTask, _input: &Value, outcome: StepOutcome<'_>, duration_us: u64) -> Result<()> {
+    async fn after_step(&self, path: &str, task: &NamedTask, input: &Value, outcome: StepOutcome<'_>, duration_us: u64) -> Result<()> {
+        // A halt raised inside this step (a pause or timer in a container,
+        // a kill, a lost run) is not this step's result.
+        if let StepOutcome::Failed { error: RuntimeError::Halted(_) } = outcome {
+            return Ok(());
+        }
+        self.check_stopped()?;
         let key = self.key(path).to_string();
         self.kill("after_step", &key)?;
         let class = class_of(task);
         let attempt = *self.attempts.lock().unwrap().get(&key).unwrap_or(&0);
-        let rec = match outcome {
+        let (rec, when) = match outcome {
             StepOutcome::Completed { output, context, directive } => {
                 let now = without_principal(context);
                 let context = {
@@ -285,29 +580,49 @@ impl StepHook for JournalHook {
                         now
                     }
                 };
-                Record::StepCompleted { step_key: key, attempt, output: output.clone(), context, class, duration_us, directive: directive.to_string() }
+                (Record::StepCompleted { step_key: key.clone(), attempt, output: output.clone(), context, class, duration_us, directive: directive.to_string() }, "after")
             }
             StepOutcome::Failed { error } => {
-                Record::StepFailed { step_key: key, attempt, error: Value::String(error.to_string()), retryable: false, duration_us }
+                (Record::StepFailed { step_key: key.clone(), attempt, error: Value::String(error.to_string()), retryable: false, duration_us }, "on_error")
             }
         };
-        if class == StepClass::Pure && matches!(rec, Record::StepCompleted { .. }) {
+        let pause = if self.debug && !self.resuming_from(&key, when) { self.breakpoint(&key, when, input) } else { None };
+        if class == StepClass::Pure && matches!(rec, Record::StepCompleted { .. }) && pause.is_none() {
             let flush = {
                 let mut p = self.pending.lock().unwrap();
                 p.push(rec);
                 p.len() >= MAX_PENDING
             };
             if flush {
-                self.commit(vec![], vec![]).await?;
+                self.commit(vec![]).await?;
             }
             return Ok(());
         }
-        let k = key_of(&rec);
-        self.commit(vec![rec], vec![]).await?;
-        self.kill("after_completed", &k)
+        self.commit(vec![rec]).await?;
+        self.kill("after_completed", &key)?;
+        if let Some(reason) = pause {
+            return Err(self.pause(&key, when, reason).await);
+        }
+        Ok(())
     }
 }
 
-fn key_of(r: &Record) -> String {
-    r.step_key().unwrap_or_default().to_string()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn breakpoints_name_editor_nodes() {
+        assert_eq!(node_key("/loop/for[3]/send#2"), "/loop/send");
+        assert_eq!(node_key("/guard/try/charge"), "/guard/charge");
+        assert_eq!(node_key("/split/fork[1]/b"), "/split/b");
+        assert!(bp_matches("/loop/send", "/loop/for[0]/send"));
+        assert!(bp_matches("send", "/loop/for[0]/send"));
+        assert!(bp_matches("*", "/a"));
+        assert!(!bp_matches("/loop", "/loop/for[0]/send"));
+        assert!(is_under("/loop/for[0]/send", "/loop"));
+        assert!(!is_under("/loopy", "/loop"));
+        assert_eq!(parent_of("/a/b"), "/a");
+        assert_eq!(parent_of("/a"), "");
+    }
 }
