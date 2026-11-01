@@ -661,8 +661,24 @@ impl flowr_ce_agents::triggers::WorkflowExecutor for TriggerWorkflowAdapter {
         // Engine mode: the run is durable from here and the engine worker runs
         // it; a reply waits for its outcome.
         let engine = storage.engine();
-        if engine.is_some() {
-            storage.queue().enqueue(request.clone()).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        if let Some(engine) = &engine {
+            let mut run = flowr_ce_storage::engine_adapters::new_run(&request);
+            // One run per cron tick and target, however often the tick is delivered.
+            if request.input.get("trigger").and_then(|t| t.as_str()) == Some("cron") {
+                if let (Some(id), Some(minute)) = (
+                    request.input.get("trigger_id").and_then(|v| v.as_str()),
+                    request.input.get("minute").and_then(|v| v.as_str()),
+                ) {
+                    run.dedupe_key = Some(format!("cron:{id}:{namespace}/{name}:{minute}"));
+                    run.trigger = format!("cron:{id}");
+                }
+            }
+            let task = flowr_storage::engine::NewTask::start(&run);
+            let (id, outcome) = engine.start(run, task).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+            if matches!(outcome, flowr_storage::engine::EnqueueOutcome::Existing(_)) {
+                info!(target = %flow_ref, run = %id, "trigger already delivered; not starting it again");
+                return Ok(id.to_string());
+            }
         }
         tokio::spawn(async move {
             let result = match engine {
@@ -2514,3 +2530,36 @@ pub(crate) async fn run_request(
 }
 
 // Old execute_workflow DELETED — replaced by execute_workflow (now renamed to execute_workflow above)
+
+#[cfg(test)]
+mod cron_dedupe_tests {
+    use super::*;
+    use flowr_ce_agents::triggers::WorkflowExecutor as _;
+
+    const QUICK: &str = "document:\n  dsl: 1.0.3\n  namespace: t\n  name: tick\n  version: 1.0.0\ndo:\n- a:\n    set:\n      ok: true\n";
+
+    /// A cron tick delivered twice (e.g. around a restart) starts one run.
+    #[tokio::test]
+    async fn a_cron_tick_delivered_twice_starts_one_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = init_storage_with(dir.path().to_str().unwrap(), true).await.unwrap();
+        let _ = build_ce_router(s.clone());
+        let storage = GLOBAL_STORAGE.get().unwrap().clone();
+        storage.workflows().register(flowr_types::WorkflowRecord::from_yaml(QUICK).unwrap()).await.unwrap();
+        let adapter = TriggerWorkflowAdapter { principal: None, blocked: Default::default() };
+        let tick = |minute: &str| json!({ "trigger": "cron", "trigger_id": "trg-1", "minute": minute, "fired_at": "x" });
+        let a = adapter.execute_workflow("t", "tick", tick("2026-11-01T12:00Z")).await.unwrap();
+        let b = adapter.execute_workflow("t", "tick", tick("2026-11-01T12:00Z")).await.unwrap();
+        let c = adapter.execute_workflow("t", "tick", tick("2026-11-01T12:01Z")).await.unwrap();
+        assert_eq!(a, b, "the same tick is one run");
+        assert_ne!(a, c, "the next tick is another");
+        let runs = storage
+            .engine()
+            .unwrap()
+            .list(flowr_storage::engine::RunQuery { flow: Some("tick".into()), limit: 10, ..Default::default() })
+            .await
+            .unwrap();
+        assert_eq!(runs.items.len(), 2);
+        assert!(runs.items.iter().all(|r| r.trigger == "cron:trg-1"));
+    }
+}

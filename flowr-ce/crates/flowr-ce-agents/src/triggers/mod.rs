@@ -434,9 +434,13 @@ impl TriggerManager {
 
                 for (trigger, message) in due {
                     info!(trigger_id = %trigger.id, name = %trigger.name, "Cron trigger fired");
+                    // `minute` names the tick, so a second delivery of the same
+                    // tick (e.g. around a restart) can be recognised and dropped.
                     let context = json!({
                         "trigger": "cron",
+                        "trigger_id": trigger.id,
                         "fired_at": now.to_rfc3339(),
+                        "minute": now.format("%Y-%m-%dT%H:%MZ").to_string(),
                     });
 
                     manager.deliver_to_targets(
