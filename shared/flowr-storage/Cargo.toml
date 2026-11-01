@@ -14,3 +14,11 @@ uuid.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 futures.workspace = true
+tokio = { workspace = true, optional = true }
+
+[features]
+# The engine-store conformance suite, for backends' tests.
+conformance = ["dep:tokio"]
+
+[dev-dependencies]
+tokio.workspace = true

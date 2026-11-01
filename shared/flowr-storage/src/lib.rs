@@ -15,6 +15,11 @@
 //! - [`ExecutionQueue`] - Execution request queue
 //! - [`TriggerStore`] - Trigger CRUD (Value-based, backend-agnostic)
 
+pub mod engine;
+pub mod engine_memory;
+#[cfg(any(test, feature = "conformance"))]
+pub mod conformance;
+
 use std::pin::Pin;
 use std::time::Duration;
 

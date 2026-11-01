@@ -34,14 +34,17 @@ Sizes: S ≤ 1 day, M a few days, L about a week of focused work.
 
 ---
 
-## Stage 0 detail (in progress)
+## Progress
 
-1. `LanceExecutionStore::list_recent` / `list_by_workflow`: read `instance_id` + `updated_at` only for the matching rows, sort newest-first, then load the top `limit` states. (LanceDB applies `limit` before any ordering, which is why the list shows August.)
-2. `ExecutionStore::list_open()` (default: none) and its Lance implementation; `run_worker` marks each open run `Failed` with `interrupted by restart` before taking new work.
-3. Tests in `flowr-ce-storage`: newest-first with more rows than the limit; open runs found; terminal ones not.
-4. CE tests, EE build; live check after your OK to roll.
+| Stage | State | Commits |
+|---|---|---|
+| 0 | Code done; image `flowr:2026-11-01-ee21` built and pushed, **not rolled** (needs your OK) | `4d0fd2b` |
+| 1 — U1 | Live on dash.dev: ▶ Run with inputs in the Flow Editor, Runs panel | `cc25944` |
+| 1 — M1 | Contracts in `flowr-storage::engine` (`TaskQueue`, `RunStore`, `Journal`, `Notifier`, `Record`, `StoreError::Fenced`); `MemoryStore` reference store; conformance suite (`flowr-storage::conformance`, 16 checks, feature `conformance`) green on `MemoryStore`, and shown to fail when fencing is disabled | see git log |
 
----
+**Changed from the stage table:** deleting the unwired executors moves from M1 to M3. `flowr-ext/flowr-adcp-tasks` re-exports `flowr-ce-core`'s task traits, and `shared/flowr-core` (whose expression engine FlowR CE uses) carries its own unused executor, so removal touches three workspaces; it is done when the worker is replaced and nothing can call them.
+
+**Contract notes for Stage 2:** `RunRow` carries `input`/`output` values; a SQL store spills large ones to `blobs` internally (inline limit 64 KiB). Outside writes (cancel, suspend, resume, debug commands, wake-ups) go through `RunStore::request`, which journals them without an epoch — the owner's epoch fences only the owner's own writes.
 
 ## Risks and how we handle them
 
