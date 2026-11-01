@@ -4,6 +4,7 @@
   import * as YAML from 'yaml';
   import { flows as flowsMcp } from '$lib/services/api';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
+  import FlowRunPanel from '$lib/components/run/FlowRunPanel.svelte';
   import { onMount } from 'svelte';
   import { getActivePanel } from '$lib/stores/panels.svelte.ts';
 
@@ -38,6 +39,18 @@ steps:
     try { return YAML.parse(yamlSource) ?? {}; } catch { return null; }
   });
 
+
+  // ── Run (console spec U1) ──
+  /// A run executes the saved flow, so Run needs a saved, unchanged flow.
+  let runDialog = $state(false);
+  let runsOpen = $state(false);
+  const runTarget = $derived.by(() => {
+    if (!selectedFlowKey) return null;
+    const [ns, name] = selectedFlowKey.split('/');
+    return { ns, name };
+  });
+  const inputSchema = $derived(parsed?.input?.schema ?? null);
+  function openRun() { runsOpen = true; runDialog = true; }
 
   // ── Load flows list ──
   onMount(async () => {
@@ -108,8 +121,9 @@ steps:
       const res = await import('$lib/services/api').then(m => m.mcpCall('create_flow', { yaml: yamlSource }));
       if (res.ok) {
         dirty = false;
-        const name = parsed.name;
-        const ns = parsed.namespace ?? 'default';
+        // CNCF flows name themselves under `document:`; older drafts at the top.
+        const name = parsed.document?.name ?? parsed.name;
+        const ns = parsed.document?.namespace ?? parsed.namespace ?? 'default';
         selectedFlowKey = `${ns}/${name}`;
         if (!availableFlows.find(f => f.namespace === ns && f.name === name)) {
           availableFlows = [...availableFlows, { name, namespace: ns, version: parsed.version ?? '1.0.0', step_count: parsed.steps?.length ?? 0 }];
@@ -143,6 +157,10 @@ steps:
     <button class="btn spec sm" disabled={loading || !dirty} onclick={deployFlow}>
       {loading ? 'Deploying...' : 'Deploy'}
     </button>
+    <button class="btn ghost sm" disabled={!runTarget} onclick={() => (runsOpen = !runsOpen)}
+      title={runTarget ? 'Show this flow\'s runs' : 'Open a saved flow to see its runs'}>Runs</button>
+    <button class="btn spec sm" disabled={!runTarget || dirty || loading} onclick={openRun}
+      title={!runTarget ? 'Open a saved flow to run it' : dirty ? 'Deploy your changes first — a run uses the saved flow' : 'Run with inputs'}>▶ Run</button>
   </div>
 
   <div class="editor-content">
@@ -150,6 +168,11 @@ steps:
     <div class="editor-body">
       <FlowEditorPane aiKind="flow" aiName={selectedFlowKey} initialYaml={yamlSource} onchange={onYamlChange} />
     </div>
+    {#if runsOpen && runTarget}
+      <div class="run-dock">
+        <FlowRunPanel ns={runTarget.ns} name={runTarget.name} schema={inputSchema} bind:dialogOpen={runDialog} />
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -176,7 +199,8 @@ steps:
   .dirty-badge { font-family: var(--font-mono); font-size: 10px; color: var(--warn); background: var(--warn-bg); padding: 2px 6px; border-radius: 3px; }
 
   /* Editor content — hosts panel + editor side by side */
-  .editor-content { flex: 1; overflow: hidden; position: relative; display: flex; }
+  .editor-content { flex: 1; overflow: hidden; position: relative; display: flex; flex-direction: column; }
+  .run-dock { height: 38%; min-height: 200px; flex-shrink: 0; }
 
   /* Overlay */
 
