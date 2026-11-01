@@ -18,6 +18,9 @@ chrono.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
+# Engine store
+rusqlite.workspace = true
+
 # LanceDB storage
 lancedb.workspace = true
 arrow.workspace = true
@@ -31,4 +34,5 @@ tokio-stream.workspace = true
 flowr-ce-agents = { path = "../flowr-ce-agents" }
 
 [dev-dependencies]
+flowr-storage = { workspace = true, features = ["conformance"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -41,6 +41,7 @@ Sizes: S ≤ 1 day, M a few days, L about a week of focused work.
 | 0 | Code done; image `flowr:2026-11-01-ee21` built and pushed, **not rolled** (needs your OK) | `4d0fd2b` |
 | 1 — U1 | Live on dash.dev: ▶ Run with inputs in the Flow Editor, Runs panel | `cc25944` |
 | 1 — M1 | Contracts in `flowr-storage::engine` (`TaskQueue`, `RunStore`, `Journal`, `Notifier`, `Record`, `StoreError::Fenced`); `MemoryStore` reference store; conformance suite (`flowr-storage::conformance`, 16 checks, feature `conformance`) green on `MemoryStore`, and shown to fail when fencing is disabled | see git log |
+| 2 — M2 | `SqliteStore` (`flowr-ce-storage::engine_sqlite`, rusqlite 0.28 bundled — the release on libsqlite3-sys 0.25, which `rustpython-stdlib` already links): conformance green in memory and on a WAL file; reopen test (committed state survives, dead owner's run is orphaned and reclaimed under a new epoch). **Benchmarks** (this pod's disk, debug build, `synchronous=FULL`): run start→claim→release 1.5 ms (≈660 runs/s); step commit p50 0.42 ms, p99 0.82 ms (≈2,250 steps/s serial); 8 concurrent runs ≈1,700 steps/s. Group commit not needed yet (budget: ≤ 5 ms added at p99). | see git log |
 
 **Changed from the stage table:** deleting the unwired executors moves from M1 to M3. `flowr-ext/flowr-adcp-tasks` re-exports `flowr-ce-core`'s task traits, and `shared/flowr-core` (whose expression engine FlowR CE uses) carries its own unused executor, so removal touches three workspaces; it is done when the worker is replaced and nothing can call them.
 

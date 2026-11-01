@@ -23,6 +23,9 @@ swf-runtime = { path = "../shared/swf-runtime" }
 flowr-expr = { path = "../shared/flowr-expr" }
 flowr-types = { path = "../shared/flowr-types" }
 flowr-storage = { path = "../shared/flowr-storage" }
+# Engine store (queue, runs, journal). 0.28 is the release on libsqlite3-sys
+# 0.25, which rustpython-stdlib already links; only one may be in a binary.
+rusqlite = { version = "0.28", features = ["bundled"] }
 flowr-core = { path = "../shared/flowr-core" }
 flowr-mcp-core = { path = "../shared/flowr-mcp-core" }
 flowr-policy = { path = "../shared/flowr-policy" }
