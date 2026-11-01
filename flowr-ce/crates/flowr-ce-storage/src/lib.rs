@@ -13,6 +13,7 @@
 //!
 //! ```rust,no_run
 //! use flowr_ce_storage::LanceStorage;
+//! use flowr_storage::StorageBackend;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create storage with file path

@@ -240,6 +240,12 @@ pub trait ExecutionStore: Send + Sync {
         name: &str,
         limit: usize,
     ) -> FlowResult<Vec<ExecutionState>>;
+
+    /// Executions not yet finished (queued, running or suspended). At startup
+    /// these are runs a previous process lost; none if the store can't tell.
+    async fn list_open(&self) -> FlowResult<Vec<ExecutionState>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Trigger CRUD storage (Value-based for backend flexibility)

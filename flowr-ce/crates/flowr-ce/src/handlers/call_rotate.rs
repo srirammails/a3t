@@ -5,7 +5,9 @@
 //! `h, t ∈ C^d` and a relation phase vector `θ_r ∈ (-π, π]^d`, the relation is
 //! `r = e^{iθ_r}` and a fact `(h, r, t)` is scored by
 //!
-//!     score(h, r, t) = γ − ‖ h ∘ r − t ‖₁
+//! ```text
+//! score(h, r, t) = γ − ‖ h ∘ r − t ‖₁
+//! ```
 //!
 //! where `∘` is the Hadamard (element-wise) complex product. Plausible triples
 //! have small distance `d = ‖h ∘ r − t‖`. This handler ingests ConceptNet-style

@@ -2188,6 +2188,7 @@ async fn run_worker(storage: Arc<dyn StorageBackend>) {
     // The deployment ledger must be in memory before the first run is admitted,
     // or a paused deployment would serve whatever was queued at startup.
     ops::load(storage.as_ref()).await;
+    mark_interrupted(storage.as_ref()).await;
 
     // Executions currently running. Compaction waits for this to reach zero:
     // it rewrites the executions table's files, and a status update committing
@@ -2262,6 +2263,26 @@ async fn run_worker(storage: Arc<dyn StorageBackend>) {
                 error!(error = %e, "Failed to dequeue execution request");
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
+        }
+    }
+}
+
+/// Runs a previous process left queued, running or suspended. The queue, the
+/// running tasks and their waits lived in that process's memory, so none of them
+/// will finish; without this they show as running forever. Recorded as failed,
+/// with the reason, before this process takes new work.
+async fn mark_interrupted(storage: &dyn StorageBackend) {
+    let open = match storage.executions().list_open().await {
+        Ok(open) => open,
+        Err(e) => {
+            warn!(error = %e, "could not list unfinished executions");
+            return;
+        }
+    };
+    for state in open {
+        let id = state.instance_id;
+        if let Err(e) = storage.executions().save(state.fail("interrupted by restart")).await {
+            warn!(instance_id = %id, error = %e, "could not mark an interrupted execution");
         }
     }
 }
