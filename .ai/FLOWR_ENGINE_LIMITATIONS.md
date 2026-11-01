@@ -28,7 +28,7 @@ Status values: `open` · `in progress` · `fixed (<commit>, <date>)` · `won't f
 
 | ID | Limitation | Impact today | Workaround | Planned fix | Status |
 |---|---|---|---|---|---|
-| L11 | Breakpoint hit counts reset on each resume of a debug run. | `hit: n` counts only within one attempt (between pauses). | Use a `condition` instead of a hit count for loops. | Persist hit counters in the journal. | open |
+| L11 | Breakpoint hit counts reset on each resume of a debug run. | `hit: n` counts only within one attempt (between pauses). | — | Replayed steps count their hits, so counts carry across resumes. | fixed (see git log, 1 Nov 2026) — found on vc-dev: *Pause on start* paused again after every Continue |
 | L12 | Breakpoints changed while a debug run is running apply from its next resume (next pause, timer or restart). | A breakpoint added mid-run may be passed. | Use **Pause on start** or step commands. | Re-read breakpoints on each step when they changed (via the run topic). | open |
 | L13 | A replayed failure is re-raised as a plain task error with the recorded message. | A `catch` that filters by error type may not match a replayed failure. (Catch filters are not implemented yet either, so no flow depends on this today.) | — | Record the error type and status; re-raise the same kind. | open |
 | L14 | Step inputs over 64 KiB are journaled as `{_truncated, bytes}`. | The step inspector cannot show very large inputs. Replay is unaffected (it never reads inputs). | Look at the previous step's output. | Store large values as blobs (spec §5.7). | open |

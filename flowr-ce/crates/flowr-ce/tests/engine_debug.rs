@@ -233,3 +233,32 @@ async fn a_paused_run_can_be_cancelled() {
     let r = until(s.as_ref(), id, RunPhase::Cancelled).await;
     assert_eq!(r.error.as_deref(), Some("done debugging"));
 }
+
+/// Pause on start (`*`, hit 1) pauses once: hit counts carry across resumes.
+#[tokio::test(flavor = "multi_thread")]
+async fn pause_on_start_then_continue_runs_to_the_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = storage(dir.path(), true).await;
+    let id = start(s.as_ref(), "steps", true, json!([{ "step_key": "*", "when": "before", "hit": 1 }])).await;
+    assert_eq!(nth_pause(s.as_ref(), id, 1).await.0, "/a");
+    command(s.as_ref(), id, json!({ "command": "continue" })).await;
+    let done = until(s.as_ref(), id, RunPhase::Completed).await;
+    assert_eq!(done.output.unwrap()["got"], 7);
+}
+
+/// A hit count is counted over the whole run, not per resume.
+#[tokio::test(flavor = "multi_thread")]
+async fn hit_counts_carry_across_resumes() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = storage(dir.path(), true).await;
+    // Pause before /a (hit 1 of *), then the 3rd step overall (/c, hit 3 of *).
+    let id = start(s.as_ref(), "steps", true, json!([
+        { "step_key": "*", "when": "before", "hit": 1 },
+        { "step_key": "*", "when": "before", "hit": 3 }
+    ])).await;
+    assert_eq!(nth_pause(s.as_ref(), id, 1).await.0, "/a");
+    command(s.as_ref(), id, json!("continue")).await;
+    assert_eq!(nth_pause(s.as_ref(), id, 2).await.0, "/c");
+    command(s.as_ref(), id, json!("continue")).await;
+    until(s.as_ref(), id, RunPhase::Completed).await;
+}

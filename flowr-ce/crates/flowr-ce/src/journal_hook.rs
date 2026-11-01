@@ -417,8 +417,18 @@ impl JournalHook {
         self.engine.append(self.run, self.epoch, &all).await.map(|_| ())
     }
 
+    /// Count hits for a step that is not checked for a pause this attempt
+    /// (replayed, or the pause being resumed from), so hit counts carry across
+    /// resumes — every attempt replays the same steps in the same order.
+    fn count_hits(&self, key: &str, when: &str, input: &Value) {
+        if self.debug {
+            let _ = self.breakpoint(key, when, input);
+        }
+    }
+
     /// Breakpoints matching `key` at `when`, counting hits; whether to pause.
     fn breakpoint(&self, key: &str, when: &str, input: &Value) -> Option<String> {
+        let mut fired = None;
         for (i, bp) in self.breakpoints.iter().enumerate() {
             if bp.when != when || !bp_matches(&bp.step_key, key) {
                 continue;
@@ -436,12 +446,12 @@ impl JournalHook {
                 *h += 1;
                 *h
             };
-            if bp.hit.is_some_and(|want| want != n) {
-                continue;
+            // Every matching breakpoint counts this hit; the first that fires wins.
+            if bp.hit.is_none_or(|want| want == n) && fired.is_none() {
+                fired = Some(format!("breakpoint {when} {}", bp.step_key));
             }
-            return Some(format!("breakpoint {when} {}", bp.step_key));
         }
-        None
+        fired
     }
 
     /// The pause this attempt resumed from is not paused at again.
@@ -465,6 +475,7 @@ impl JournalHook {
     /// A debug run: pause before `key`?
     fn pause_before(&self, key: &str, input: &Value) -> Option<String> {
         if self.resuming_from(key, "before") {
+            self.count_hits(key, "before", input);
             return None;
         }
         let stepped = match &*self.mode.lock().unwrap() {
@@ -493,9 +504,15 @@ impl StepHook for JournalHook {
                 if let Some(c) = &context {
                     *self.last_context.lock().unwrap() = c.clone();
                 }
+                self.count_hits(&key, "before", input);
+                self.count_hits(&key, "after", input);
                 return Ok(StepReplay::Completed { output, context, directive });
             }
-            Some(Prior::Failed { error }) => return Ok(StepReplay::Failed { error }),
+            Some(Prior::Failed { error }) => {
+                self.count_hits(&key, "before", input);
+                self.count_hits(&key, "on_error", input);
+                return Ok(StepReplay::Failed { error });
+            }
             Some(Prior::Started { attempt }) => {
                 let policy = task.metadata.as_ref().and_then(|m| m.pointer("/a3t/inDoubt")).and_then(|v| v.as_str()).unwrap_or("fault");
                 let rerun = matches!(class, StepClass::Pure | StepClass::Read)
