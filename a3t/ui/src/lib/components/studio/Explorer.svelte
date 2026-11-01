@@ -17,6 +17,9 @@
 
   let tree = $state<Node[]>([]);
   let loading = $state(false);
+  /// What could not be loaded, so an empty tree is never a silent failure.
+  let errors = $state<string[]>([]);
+  let looked = $state<string[]>([]);
   let filter = $state('');
   let open = $state<Record<string, boolean>>(read());
 
@@ -27,22 +30,39 @@
     open[key] = !(open[key] ?? def);
     try { localStorage.setItem('a3t.studio.explorer', JSON.stringify(open)); } catch { /* private window */ }
   }
-  const rows = (d: any, k: string) => (Array.isArray(d) ? d : d?.[k] ?? []);
+  const rows = (d: any, ...keys: string[]) => (Array.isArray(d) ? d : keys.map((k) => d?.[k]).find(Array.isArray) ?? []);
   const nsOfSpec = (y: string) => (y ?? '').match(/^\s+namespace:\s*['"]?([\w.-]+)/m)?.[1] ?? '';
   const keyOf = (it: OpenItem) => `${it.kind}:${it.ns}/${it.id ?? it.name}`;
 
+  /// A call that never throws: failures are collected, not lost.
+  async function safe(what: string, call: () => Promise<any>): Promise<any> {
+    try {
+      const r = await call();
+      if (r && r.ok === false) errors = [...errors, `${what}: ${r.error ?? 'failed'}`];
+      return r;
+    } catch (e) {
+      errors = [...errors, `${what}: ${(e as Error).message}`];
+      return { ok: false };
+    }
+  }
+
   async function load() {
     loading = true;
+    errors = [];
     const namespaces = namespacesFor('owned');
+    looked = namespaces;
     const [triggersRes, templatesRes] = await Promise.all([
-      mcpCall('list_triggers', {}),
-      execFlow('a3t-templates-list', 'a3t', { org_id: 'org-default' }, { silent: true }),
+      safe('triggers', () => mcpCall('list_triggers', {})),
+      safe('templates', () => execFlow('a3t-templates-list', 'a3t', { org_id: 'org-default' }, { silent: true })),
     ]);
     const triggers = triggersRes.ok ? rows(triggersRes.data, 'triggers') : [];
     const templates = templatesRes.ok ? rows(templatesRes.data, 'rows') : [];
     const perNs = await Promise.all(namespaces.map(async (ns) => {
-      const [f, r] = await Promise.all([flowsMcp.list(ns), mcpCall('list_resources', { namespace: ns })]);
-      return { ns, flows: f.ok ? rows(f.data, 'workflows') : [], resources: r.ok ? rows(r.data, 'resources') : [] };
+      const [f, r] = await Promise.all([
+        safe(`flows in ${ns}`, () => flowsMcp.list(ns)),
+        safe(`resources in ${ns}`, () => mcpCall('list_resources', { namespace: ns })),
+      ]);
+      return { ns, flows: f.ok ? rows(f.data, 'workflows', 'flows') : [], resources: r.ok ? rows(r.data, 'resources') : [] };
     }));
     tree = perNs.map(({ ns, flows, resources }) => {
       const folder = (key: string, label: string, items: OpenItem[], icon = ''): Node => ({
@@ -106,7 +126,9 @@
     <button title="Refresh" onclick={() => load()} disabled={loading}>↻</button>
   </div>
   {#if loading && !tree.length}<div class="ex-empty">Loading…</div>{/if}
-  {#if !loading && !shown.length}<div class="ex-empty">{filter ? 'Nothing matches.' : 'No project in view.'}</div>{/if}
+  {#if !loading && !shown.length}<div class="ex-empty">{filter ? 'Nothing matches.' : 'No project in view — pick one in the project switcher (or turn on Show platform for a3t / system).'}</div>{/if}
+  {#if errors.length}<div class="ex-err" title={errors.join('\n')}>Could not load: {errors.join('; ')}</div>{/if}
+  <div class="ex-scope" title="Projects listed here">{looked.length ? looked.join(', ') : '—'}</div>
   <ul class="tree">
     {#each shown as ns (ns.key)}
       {#if single}
@@ -156,6 +178,8 @@
   .ex-tools input { flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-page); color: var(--text-1); font-size: 12px; }
   .ex-tools button { border: 0; background: transparent; cursor: pointer; color: var(--text-3); width: 26px; }
   .ex-empty { padding: 12px; color: var(--text-4); }
+  .ex-err { margin: 6px; padding: 6px 8px; border-radius: var(--r-sm); background: var(--err-bg, #fde8e8); color: var(--err, #b42318); font-size: 11.5px; }
+  .ex-scope { padding: 4px 10px; font-size: 10.5px; color: var(--text-4); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tree, .tree ul { list-style: none; margin: 0; padding: 0; }
   .tree { overflow-y: auto; flex: 1; padding: 4px 0; }
   .row { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: transparent; cursor: pointer; text-align: left; padding: 3px 8px; color: var(--text-2); font-size: 12.5px; }
