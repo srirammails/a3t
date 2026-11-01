@@ -59,8 +59,13 @@ pub(crate) fn worker_pools() -> Vec<String> {
 
 /// Where a run of `namespace/flow` goes (console side): its canvas sandbox,
 /// else the runtime it is deployed on, else `FLOWR_DEFAULT_POOL` — the first
-/// with a live worker — else `default`.
+/// with a live worker — else `default`. The platform's own flows (`a3t`,
+/// `system`) always run on the console: they read and write the platform
+/// store, which only the console holds.
 pub(crate) fn route(namespace: &str, flow: &str) -> String {
+    if is_platform(namespace) {
+        return DEFAULT_POOL.to_string();
+    }
     let flow_ref = format!("{namespace}/{flow}");
     let mut candidates = vec![format!("canvas/{flow_ref}")];
     for d in crate::ops::deployments_of_flow(&flow_ref) {
@@ -72,6 +77,10 @@ pub(crate) fn route(namespace: &str, flow: &str) -> String {
         candidates.push(p);
     }
     candidates.into_iter().find(|p| crate::engine_remote::pool_is_live(p)).unwrap_or_else(|| DEFAULT_POOL.to_string())
+}
+
+fn is_platform(namespace: &str) -> bool {
+    matches!(namespace, "a3t" | "system") || namespace.starts_with("a3t-") || namespace.starts_with("system-")
 }
 
 fn max_concurrent() -> usize {
