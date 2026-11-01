@@ -59,7 +59,25 @@ fn tick() -> u64 {
 /// Publish a chunk for `session_id`. Never fails and never blocks: with no
 /// subscriber the chunk still lands in the replay ring, so a client that
 /// connects a moment later receives it.
+/// Where a runtime pod sends its chunks: the console that holds the chat
+/// (set when this process runs against a remote engine store).
+static FORWARD: std::sync::OnceLock<futures::channel::mpsc::UnboundedSender<(String, String, String)>> = std::sync::OnceLock::new();
+
+/// Send every chunk published here on to `tx` as well.
+pub fn forward_to(tx: futures::channel::mpsc::UnboundedSender<(String, String, String)>) {
+    let _ = FORWARD.set(tx);
+}
+
 pub fn publish(session_id: &str, kind: &str, data: impl Into<String>) {
+    let data: String = data.into();
+    if let Some(tx) = FORWARD.get() {
+        let _ = tx.unbounded_send((session_id.to_string(), kind.to_string(), data.clone()));
+    }
+    publish_local(session_id, kind, data)
+}
+
+/// Publish into this process's ring only (chunks forwarded from a runtime).
+pub fn publish_local(session_id: &str, kind: &str, data: impl Into<String>) {
     let Ok(mut map) = hub().lock() else { return };
     if !map.contains_key(session_id) && map.len() >= MAX_SESSIONS {
         if let Some(oldest) = map

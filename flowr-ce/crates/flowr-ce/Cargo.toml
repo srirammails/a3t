@@ -86,6 +86,7 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+flowr-storage = { workspace = true, features = ["conformance"] }
 
 [features]
 # ADB platform tables (ADB stage G): an optional FlowR EE upgrade. The EE server

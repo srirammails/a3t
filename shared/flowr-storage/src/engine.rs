@@ -60,7 +60,7 @@ pub enum TaskKind {
     RemoteStep,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewTask {
     pub pool: String,
     pub kind: TaskKind,
@@ -76,7 +76,7 @@ pub struct NewTask {
 impl NewTask {
     pub fn start(run: &NewRun) -> Self {
         Self {
-            pool: DEFAULT_POOL.to_string(),
+            pool: pool_for(&run.namespace, &run.flow),
             kind: TaskKind::StartRun,
             run_id: run.run_id,
             namespace: run.namespace.clone(),
@@ -84,6 +84,11 @@ impl NewTask {
             dedupe_key: None,
             visible_at: Utc::now(),
         }
+    }
+
+    /// Wake a run: to the pool its flow runs on.
+    pub fn resume_for(run: &RunRow, dedupe_key: Option<String>, visible_at: DateTime<Utc>) -> Self {
+        Self { pool: pool_for(&run.namespace, &run.flow), ..Self::resume(run.run_id, &run.namespace, dedupe_key, visible_at) }
     }
 
     pub fn resume(run_id: RunId, namespace: &str, dedupe_key: Option<String>, visible_at: DateTime<Utc>) -> Self {
@@ -101,7 +106,24 @@ impl NewTask {
 
 pub const DEFAULT_POOL: &str = "default";
 
-#[derive(Debug, Clone, PartialEq)]
+type PoolRouter = dyn Fn(&str, &str) -> String + Send + Sync;
+static POOL_ROUTER: std::sync::RwLock<Option<std::sync::Arc<PoolRouter>>> = std::sync::RwLock::new(None);
+
+/// Decide which pool runs a flow (`namespace`, `flow`) — set once by the
+/// server (placement, runtime policy, live workers). Without one, `default`.
+pub fn set_pool_router(router: impl Fn(&str, &str) -> String + Send + Sync + 'static) {
+    *POOL_ROUTER.write().unwrap() = Some(std::sync::Arc::new(router));
+}
+
+/// The pool a run of `namespace/flow` goes to.
+pub fn pool_for(namespace: &str, flow: &str) -> String {
+    match POOL_ROUTER.read().unwrap().as_ref() {
+        Some(r) => r(namespace, flow),
+        None => DEFAULT_POOL.to_string(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub task_id: TaskId,
     pub pool: String,
@@ -113,14 +135,14 @@ pub struct Task {
     pub attempts: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lease {
     pub task_id: TaskId,
     pub token: u64,
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EnqueueOutcome {
     Created(TaskId),
     /// The dedupe key (or run id, for [`RunStore::start`]) was already taken.
@@ -135,7 +157,7 @@ impl EnqueueOutcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LeaseStatus {
     Renewed,
     Lost,
@@ -196,7 +218,7 @@ pub enum Durability {
     Ephemeral,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewRun {
     pub run_id: RunId,
     pub namespace: String,
@@ -217,7 +239,7 @@ pub struct NewRun {
     pub dedupe_key: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunRow {
     pub run_id: RunId,
     pub namespace: String,
@@ -249,13 +271,13 @@ pub struct RunRow {
 }
 
 /// What a run ends a turn with when its owner lets go.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunOutcome {
     pub output: Option<Value>,
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunQuery {
     /// Only these namespaces (the caller's visible projects); `None` = all.
     pub namespaces: Option<Vec<String>>,
@@ -270,7 +292,7 @@ pub struct RunQuery {
     pub limit: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page<T> {
     pub items: Vec<T>,
     /// Cursor for the next (older) page; `None` at the end.
@@ -278,7 +300,7 @@ pub struct Page<T> {
 }
 
 /// Requests from outside the owner: operators, the console, wake-ups.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RunRequest {
     Cancel { by: String, reason: String },
     Suspend { by: String },
@@ -409,7 +431,7 @@ impl Record {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JournalEntry {
     pub seq: u64,
     pub epoch: Epoch,
@@ -417,7 +439,7 @@ pub struct JournalEntry {
     pub record: Record,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppendOutcome {
     /// The run's last sequence number after the append.
     pub last_seq: u64,
@@ -426,7 +448,7 @@ pub struct AppendOutcome {
 }
 
 /// A step's completion and what goes with it, committed together.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StepCommit {
     pub records: Vec<Record>,
     /// M5b: an interpreter snapshot.
@@ -435,14 +457,14 @@ pub struct StepCommit {
     pub outbox: Vec<(String, Value)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckpointMeta {
     pub seq: u64,
     pub size: usize,
     pub at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OutboxRow {
     pub id: u64,
     pub topic: String,

@@ -36,20 +36,61 @@ fn lease() -> Duration {
     Duration::from_millis(std::env::var("FLOWR_RUN_LEASE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(30_000))
 }
 
+/// The pools this process claims from (spec §10): `FLOWR_WORKER_POOLS`
+/// (comma-separated; empty = claim nothing, a pure control plane), else a
+/// canvas sandbox serves `canvas/<ns>/<name>`, a runtime pod (remote engine)
+/// its runtime (`rt-<name>` → `<name>`), and a console `default`.
+pub(crate) fn worker_pools() -> Vec<String> {
+    if let Ok(v) = std::env::var("FLOWR_WORKER_POOLS") {
+        return v.split(',').map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect();
+    }
+    if let Some(c) = std::env::var("A3T_CANVAS").ok().filter(|c| !c.is_empty()) {
+        return vec![format!("canvas/{c}")];
+    }
+    if std::env::var("FLOWR_ENGINE_URL").map(|u| !u.is_empty()).unwrap_or(false) {
+        let host = std::env::var("HOSTNAME").unwrap_or_default();
+        let name = host.strip_prefix("rt-").unwrap_or(&host);
+        if !name.is_empty() {
+            return vec![name.to_string()];
+        }
+    }
+    vec![DEFAULT_POOL.to_string()]
+}
+
+/// Where a run of `namespace/flow` goes (console side): its canvas sandbox,
+/// else the runtime it is deployed on, else `FLOWR_DEFAULT_POOL` — the first
+/// with a live worker — else `default`.
+pub(crate) fn route(namespace: &str, flow: &str) -> String {
+    let flow_ref = format!("{namespace}/{flow}");
+    let mut candidates = vec![format!("canvas/{flow_ref}")];
+    for d in crate::ops::deployments_of_flow(&flow_ref) {
+        if !d.runtime.is_empty() && !d.runtime.starts_with('(') {
+            candidates.push(d.runtime.clone());
+        }
+    }
+    if let Some(p) = std::env::var("FLOWR_DEFAULT_POOL").ok().filter(|p| !p.is_empty()) {
+        candidates.push(p);
+    }
+    candidates.into_iter().find(|p| crate::engine_remote::pool_is_live(p)).unwrap_or_else(|| DEFAULT_POOL.to_string())
+}
+
 fn max_concurrent() -> usize {
     std::env::var("FLOWR_MAX_CONCURRENT_RUNS").ok().and_then(|v| v.parse().ok()).filter(|n| *n > 0).unwrap_or(64)
 }
 
-pub(crate) async fn run(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineStore>) {
+pub(crate) async fn run(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineStore>, pools: Vec<String>) {
     let worker = format!(
         "{}:{}",
         std::env::var("HOSTNAME").unwrap_or_else(|_| "flowr".into()),
         &uuid::Uuid::now_v7().simple().to_string()[24..]
     );
     let max = max_concurrent();
-    info!(%worker, max_concurrent = max, "engine worker started");
+    info!(%worker, max_concurrent = max, ?pools, "engine worker started");
     let slots = Arc::new(tokio::sync::Semaphore::new(max));
-    let mut wake = engine.subscribe(&tasks_topic(DEFAULT_POOL));
+    let mut wake = futures::stream::select_all(pools.iter().map(|p| engine.subscribe(&tasks_topic(p))));
+    // Keep the wake stream pending (not ended) when there are no pools.
+    let mut idle_only = pools.is_empty();
+    let mut turn = 0usize;
     let mut backoff = Duration::from_millis(250);
 
     // LanceDB maintenance as before: only while nothing is running.
@@ -65,7 +106,25 @@ pub(crate) async fn run(storage: Arc<dyn StorageBackend>, engine: Arc<dyn Engine
             drop(slots.clone().acquire_owned().await);
             continue;
         }
-        match engine.claim_runs(DEFAULT_POOL, &worker, free.min(16), lease()).await {
+        // Pools in turn, so none starves another.
+        let claimed = if idle_only {
+            Ok(Vec::new())
+        } else {
+            let mut got = Ok(Vec::new());
+            for i in 0..pools.len() {
+                let pool = &pools[(turn + i) % pools.len()];
+                match engine.claim_runs(pool, &worker, free.min(16), lease()).await {
+                    Ok(c) if c.is_empty() => continue,
+                    other => {
+                        got = other;
+                        break;
+                    }
+                }
+            }
+            turn = turn.wrapping_add(1);
+            got
+        };
+        match claimed {
             Ok(claimed) if !claimed.is_empty() => {
                 backoff = Duration::from_millis(250);
                 for (lease, task, epoch) in claimed {
@@ -94,7 +153,7 @@ pub(crate) async fn run(storage: Arc<dyn StorageBackend>, engine: Arc<dyn Engine
                     next_compact = std::time::Instant::now() + interval;
                 }
                 tokio::select! {
-                    _ = wake.next() => {}
+                    w = wake.next(), if !idle_only => if w.is_none() { idle_only = pools.is_empty(); },
                     _ = tokio::time::sleep(backoff) => backoff = (backoff * 2).min(Duration::from_secs(2)),
                 }
             }
@@ -248,7 +307,7 @@ async fn run_claimed(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineSto
             // Wake it when the timer fires — or at its deadline, if that comes
             // first (it then faults on waking) — on whichever worker is free.
             let wake_at = deadline.map_or(fire_at, |d| d.min(fire_at));
-            let wake = NewTask::resume(run_id, &row.namespace, Some(format!("{run_id}:timer:{}", wake_at.timestamp_millis())), wake_at);
+            let wake = NewTask::resume_for(&row, Some(format!("{run_id}:timer:{}", wake_at.timestamp_millis())), wake_at);
             if let Err(e) = engine.enqueue(wake).await {
                 error!(%run_id, error = %e, "could not schedule the timer; the run stays owned until its lease runs out and is retried");
                 return;

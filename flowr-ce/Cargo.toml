@@ -57,7 +57,7 @@ uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Filesystem utilities
 dirs = "6.0"

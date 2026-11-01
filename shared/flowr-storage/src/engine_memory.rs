@@ -361,7 +361,7 @@ impl RunStore for MemoryStore {
                 return Ok(());
             }
             let owned = inner.owned_now(run, now);
-            let (epoch, ns, phase, debug) = (row.epoch, row.namespace.clone(), row.phase, row.debug);
+            let (epoch, ns, phase, debug, flow) = (row.epoch, row.namespace.clone(), row.phase, row.debug, row.flow.clone());
             match req {
                 RunRequest::Cancel { by, reason } => {
                     inner.push(run, epoch, &[Record::CancelRequested { by, reason: reason.clone() }], now);
@@ -395,8 +395,8 @@ impl RunStore for MemoryStore {
                     let row = inner.runs.get_mut(&run).unwrap();
                     row.phase = RunPhase::Pending;
                     let seq = row.last_seq;
-                    inner.enqueue(NewTask::resume(run, &ns, Some(format!("{run}:resume:{seq}")), now));
-                    wake = Some(DEFAULT_POOL.to_string());
+                    inner.enqueue(NewTask { pool: pool_for(&ns, &flow), ..NewTask::resume(run, &ns, Some(format!("{run}:resume:{seq}")), now) });
+                    wake = Some(pool_for(&ns, &flow));
                 }
                 RunRequest::Debug { command, by } => {
                     if !debug || phase != RunPhase::Suspended {
@@ -406,8 +406,8 @@ impl RunStore for MemoryStore {
                     let row = inner.runs.get_mut(&run).unwrap();
                     row.phase = RunPhase::Pending;
                     let seq = row.last_seq;
-                    inner.enqueue(NewTask::resume(run, &ns, Some(format!("{run}:debug:{seq}")), now));
-                    wake = Some(DEFAULT_POOL.to_string());
+                    inner.enqueue(NewTask { pool: pool_for(&ns, &flow), ..NewTask::resume(run, &ns, Some(format!("{run}:debug:{seq}")), now) });
+                    wake = Some(pool_for(&ns, &flow));
                 }
                 RunRequest::Breakpoints(bps) => {
                     if !debug {

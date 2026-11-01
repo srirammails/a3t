@@ -578,13 +578,13 @@ impl RunStore for SqliteStore {
     }
 
     async fn request(&self, run: RunId, req: RunRequest) -> StoreResult<()> {
-        let woke = self
+        let woke: Option<String> = self
             .write(move |tx| {
                 let now_t = Utc::now();
                 let now = nanos(now_t);
                 let row = get_run(tx, run)?.ok_or_else(|| StoreError::NotFound(format!("run {run}")))?;
                 if row.phase.is_terminal() {
-                    return Ok(false);
+                    return Ok(None);
                 }
                 let owner_until: Option<i64> = tx
                     .query_row("SELECT owner_lease_until FROM runs WHERE run_id = ?1", [run.to_string()], |r| r.get(0))
@@ -594,7 +594,7 @@ impl RunStore for SqliteStore {
                 let drop_tasks = |tx: &Transaction| {
                     tx.execute("DELETE FROM tasks WHERE run_id = ?1 AND lease_owner IS NULL", [&rid]).map_err(be)
                 };
-                let mut woke = false;
+                let mut woke = None;
                 match req {
                     RunRequest::Cancel { by, reason } => {
                         push(tx, run, row.epoch, &[Record::CancelRequested { by, reason: reason.clone() }], now)?;
@@ -624,8 +624,8 @@ impl RunStore for SqliteStore {
                         }
                         let seq = push(tx, run, row.epoch, &[Record::Resumed { by }], now)?.last_seq;
                         tx.execute("UPDATE runs SET phase = ?2 WHERE run_id = ?1", params![rid, tag(&RunPhase::Pending)]).map_err(be)?;
-                        enqueue_tx(tx, &NewTask::resume(run, &row.namespace, Some(format!("{run}:resume:{seq}")), now_t))?;
-                        woke = true;
+                        enqueue_tx(tx, &NewTask::resume_for(&row, Some(format!("{run}:resume:{seq}")), now_t))?;
+                        woke = Some(pool_for(&row.namespace, &row.flow));
                     }
                     RunRequest::Debug { command, by } => {
                         if !row.debug || row.phase != RunPhase::Suspended {
@@ -633,8 +633,8 @@ impl RunStore for SqliteStore {
                         }
                         let seq = push(tx, run, row.epoch, &[Record::DebugCommand { command, by }], now)?.last_seq;
                         tx.execute("UPDATE runs SET phase = ?2 WHERE run_id = ?1", params![rid, tag(&RunPhase::Pending)]).map_err(be)?;
-                        enqueue_tx(tx, &NewTask::resume(run, &row.namespace, Some(format!("{run}:debug:{seq}")), now_t))?;
-                        woke = true;
+                        enqueue_tx(tx, &NewTask::resume_for(&row, Some(format!("{run}:debug:{seq}")), now_t))?;
+                        woke = Some(pool_for(&row.namespace, &row.flow));
                     }
                     RunRequest::Breakpoints(bps) => {
                         if !row.debug {
@@ -647,8 +647,8 @@ impl RunStore for SqliteStore {
                 Ok(woke)
             })
             .await?;
-        if woke {
-            self.notify(&tasks_topic(DEFAULT_POOL), json!({ "resume": run }));
+        if let Some(pool) = woke {
+            self.notify(&tasks_topic(&pool), json!({ "resume": run }));
         }
         self.notify(&run_topic(run), json!({ "request": true }));
         Ok(())

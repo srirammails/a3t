@@ -12,6 +12,7 @@ pub mod token_stream;
 pub mod canvas;
 pub mod ops;
 mod engine_worker;
+pub mod engine_remote;
 mod journal_hook;
 pub mod integrity;
 pub mod handlers;
@@ -103,7 +104,12 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     // Runs go through the durable engine store (queue, runs, journal in
     // <data_dir>/flowr.db) unless FLOWR_STORE=lance.
-    let storage = if engine {
+    let storage = if let Some(remote) = engine_remote::RemoteEngineStore::from_env().filter(|_| engine) {
+        // A runtime: the console holds the queue, runs and journals.
+        info!(url = %std::env::var("FLOWR_ENGINE_URL").unwrap_or_default(), "engine store: remote (console gateway)");
+        remote.forward_streams();
+        storage.with_engine(Arc::new(remote))
+    } else if engine {
         let path = format!("{}/flowr.db", data_dir);
         let engine = flowr_ce_storage::engine_sqlite::SqliteStore::open(&path).map_err(|e| anyhow::anyhow!("{}", e))?;
         info!(path = %path, "engine store: SQLite");
@@ -119,6 +125,12 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
         Some(url) => shared_registry_storage(storage, &url, &db_path).await,
         None => Ok(storage),
     }
+}
+
+/// Whether this process uses the console's engine store over the gateway
+/// (`FLOWR_ENGINE_URL`) — a runtime pod.
+pub fn engine_remote_enabled() -> bool {
+    std::env::var("FLOWR_ENGINE_URL").map(|u| !u.is_empty()).unwrap_or(false)
 }
 
 /// Whether runs go through the durable engine store — the default;
@@ -338,6 +350,14 @@ pub fn spawn_worker(storage: Arc<dyn StorageBackend>) {
     tokio::spawn(async move {
         run_worker(storage).await;
     });
+}
+
+/// Run an engine worker for `pools` only — no gateway, no routing: what a
+/// runtime pod does (and what tests use to stand one up).
+pub fn spawn_pool_worker(storage: Arc<dyn StorageBackend>, pools: Vec<String>) {
+    if let Some(engine) = storage.engine() {
+        tokio::spawn(engine_worker::run(storage, engine, pools));
+    }
 }
 
 /// Run the HTTP server with the given router
@@ -2260,7 +2280,13 @@ async fn run_worker(storage: Arc<dyn StorageBackend>) {
     ops::load(storage.as_ref()).await;
     mark_interrupted(storage.as_ref()).await;
     if let Some(engine) = storage.engine() {
-        return engine_worker::run(storage, engine).await;
+        // The process that holds the store serves it to runtimes and decides
+        // where runs go; a runtime (remote store) only works its pools.
+        if !engine_remote_enabled() {
+            engine_remote::spawn_gateway(engine.clone());
+            flowr_storage::engine::set_pool_router(engine_worker::route);
+        }
+        return engine_worker::run(storage, engine, engine_worker::worker_pools()).await;
     }
 
     // Executions currently running. Compaction waits for this to reach zero:
