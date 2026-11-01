@@ -624,7 +624,28 @@ pub async fn undeploy(storage: &dyn StorageBackend, id: &str, by: &str) -> Resul
 /// Undeploy NOW: cancel the deployment's in-flight runs, then remove it.
 pub async fn terminate(storage: &dyn StorageBackend, id: &str, by: &str) -> Result<Value, String> {
     let d = resolve(id).ok_or_else(|| not_found(id))?;
-    let cancelled = cancel_runs(&d, &format!("terminated by {by}"));
+    let reason = format!("terminated by {by}");
+    let mut cancelled = cancel_runs(&d, &reason);
+    // Runs on other processes (runtime pods): cancel them in the engine store;
+    // their worker stops the run when the request reaches it.
+    if let (Some(engine), Some((ns, flow))) = (storage.engine(), d.flow_ref.split_once('/')) {
+        use flowr_storage::engine::{RunPhase, RunQuery, RunRequest};
+        let q = RunQuery {
+            namespaces: Some(vec![ns.to_string()]),
+            flow: Some(flow.to_string()),
+            phases: vec![RunPhase::Pending, RunPhase::Running, RunPhase::Waiting, RunPhase::Suspended],
+            limit: 200,
+            ..Default::default()
+        };
+        if let Ok(page) = engine.list(q).await {
+            for r in page.items {
+                let id = r.run_id.to_string();
+                if engine.request(r.run_id, RunRequest::Cancel { by: by.to_string(), reason: reason.clone() }).await.is_ok() && !cancelled.contains(&id) {
+                    cancelled.push(id);
+                }
+            }
+        }
+    }
     let mut out = undeploy(storage, &d.id, by).await?;
     info!(deployment = %d.id, by = %by, cancelled = cancelled.len(), "terminated");
     out["terminated"] = json!(true);
