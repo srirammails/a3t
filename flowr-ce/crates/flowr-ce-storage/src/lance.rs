@@ -16,7 +16,10 @@ use flowr_storage::{
 };
 use flowr_types::{FlowError, FlowResult};
 
+use flowr_storage::engine::EngineStore;
+
 use crate::checkpoints::LanceCheckpointStore;
+use crate::engine_adapters::{EngineExecutions, EngineQueue};
 use crate::events::InMemoryEventBus;
 use crate::executions::LanceExecutionStore;
 use crate::queue::InMemoryExecutionQueue;
@@ -60,9 +63,29 @@ pub struct LanceStorage {
 
     /// Trigger store
     triggers: LanceTriggerStore,
+
+    /// The durable engine store and today's queue/execution views over it.
+    engine: Option<EngineParts>,
+}
+
+struct EngineParts {
+    store: Arc<dyn EngineStore>,
+    queue: EngineQueue,
+    executions: EngineExecutions,
 }
 
 impl LanceStorage {
+    /// Run flows on the durable engine store: enqueueing starts a run there,
+    /// execution reads come from it (with older runs still read from LanceDB).
+    pub fn with_engine(mut self, store: Arc<dyn EngineStore>) -> Self {
+        self.engine = Some(EngineParts {
+            queue: EngineQueue::new(store.clone()),
+            executions: EngineExecutions::new(store.clone(), LanceExecutionStore::new(self.conn.clone())),
+            store,
+        });
+        self
+    }
+
     /// Get the underlying LanceDB connection
     pub fn connection(&self) -> Arc<RwLock<Connection>> {
         self.conn.clone()
@@ -100,6 +123,7 @@ impl LanceStorage {
             settings: LanceSettingsStore::new(conn.clone()),
             triggers,
             conn,
+            engine: None,
         })
     }
 
@@ -127,6 +151,7 @@ impl LanceStorage {
             settings: LanceSettingsStore::new(conn.clone()),
             triggers,
             conn,
+            engine: None,
         })
     }
 }
@@ -154,11 +179,21 @@ impl StorageBackend for LanceStorage {
     }
 
     fn queue(&self) -> &dyn ExecutionQueue {
-        &self.queue
+        match &self.engine {
+            Some(e) => &e.queue,
+            None => &self.queue,
+        }
     }
 
     fn executions(&self) -> &dyn ExecutionStore {
-        &self.executions
+        match &self.engine {
+            Some(e) => &e.executions,
+            None => &self.executions,
+        }
+    }
+
+    fn engine(&self) -> Option<Arc<dyn EngineStore>> {
+        self.engine.as_ref().map(|e| e.store.clone())
     }
 
     fn triggers(&self) -> &dyn TriggerStore {

@@ -27,6 +27,7 @@
 //! ```
 
 pub mod checkpoints;
+pub mod engine_adapters;
 pub mod engine_sqlite;
 pub mod error;
 pub mod events;

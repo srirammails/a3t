@@ -131,6 +131,9 @@ impl StorageBackend for SharedRegistryStorage {
     fn triggers(&self) -> &dyn TriggerStore {
         self.inner.triggers()
     }
+    fn engine(&self) -> Option<std::sync::Arc<dyn flowr_storage::engine::EngineStore>> {
+        self.inner.engine()
+    }
 
     /// Creates the shared tables (if missing) after the local ones.
     async fn init(&self) -> FlowResult<()> {

@@ -238,6 +238,20 @@ pub fn register_run(
     (stop, why, RunGuard(id))
 }
 
+/// Stop one in-flight run (a cancel request, or its owner losing the run).
+/// False if it is not running in this process.
+pub fn stop_run(id: uuid::Uuid, reason: &str) -> bool {
+    let runs = running().lock().unwrap();
+    match runs.get(&id) {
+        Some(r) => {
+            *r.why.lock().unwrap() = Some(reason.to_string());
+            r.stop.notify_one();
+            true
+        }
+        None => false,
+    }
+}
+
 /// Cancel every in-flight run of a deployment. `notify_one` stores a permit, so a
 /// run between registering and awaiting still sees the signal.
 fn cancel_runs(d: &Deployment, reason: &str) -> Vec<String> {

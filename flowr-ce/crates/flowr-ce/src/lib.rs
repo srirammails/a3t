@@ -11,6 +11,7 @@ pub mod approval;
 pub mod token_stream;
 pub mod canvas;
 pub mod ops;
+mod engine_worker;
 pub mod integrity;
 pub mod handlers;
 pub mod registry;
@@ -87,6 +88,11 @@ static GLOBAL_STORAGE: std::sync::OnceLock<Arc<dyn StorageBackend>> = std::sync:
 
 /// Initialize LanceDB storage
 pub async fn init_storage(data_dir: &str) -> anyhow::Result<Arc<dyn StorageBackend>> {
+    init_storage_with(data_dir, engine_enabled()).await
+}
+
+/// [`init_storage`], choosing the engine store explicitly.
+pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<Arc<dyn StorageBackend>> {
     std::fs::create_dir_all(data_dir)?;
     let db_path = format!("{}/clawdflow.lance", data_dir);
     info!("Using database at: {}", db_path);
@@ -94,6 +100,17 @@ pub async fn init_storage(data_dir: &str) -> anyhow::Result<Arc<dyn StorageBacke
     let storage = LanceStorage::new(&db_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
+    // FLOWR_STORE=sqlite: runs go through the durable engine store
+    // (queue, runs, journal in <data_dir>/flowr.db); otherwise today's
+    // in-memory queue.
+    let storage = if engine {
+        let path = format!("{}/flowr.db", data_dir);
+        let engine = flowr_ce_storage::engine_sqlite::SqliteStore::open(&path).map_err(|e| anyhow::anyhow!("{}", e))?;
+        info!(path = %path, "engine store: SQLite");
+        storage.with_engine(Arc::new(engine))
+    } else {
+        storage
+    };
     let storage = Arc::new(storage);
     storage.init().await.map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -102,6 +119,11 @@ pub async fn init_storage(data_dir: &str) -> anyhow::Result<Arc<dyn StorageBacke
         Some(url) => shared_registry_storage(storage, &url, &db_path).await,
         None => Ok(storage),
     }
+}
+
+/// Whether runs go through the durable engine store (`FLOWR_STORE=sqlite`).
+pub fn engine_enabled() -> bool {
+    std::env::var("FLOWR_STORE").map(|v| v.eq_ignore_ascii_case("sqlite")).unwrap_or(false)
 }
 
 /// The deployment a runtime pod serves (`A3T_CANVAS` = `namespace/name`, set by the
@@ -635,8 +657,22 @@ impl flowr_ce_agents::triggers::WorkflowExecutor for TriggerWorkflowAdapter {
         let reply = request.input.get("_reply_topic").and_then(|t| t.as_str()).map(String::from)
             .zip(request.input.get("_adb_resource").and_then(|r| r.as_str()).map(String::from));
         let input = request.input.clone();
+        // Engine mode: the run is durable from here and the engine worker runs
+        // it; a reply waits for its outcome.
+        let engine = storage.engine();
+        if engine.is_some() {
+            storage.queue().enqueue(request.clone()).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+        }
         tokio::spawn(async move {
-            let result = execute_workflow(storage_clone.clone(), &reqwest::Client::new(), request).await;
+            let result = match engine {
+                Some(engine) => {
+                    if reply.is_none() {
+                        return;
+                    }
+                    await_outcome(storage_clone.as_ref(), engine.as_ref(), instance_id).await
+                }
+                None => execute_workflow(storage_clone.clone(), &reqwest::Client::new(), request).await,
+            };
             match &result {
                 Ok(state) => info!(workflow = %n, instance_id = %instance_id, status = ?state.status, "Trigger workflow completed"),
                 Err(e) => warn!(workflow = %n, error = %e, "Trigger workflow failed"),
@@ -653,6 +689,23 @@ impl flowr_ce_agents::triggers::WorkflowExecutor for TriggerWorkflowAdapter {
             }
         });
         Ok(instance_id.to_string())
+    }
+}
+
+/// Wait for an engine run to finish and return its record.
+async fn await_outcome(
+    storage: &dyn StorageBackend,
+    engine: &dyn flowr_storage::engine::EngineStore,
+    run: Uuid,
+) -> anyhow::Result<ExecutionState> {
+    let mut news = engine.subscribe(&flowr_storage::engine::run_topic(run));
+    loop {
+        if let Some(state) = storage.executions().get(run).await.map_err(|e| anyhow::anyhow!("{}", e))? {
+            if !matches!(state.status, ExecutionStatus::Queued | ExecutionStatus::Running | ExecutionStatus::Suspended) {
+                return Ok(state);
+            }
+        }
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), futures::StreamExt::next(&mut news)).await;
     }
 }
 
@@ -2189,6 +2242,9 @@ async fn run_worker(storage: Arc<dyn StorageBackend>) {
     // or a paused deployment would serve whatever was queued at startup.
     ops::load(storage.as_ref()).await;
     mark_interrupted(storage.as_ref()).await;
+    if let Some(engine) = storage.engine() {
+        return engine_worker::run(storage, engine).await;
+    }
 
     // Executions currently running. Compaction waits for this to reach zero:
     // it rewrites the executions table's files, and a status update committing
@@ -2293,6 +2349,18 @@ pub async fn execute_workflow(
     _http_client: &reqwest::Client,
     request: flowr_types::ExecutionRequest,
 ) -> anyhow::Result<ExecutionState> {
+    run_request(storage, request, true).await
+}
+
+/// Run one request. With `persist`, the execution record is written at start
+/// and end (the in-memory queue's worker) and a refusal is an `Err`; without it
+/// nothing is written — the engine worker records the outcome when it releases
+/// the run — and a refusal comes back as a failed state.
+pub(crate) async fn run_request(
+    storage: Arc<dyn StorageBackend>,
+    request: flowr_types::ExecutionRequest,
+    persist: bool,
+) -> anyhow::Result<ExecutionState> {
     let start = std::time::Instant::now();
 
     // Admission: the backstop for every path — runs queued before a pause, chat,
@@ -2302,6 +2370,9 @@ pub async fn execute_workflow(
     let agent = request.input.get("session_id").and_then(|v| v.as_str()).and_then(ops::agent_of_session).map(str::to_string);
     if let Err(b) = ops::admit(storage.as_ref(), Some(&flow_ref), agent.as_deref()).await {
         let state = ExecutionState::new(&request, "unknown").fail(format!("refused: {b}"));
+        if !persist {
+            return Ok(state);
+        }
         let _ = storage.executions().save(state).await;
         return Err(anyhow::anyhow!("refused: {}", b));
     }
@@ -2316,14 +2387,19 @@ pub async fn execute_workflow(
             let error_msg = format!("Failed to load workflow: {}", e);
             let mut state = ExecutionState::new(&request, "unknown");
             state = state.fail(error_msg.clone());
+            if !persist {
+                return Ok(state);
+            }
             let _ = storage.executions().save(state).await;
             return Err(anyhow::anyhow!("{}", error_msg));
         }
     };
 
     let mut state = ExecutionState::new(&request, record.version());
-    if let Err(e) = storage.executions().save(state.clone()).await {
-        error!(error = %e, "Failed to save initial state");
+    if persist {
+        if let Err(e) = storage.executions().save(state.clone()).await {
+            error!(error = %e, "Failed to save initial state");
+        }
     }
 
     // Parse stored CNCF YAML via swf-parser
@@ -2332,6 +2408,9 @@ pub async fn execute_workflow(
         Err(e) => {
             let error_msg = format!("Failed to parse workflow: {}", e);
             state = state.fail(error_msg.clone());
+            if !persist {
+                return Ok(state);
+            }
             let _ = storage.executions().save(state.clone()).await;
             return Err(anyhow::anyhow!("{}", error_msg));
         }
@@ -2416,8 +2495,10 @@ pub async fn execute_workflow(
         }
     };
 
-    storage.executions().save(state.clone()).await
-        .map_err(|e| anyhow::anyhow!("Failed to save execution state: {}", e))?;
+    if persist {
+        storage.executions().save(state.clone()).await
+            .map_err(|e| anyhow::anyhow!("Failed to save execution state: {}", e))?;
+    }
 
     Ok(state)
 }

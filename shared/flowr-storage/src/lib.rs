@@ -330,6 +330,13 @@ pub trait StorageBackend: Send + Sync {
     /// Get trigger store
     fn triggers(&self) -> &dyn TriggerStore;
 
+    /// The durable engine store (queue, runs, journal), when this backend has
+    /// one. With it, `queue()` and `executions()` are views over it and the
+    /// engine worker runs flows; without it, today's in-memory queue does.
+    fn engine(&self) -> Option<std::sync::Arc<dyn engine::EngineStore>> {
+        None
+    }
+
     /// Initialize the storage backend
     async fn init(&self) -> FlowResult<()>;
 
