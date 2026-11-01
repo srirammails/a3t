@@ -308,6 +308,8 @@ pub trait RunStore: Send + Sync {
     /// Runs left owned or pending by a process that is gone (owner lease
     /// expired), for startup recovery.
     async fn orphaned(&self) -> StoreResult<Vec<RunRow>>;
+    /// Remove finished runs (and their journals) completed before `before`.
+    async fn purge_finished(&self, before: DateTime<Utc>) -> StoreResult<usize>;
 }
 
 // ── Journal ──

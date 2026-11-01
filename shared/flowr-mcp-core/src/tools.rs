@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 /// Get all available tools
 pub fn get_tools() -> Vec<Tool> {
-    vec![
+    let mut tools = vec![
         // Task documentation tools
         Tool {
             name: "list_task_types".to_string(),
@@ -1012,7 +1012,9 @@ conversation, because the request the user would approve is never raised."
                 "required": ["agent_id"]
             }),
         },
-    ]
+    ];
+    tools.extend(crate::runs::tools());
+    tools
 }
 
 /// Handle a tool call using the provided storage backend
@@ -1385,6 +1387,10 @@ pub async fn dispatch_tool_call(
     // Projects: a caller sees and changes only the namespaces it may.
     if let Some(denied) = crate::ns_gate::check(storage, principal, name, &args).await {
         return denied;
+    }
+    // Run tools gate themselves per run.
+    if let Some(result) = crate::runs::call(storage, principal, name, &args).await {
+        return result;
     }
 
     match name {

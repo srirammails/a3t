@@ -725,6 +725,19 @@ impl RunStore for SqliteStore {
         .await
     }
 
+    async fn purge_finished(&self, before: DateTime<Utc>) -> StoreResult<usize> {
+        self.write(move |tx| {
+            let cut = nanos(before);
+            let done = "phase IN ('completed','faulted','cancelled') AND completed_at IS NOT NULL AND completed_at < ?1";
+            tx.execute(&format!("DELETE FROM journal WHERE run_id IN (SELECT run_id FROM runs WHERE {done})"), [cut]).map_err(be)?;
+            tx.execute(&format!("DELETE FROM checkpoints WHERE run_id IN (SELECT run_id FROM runs WHERE {done})"), [cut]).map_err(be)?;
+            tx.execute(&format!("DELETE FROM tasks WHERE run_id IN (SELECT run_id FROM runs WHERE {done})"), [cut]).map_err(be)?;
+            let n = tx.execute(&format!("DELETE FROM runs WHERE {done}"), [cut]).map_err(be)?;
+            Ok(n)
+        })
+        .await
+    }
+
     async fn orphaned(&self) -> StoreResult<Vec<RunRow>> {
         self.with(|c| {
             let now = nanos(Utc::now());

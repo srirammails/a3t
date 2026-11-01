@@ -39,6 +39,7 @@ where
     notifier_reports_appends(&make().await).await;
     orphaned_runs_after_owner_lease_expiry(&make().await).await;
     outbox_drains_in_order(&make().await).await;
+    purge_removes_only_old_finished_runs(&make().await).await;
 }
 
 fn new_run(ns: &str, flow: &str) -> NewRun {
@@ -345,4 +346,17 @@ async fn outbox_drains_in_order<S: EngineStore>(s: &S) {
     let rest = s.outbox(10).await.unwrap();
     assert_eq!(rest.len(), 1);
     assert_eq!(rest[0].body, json!(2));
+}
+
+async fn purge_removes_only_old_finished_runs<S: EngineStore>(s: &S) {
+    let done = start(s, new_run("p", "f")).await;
+    let (lease, _, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    s.append(done, epoch, &[completed("/do/0/a")]).await.unwrap();
+    s.release(done, epoch, RunPhase::Completed, RunOutcome::default(), &lease).await.unwrap();
+    let open = start(s, new_run("p", "g")).await;
+    assert_eq!(s.purge_finished(Utc::now() - chrono::Duration::days(1)).await.unwrap(), 0, "nothing that old");
+    assert_eq!(s.purge_finished(Utc::now() + chrono::Duration::seconds(1)).await.unwrap(), 1);
+    assert!(s.get(done).await.unwrap().is_none());
+    assert!(s.read_from(done, 0).await.unwrap().is_empty(), "its journal goes too");
+    assert!(s.get(open).await.unwrap().is_some(), "unfinished runs stay");
 }

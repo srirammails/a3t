@@ -452,6 +452,25 @@ impl RunStore for MemoryStore {
         Ok(Page { items: rows.into_iter().cloned().collect(), next })
     }
 
+    async fn purge_finished(&self, before: DateTime<Utc>) -> StoreResult<usize> {
+        let mut inner = self.lock();
+        let gone: Vec<RunId> = inner
+            .runs
+            .values()
+            .filter(|r| r.phase.is_terminal() && r.completed_at.is_some_and(|c| c < before))
+            .map(|r| r.run_id)
+            .collect();
+        for id in &gone {
+            inner.runs.remove(id);
+            inner.journal.remove(id);
+            inner.identities.remove(id);
+            inner.checkpoints.remove(id);
+            inner.owner_until.remove(id);
+        }
+        inner.run_dedupe.retain(|_, (r, _)| !gone.contains(r));
+        Ok(gone.len())
+    }
+
     async fn orphaned(&self) -> StoreResult<Vec<RunRow>> {
         let now = Utc::now();
         let inner = self.lock();

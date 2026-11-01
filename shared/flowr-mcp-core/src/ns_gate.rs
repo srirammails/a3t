@@ -122,17 +122,22 @@ pub async fn can_read(principal: &Principal, kind: ItemKind, ns: &str, name: &st
 /// the project. A run of a platform flow (a chat, a CRUD call): only who ran it,
 /// and superadmin — they carry other people's conversations and data.
 pub async fn can_see_run(principal: &Principal, run: &ExecutionState) -> bool {
+    can_see(principal, &run.namespace, &run.name, run.principal.as_ref()).await
+}
+
+/// Whether `principal` may see a run of `namespace/flow` started by `started_by`.
+pub async fn can_see(principal: &Principal, namespace: &str, flow: &str, started_by: Option<&Principal>) -> bool {
     let g = namespace_guard();
     if !g.enforcing() || matches!(principal, Principal::Service { .. }) {
         return true;
     }
-    let ns = g.effective_namespace(ItemKind::Flow, &run.namespace, &run.name, "", "");
+    let ns = g.effective_namespace(ItemKind::Flow, namespace, flow, "", "");
     if g.is_platform(&ns) {
         if is_superadmin(principal) {
             return true;
         }
         let me = acting_user(principal);
-        let ran = run.principal.as_ref().and_then(acting_user);
+        let ran = started_by.and_then(acting_user);
         return me.is_some() && me == ran;
     }
     g.access(principal, &ns).await >= NsAccess::Read

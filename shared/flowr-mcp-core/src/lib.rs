@@ -22,6 +22,7 @@
 pub mod protocol;
 pub mod tools;
 pub mod ns_gate;
+pub mod runs;
 
 pub use protocol::{
     CallToolParams, CallToolResult, ClientCapabilities, ClientInfo,

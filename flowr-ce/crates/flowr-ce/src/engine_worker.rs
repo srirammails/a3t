@@ -84,6 +84,13 @@ pub(crate) async fn run(storage: Arc<dyn StorageBackend>, engine: Arc<dyn Engine
                         Ok(_) => {}
                         Err(e) => warn!(error = %e, "storage maintenance failed"),
                     }
+                    // Retention: finished runs and their journals.
+                    let days = std::env::var("FLOWR_RUN_RETENTION_DAYS").ok().and_then(|v| v.parse().ok()).unwrap_or(30i64);
+                    match engine.purge_finished(chrono::Utc::now() - chrono::Duration::days(days)).await {
+                        Ok(n) if n > 0 => info!(removed = n, days, "run retention"),
+                        Ok(_) => {}
+                        Err(e) => warn!(error = %e, "run retention failed"),
+                    }
                     next_compact = std::time::Instant::now() + interval;
                 }
                 tokio::select! {
