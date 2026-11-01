@@ -542,11 +542,20 @@ impl StepHook for JournalHook {
             None
         };
 
-        // A durable timer: set it, or it has fired.
+        // A durable timer: set it, or it has fired. A task timeout shorter
+        // than the wait fires first, as a (catchable) timeout.
         if let Some(d) = wait_of(task).filter(|d| *d > inline_wait_max()) {
+            let limit = task.timeout.as_ref().and_then(|t| t.duration()).filter(|l| *l < d);
+            let d = limit.unwrap_or(d);
             let set = self.timers.lock().unwrap().get(&key).copied();
             let now = Utc::now();
             match set {
+                Some(fire_at) if fire_at <= now && limit.is_some() => {
+                    let error = format!("timeout: task '{}' took longer than {}s", task.name, d.as_secs());
+                    let attempt = *self.attempts.lock().unwrap().get(&key).unwrap_or(&0);
+                    self.commit(vec![Record::StepFailed { step_key: key, attempt, error: Value::String(error.clone()), retryable: false, duration_us: d.as_micros() as u64, input: shown(input) }]).await?;
+                    return Ok(StepReplay::Failed { error });
+                }
                 Some(fire_at) if fire_at <= now => {
                     let waited = now - (fire_at - chrono::Duration::from_std(d).unwrap_or_default());
                     let rec = Record::StepCompleted {

@@ -266,7 +266,19 @@ impl WorkflowExecutor {
                         _ => task_input,
                     };
                     let started = std::time::Instant::now();
-                    let res = self.run_task_body(named_task, task_idx, &current, task_input.clone(), ctx, &task_path).await;
+                    // `timeout.after` on the task: an ordinary, catchable timeout error.
+                    let res = match named_task.timeout.as_ref().and_then(|t| t.duration()) {
+                        Some(limit) => match tokio::time::timeout(
+                            limit,
+                            self.run_task_body(named_task, task_idx, &current, task_input.clone(), ctx, &task_path),
+                        )
+                        .await
+                        {
+                            Ok(r) => r,
+                            Err(_) => Err(RuntimeError::Timeout(format!("task '{}' took longer than {}s", named_task.name, limit.as_secs()))),
+                        },
+                        None => self.run_task_body(named_task, task_idx, &current, task_input.clone(), ctx, &task_path).await,
+                    };
                     let us = started.elapsed().as_micros() as u64;
                     if let Some(h) = &self.step_hook {
                         match &res {

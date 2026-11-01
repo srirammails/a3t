@@ -385,6 +385,7 @@ fn parse_wait_task(obj: &serde_json::Map<String, Value>) -> Result<Task> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_parse_minimal_workflow() {
@@ -1242,7 +1243,6 @@ do:
         let then = wf.tasks[0].then.as_ref().unwrap();
         assert!(then.is_end());
     }
-}
 
     #[test]
     fn test_parse_set_with_expressions_and_arrays() {
@@ -1286,4 +1286,5 @@ do:
         } else {
             panic!("expected set task");
         }
+}
 }

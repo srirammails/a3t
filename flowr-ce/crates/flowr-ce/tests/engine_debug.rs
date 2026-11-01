@@ -56,10 +56,43 @@ do:
                 set: { recovered: true }
 "#;
 
+const SLOW_RUN: &str = r#"
+document: { dsl: '1.0.3', namespace: d, name: slowrun, version: '1.0.0' }
+timeout: { after: { seconds: 1 } }
+do:
+  - nap:
+      wait: { seconds: 3 }
+"#;
+
+const SLOW_TASK: &str = r#"
+document: { dsl: '1.0.3', namespace: d, name: slowtask, version: '1.0.0' }
+do:
+  - guard:
+      try:
+        do:
+          - call:
+              wait: { seconds: 3 }
+              timeout: { after: { seconds: 1 } }
+        catch:
+          do:
+            - fallback:
+                set: { timed_out: true }
+"#;
+
+const LONG_WAIT_RUN: &str = r#"
+document: { dsl: '1.0.3', namespace: d, name: longwait, version: '1.0.0' }
+timeout: { after: { seconds: 1 } }
+do:
+  - nap:
+      wait: { seconds: 2 }
+  - after:
+      set: { woke: true }
+"#;
+
 async fn storage(dir: &std::path::Path, worker: bool) -> Arc<dyn StorageBackend> {
     init();
     let s = flowr_ce::init_storage_with(dir.to_str().unwrap(), true).await.unwrap();
-    for y in [STEPS, TIMER, GUARDED] {
+    for y in [STEPS, TIMER, GUARDED, SLOW_RUN, SLOW_TASK, LONG_WAIT_RUN] {
         s.workflows().register(WorkflowRecord::from_yaml(y).unwrap()).await.unwrap();
     }
     if worker {
@@ -261,4 +294,33 @@ async fn hit_counts_carry_across_resumes() {
     assert_eq!(nth_pause(s.as_ref(), id, 2).await.0, "/c");
     command(s.as_ref(), id, json!("continue")).await;
     until(s.as_ref(), id, RunPhase::Completed).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_over_its_timeout_faults() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = storage(dir.path(), true).await;
+    let t = std::time::Instant::now();
+    let id = start(s.as_ref(), "slowrun", false, Value::Null).await;
+    let r = until(s.as_ref(), id, RunPhase::Faulted).await;
+    assert!(r.error.unwrap().starts_with("timeout:"));
+    assert!(t.elapsed() < Duration::from_millis(2900), "stopped at the limit, not after the wait");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn time_waiting_on_a_timer_counts_toward_the_run_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = storage(dir.path(), true).await;
+    let id = start(s.as_ref(), "longwait", false, Value::Null).await;
+    let r = until(s.as_ref(), id, RunPhase::Faulted).await;
+    assert!(r.error.unwrap().starts_with("timeout:"), "woken after its deadline, it faults");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_task_timeout_is_catchable() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = storage(dir.path(), true).await;
+    let id = start(s.as_ref(), "slowtask", false, Value::Null).await;
+    let r = until(s.as_ref(), id, RunPhase::Completed).await;
+    assert_eq!(r.output.unwrap()["timed_out"], true);
 }

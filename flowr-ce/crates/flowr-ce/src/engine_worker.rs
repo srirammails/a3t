@@ -198,9 +198,35 @@ async fn run_claimed(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineSto
         caller: Some(row.trigger.clone()),
         principal: serde_json::from_value(row.principal.clone()).ok(),
     };
+    // The document's `timeout`: counted from the run's first start, so time
+    // spent waiting on timers counts too. Debug runs have none — a paused
+    // debugger must not time out.
+    let limit = if row.debug { None } else { record.parse().ok().and_then(|d| d.timeout).and_then(|t| t.duration()) };
+    let mut deadline_timer = None;
+    let deadline = limit.map(|l| row.started_at.unwrap_or_else(chrono::Utc::now) + chrono::Duration::from_std(l).unwrap_or(chrono::Duration::MAX));
+    if let (Some(limit), Some(deadline)) = (limit, deadline) {
+        let left = deadline - chrono::Utc::now();
+        let why = format!("timeout: the run took longer than its {}s limit", limit.as_secs());
+        match left.to_std() {
+            Ok(left) if !left.is_zero() => {
+                deadline_timer = Some(tokio::spawn(async move {
+                    tokio::time::sleep(left).await;
+                    crate::ops::stop_run(run_id, &why);
+                }));
+            }
+            _ => {
+                release(RunPhase::Faulted, RunOutcome { output: None, error: Some(why) }).await;
+                return;
+            }
+        }
+    }
+
     let hook = Arc::new(hook);
     let step_hook: Option<Arc<dyn swf_runtime::StepHook>> = if ephemeral { None } else { Some(hook.clone()) };
     let result = crate::run_request(storage, request, false, step_hook).await;
+    if let Some(t) = deadline_timer {
+        t.abort();
+    }
     done.store(true, Ordering::SeqCst);
     keeper.abort();
     match hook.halt() {
@@ -219,8 +245,10 @@ async fn run_claimed(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineSto
             return;
         }
         Some(Halt::Timer(fire_at)) => {
-            // Wake it when the timer fires, on whichever worker is free.
-            let wake = NewTask::resume(run_id, &row.namespace, Some(format!("{run_id}:timer:{}", fire_at.timestamp_millis())), fire_at);
+            // Wake it when the timer fires — or at its deadline, if that comes
+            // first (it then faults on waking) — on whichever worker is free.
+            let wake_at = deadline.map_or(fire_at, |d| d.min(fire_at));
+            let wake = NewTask::resume(run_id, &row.namespace, Some(format!("{run_id}:timer:{}", wake_at.timestamp_millis())), wake_at);
             if let Err(e) = engine.enqueue(wake).await {
                 error!(%run_id, error = %e, "could not schedule the timer; the run stays owned until its lease runs out and is retried");
                 return;
@@ -235,6 +263,10 @@ async fn run_claimed(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineSto
     let (phase, outcome) = match result {
         Ok(state) => match state.status {
             ExecutionStatus::Completed => (RunPhase::Completed, RunOutcome { output: state.output, error: None }),
+            // Stopped by its deadline: a failure, not a cancel.
+            ExecutionStatus::Cancelled if state.error.as_deref().is_some_and(|e| e.starts_with("timeout:")) => {
+                (RunPhase::Faulted, RunOutcome { output: None, error: state.error })
+            }
             ExecutionStatus::Cancelled => (RunPhase::Cancelled, RunOutcome { output: None, error: state.error }),
             _ => (RunPhase::Faulted, RunOutcome { output: None, error: state.error.or_else(|| Some("failed".into())) }),
         },

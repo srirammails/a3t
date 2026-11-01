@@ -17,3 +17,12 @@ pub struct TimeoutDuration {
     #[serde(default)]
     pub hours: Option<u64>,
 }
+
+impl Timeout {
+    /// The time allowed, if one is set.
+    pub fn duration(&self) -> Option<std::time::Duration> {
+        let a = self.after.as_ref()?;
+        let secs = a.seconds.unwrap_or(0) + a.minutes.unwrap_or(0) * 60 + a.hours.unwrap_or(0) * 3600;
+        (secs > 0).then(|| std::time::Duration::from_secs(secs))
+    }
+}
