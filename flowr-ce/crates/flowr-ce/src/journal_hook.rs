@@ -41,8 +41,10 @@ use swf_parser::{CallTarget, NamedTask, Task};
 use swf_runtime::error::{Result, RuntimeError};
 use swf_runtime::{StepHook, StepOutcome, StepReplay};
 
-/// Pure records are flushed at the latest after this many.
+/// Pure records are flushed at the latest after this many, or this long — so
+/// a live view of the run keeps up without a disk sync per pure step.
 const MAX_PENDING: usize = 64;
+const MAX_PENDING_AGE: std::time::Duration = std::time::Duration::from_millis(250);
 
 enum Prior {
     Completed { output: Value, context: Option<Value>, directive: String },
@@ -97,6 +99,7 @@ pub(crate) struct JournalHook {
     /// Durable timers already set, by step key.
     timers: Mutex<HashMap<String, DateTime<Utc>>>,
     pending: Mutex<Vec<Record>>,
+    pending_since: Mutex<Option<std::time::Instant>>,
     /// The context after the last recorded step.
     last_context: Mutex<Value>,
     /// The definition version recorded when the run first started.
@@ -330,6 +333,7 @@ impl JournalHook {
             attempts: Mutex::new(attempts),
             timers: Mutex::new(timers),
             pending: Mutex::new(Vec::new()),
+            pending_since: Mutex::new(None),
             last_context: Mutex::new(last_context),
             pinned,
             debug: row.debug,
@@ -385,6 +389,7 @@ impl JournalHook {
     }
 
     fn take_pending(&self) -> Vec<Record> {
+        *self.pending_since.lock().unwrap() = None;
         std::mem::take(&mut *self.pending.lock().unwrap())
     }
 
@@ -526,13 +531,14 @@ impl StepHook for JournalHook {
             let now = Utc::now();
             match set {
                 Some(fire_at) if fire_at <= now => {
+                    let waited = now - (fire_at - chrono::Duration::from_std(d).unwrap_or_default());
                     let rec = Record::StepCompleted {
                         step_key: key,
                         attempt: 0,
                         output: input.clone(),
                         context: Value::Null,
                         class: StepClass::Pure,
-                        duration_us: 0,
+                        duration_us: waited.num_microseconds().unwrap_or(0).max(0) as u64,
                         directive: "continue".into(),
                         input: shown(input),
                     };
@@ -603,7 +609,8 @@ impl StepHook for JournalHook {
             let flush = {
                 let mut p = self.pending.lock().unwrap();
                 p.push(rec);
-                p.len() >= MAX_PENDING
+                let since = *self.pending_since.lock().unwrap().get_or_insert_with(std::time::Instant::now);
+                p.len() >= MAX_PENDING || since.elapsed() >= MAX_PENDING_AGE
             };
             if flush {
                 self.commit(vec![]).await?;

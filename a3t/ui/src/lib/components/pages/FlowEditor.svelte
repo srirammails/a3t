@@ -43,6 +43,7 @@ steps:
   // ── Run (console spec U1) ──
   /// A run executes the saved flow, so Run needs a saved, unchanged flow.
   let runDialog = $state(false);
+  let runDebug = $state(false);
   let runsOpen = $state(false);
   const runTarget = $derived.by(() => {
     if (!selectedFlowKey) return null;
@@ -50,7 +51,29 @@ steps:
     return { ns, name };
   });
   const inputSchema = $derived(parsed?.input?.schema ?? null);
-  function openRun() { runsOpen = true; runDialog = true; }
+  function openRun(debug = false) { runDebug = debug; runsOpen = true; runDialog = true; }
+
+  /// The flow's steps as the engine keys them for breakpoints (loop and
+  /// branch scopes left out): `/a`, `/loop/send`, `/guard/charge`.
+  function stepKeys(tasks: any, prefix = ''): string[] {
+    const out: string[] = [];
+    for (const item of Array.isArray(tasks) ? tasks : []) {
+      if (!item || typeof item !== 'object') continue;
+      for (const [name, task] of Object.entries<any>(item)) {
+        const key = `${prefix}/${name}`;
+        out.push(key);
+        if (!task || typeof task !== 'object') continue;
+        if (Array.isArray(task.do)) out.push(...stepKeys(task.do, key));
+        if (task.try) {
+          out.push(...stepKeys(task.try.do ?? task.try, key));
+          out.push(...stepKeys(task.try.catch?.do ?? task.catch?.do, key));
+        }
+        if (task.fork?.branches) out.push(...stepKeys(task.fork.branches, key));
+      }
+    }
+    return out;
+  }
+  const flowSteps = $derived(stepKeys(parsed?.do));
 
   // ── Load flows list ──
   onMount(async () => {
@@ -159,7 +182,9 @@ steps:
     </button>
     <button class="btn ghost sm" disabled={!runTarget} onclick={() => (runsOpen = !runsOpen)}
       title={runTarget ? 'Show this flow\'s runs' : 'Open a saved flow to see its runs'}>Runs</button>
-    <button class="btn spec sm" disabled={!runTarget || dirty || loading} onclick={openRun}
+    <button class="btn ghost sm" disabled={!runTarget || dirty || loading} onclick={() => openRun(true)}
+      title={!runTarget ? 'Open a saved flow to debug it' : dirty ? 'Deploy your changes first — a run uses the saved flow' : 'Debug: breakpoints, stepping, step inputs and outputs'}>🐞 Debug</button>
+    <button class="btn spec sm" disabled={!runTarget || dirty || loading} onclick={() => openRun(false)}
       title={!runTarget ? 'Open a saved flow to run it' : dirty ? 'Deploy your changes first — a run uses the saved flow' : 'Run with inputs'}>▶ Run</button>
   </div>
 
@@ -170,7 +195,7 @@ steps:
     </div>
     {#if runsOpen && runTarget}
       <div class="run-dock">
-        <FlowRunPanel ns={runTarget.ns} name={runTarget.name} schema={inputSchema} bind:dialogOpen={runDialog} />
+        <FlowRunPanel ns={runTarget.ns} name={runTarget.name} schema={inputSchema} steps={flowSteps} bind:dialogOpen={runDialog} bind:debugMode={runDebug} />
       </div>
     {/if}
   </div>
@@ -200,7 +225,7 @@ steps:
 
   /* Editor content — hosts panel + editor side by side */
   .editor-content { flex: 1; overflow: hidden; position: relative; display: flex; flex-direction: column; }
-  .run-dock { height: 38%; min-height: 200px; flex-shrink: 0; }
+  .run-dock { height: 46%; min-height: 240px; flex-shrink: 0; }
 
   /* Overlay */
 

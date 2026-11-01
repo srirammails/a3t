@@ -389,6 +389,25 @@ export const executions = {
   get: (instanceId: string) => mcpCall('get_execution_status', { instance_id: instanceId }),
 };
 
+/** Runs on the durable engine store: list, read, start, debug, re-run. */
+export const runsApi = {
+  list: (opts: { namespace?: string; namespaces?: string[]; name?: string; status?: string[]; limit?: number; cursor?: string } = {}) =>
+    mcpCall('list_runs', opts),
+  get: (runId: string) => mcpCall('get_run', { run_id: runId }),
+  journal: (runId: string, afterSeq = 0) => mcpCall('get_run_journal', { run_id: runId, after_seq: afterSeq }),
+  start: (args: { namespace: string; name: string; input?: any; debug?: boolean; breakpoints?: Breakpoint[]; pause_on_start?: boolean }) =>
+    mcpCall('start_run', args),
+  debug: (runId: string, command: DebugCommand, stepKey?: string) =>
+    mcpCall('debug_run', { run_id: runId, command, ...(stepKey ? { step_key: stepKey } : {}) }),
+  setBreakpoints: (runId: string, breakpoints: Breakpoint[]) => mcpCall('set_breakpoints', { run_id: runId, breakpoints }),
+  editInput: (runId: string, stepKey: string, input: any) => mcpCall('edit_step_input', { run_id: runId, step_key: stepKey, input }),
+  cancel: (runId: string, reason?: string) => mcpCall('cancel_run', { run_id: runId, ...(reason ? { reason } : {}) }),
+  rerun: (runId: string, opts: { from_seq?: number; input?: any; debug?: boolean; breakpoints?: Breakpoint[] } = {}) =>
+    mcpCall('rerun_run', { run_id: runId, ...opts }),
+};
+export type Breakpoint = { step_key: string; when?: 'before' | 'after' | 'on_error'; condition?: string; hit?: number; enabled?: boolean };
+export type DebugCommand = 'continue' | 'step_over' | 'step_into' | 'step_out' | 'run_to' | 'stop';
+
 // ── Audit / decision log (EE — the Cedar allow/deny record) ──
 export const audit = {
   /** Most-recent authorization decisions, newest-first. */

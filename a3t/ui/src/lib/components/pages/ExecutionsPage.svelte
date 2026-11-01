@@ -4,7 +4,10 @@
   // Executions — the run history persisted in the storage backend. Lists recent
   // workflow instances (list_executions), with a detail drawer per run
   // (get_execution_status: input / output / error / timing).
-  import { executions } from '$lib/services/api';
+  import { executions, runsApi } from '$lib/services/api';
+  import { getProject } from '$lib/stores/context.svelte.ts';
+  import { contextRev_ } from '$lib/stores/apps.svelte.ts';
+  import RunView from '$lib/components/run/RunView.svelte';
   import { onMount, onDestroy } from 'svelte';
 
   interface Exec {
@@ -26,8 +29,38 @@
   let detailLoading = $state(false);
   let timer: any = null;
 
-  async function load() {
+  /// The run store (newest first, filtered on the server, paged); servers
+  /// before it answer with the execution list.
+  let runsMode = $state(true);
+  let cursor = $state<string | null>(null);
+  const PHASES: Record<string, string[]> = { running: ['running', 'pending'], completed: ['completed'], failed: ['faulted'], queued: ['pending'], paused: ['suspended'], waiting: ['waiting'] };
+
+  function fromRun(r: any): Exec {
+    const status = ({ suspended: 'paused', faulted: 'failed', pending: 'queued' } as Record<string, string>)[r.phase] ?? r.phase;
+    return { instance_id: r.run_id, namespace: r.namespace, name: r.flow, version: r.version, status, started_at: r.started_at ?? r.created_at,
+             completed_at: r.completed_at, duration_us: r.duration_us ?? undefined, current_step: r.current_step ?? undefined, error: r.error };
+  }
+
+  async function load(more = false) {
     loading = true; error = '';
+    if (runsMode) {
+      const project = getProject();
+      const r = await runsApi.list({
+        limit,
+        ...(fNamespace.trim() ? { namespace: fNamespace.trim() } : project ? { namespace: project } : {}),
+        ...(fName.trim() ? { name: fName.trim() } : {}),
+        ...(fStatus !== 'all' ? { status: PHASES[fStatus] ?? [fStatus] } : {}),
+        ...(more && cursor ? { cursor } : {}),
+      });
+      if (r.ok && Array.isArray(r.data?.runs)) {
+        const page = r.data.runs.map(fromRun);
+        rows = more ? [...rows, ...page] : page;
+        cursor = r.data.next ?? null;
+        loading = false;
+        return;
+      }
+      runsMode = false;
+    }
     const res = await executions.list({
       limit,
       namespace: fNamespace.trim() || undefined,
@@ -62,7 +95,15 @@
     if (auto) { timer = setInterval(load, 4000); } else { clearInterval(timer); timer = null; }
   }
 
-  onMount(load);
+  onMount(() => load());
+  // Another project (or "show platform") is another list.
+  let loadedRev = contextRev_();
+  $effect(() => {
+    const rev = contextRev_();
+    if (rev === loadedRev) return;
+    loadedRev = rev;
+    void load();
+  });
   onDestroy(() => { if (timer) clearInterval(timer); });
 
   // ── formatting ──
@@ -107,7 +148,7 @@
     try { return JSON.stringify(v, null, 2); } catch { return String(v); }
   }
 
-  const STATUSES = ['all', 'running', 'completed', 'failed', 'queued'];
+  const STATUSES = ['all', 'running', 'paused', 'waiting', 'completed', 'failed', 'queued'];
 </script>
 
 <div class="execs">
@@ -121,15 +162,15 @@
     </div>
     <div class="head-actions">
       <label class="auto"><input type="checkbox" checked={auto} onchange={toggleAuto} /> Auto-refresh</label>
-      <button class="btn" onclick={load} disabled={loading}>{loading ? 'Loading…' : '↻ Refresh'}</button>
+      <button class="btn" onclick={() => load()} disabled={loading}>{loading ? 'Loading…' : '↻ Refresh'}</button>
     </div>
   </header>
 
   <div class="filters">
-    <input class="inp" placeholder="namespace" bind:value={fNamespace} onchange={load} />
-    <input class="inp" placeholder="flow name" bind:value={fName} onchange={load} />
-    <select class="inp" bind:value={fStatus}>{#each STATUSES as s}<option value={s}>{s}</option>{/each}</select>
-    <select class="inp" bind:value={limit} onchange={load}>
+    <input class="inp" placeholder="namespace" bind:value={fNamespace} onchange={() => load()} />
+    <input class="inp" placeholder="flow name" bind:value={fName} onchange={() => load()} />
+    <select class="inp" bind:value={fStatus} onchange={() => load()}>{#each STATUSES as s}<option value={s}>{s}</option>{/each}</select>
+    <select class="inp" bind:value={limit} onchange={() => load()}>
       {#each [25, 50, 100, 200] as n}<option value={n}>{n} rows</option>{/each}
     </select>
     <span class="count">{shown.length} shown</span>
@@ -160,6 +201,7 @@
             {/each}
           </tbody>
         </table>
+        {#if runsMode && cursor}<button class="btn more" onclick={() => load(true)} disabled={loading}>Older runs…</button>{/if}
       {/if}
     </div>
 
@@ -175,6 +217,9 @@
         <div class="kv"><span>Completed</span><span>{when(detail.completed_at)}</span></div>
         <div class="kv"><span>Duration</span><span>{dur(detail)}</span></div>
         {#if detail.current_step}<div class="kv"><span>Current step</span><span>{detail.current_step}</span></div>{/if}
+        {#if runsMode}
+          <RunView runId={detail.instance_id} onrerun={(id) => { void load(); openDetail({ ...detail!, instance_id: id }); }} />
+        {:else}
         {#if detailLoading}<div class="state sm">Loading detail…</div>{/if}
 
         {#if detail.error}
@@ -185,6 +230,7 @@
         <pre class="code">{pretty(detail.input) || '—'}</pre>
         <h3>Output</h3>
         <pre class="code">{pretty(detail.output) || '—'}</pre>
+        {/if}
       </aside>
     {/if}
   </div>
@@ -197,6 +243,7 @@
   .head h1 { font-family: var(--font-serif, serif); font-size: 24px; font-weight: 500; }
   .sub { font-size: 13px; color: var(--text-3); margin-top: 4px; }
   .head-actions { display: flex; align-items: center; gap: 12px; }
+  .more { margin: 10px auto; display: block; }
   .auto { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
   .btn { padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-surface); color: var(--text-2); font-size: 13px; cursor: pointer; }
   .btn:hover { background: var(--bg-subtle); }
@@ -205,7 +252,7 @@
   .inp { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-sunken, var(--bg-surface)); color: var(--text-1); font-size: 13px; }
   .count { margin-left: auto; font-size: 12px; color: var(--text-4); }
   .body { flex: 1; overflow: hidden; display: grid; grid-template-columns: 1fr; }
-  .body.split { grid-template-columns: 1fr 420px; }
+  .body.split { grid-template-columns: 1fr minmax(420px, 58%); }
   .table-wrap { overflow: auto; }
   .state { padding: 40px; text-align: center; color: var(--text-4); }
   .state.err { color: var(--warn, #d66); }
