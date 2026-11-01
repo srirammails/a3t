@@ -65,10 +65,17 @@
       return { ns, flows: f.ok ? rows(f.data, 'workflows', 'flows') : [], resources: r.ok ? rows(r.data, 'resources') : [] };
     }));
     tree = perNs.map(({ ns, flows, resources }) => {
-      const folder = (key: string, label: string, items: OpenItem[], icon = ''): Node => ({
-        key: `${ns}/${key}`, label, icon, count: items.length,
-        children: items.sort((a, b) => a.name.localeCompare(b.name)).map((it) => ({ key: keyOf(it), label: it.name, item: it })),
-      });
+      // One row per item: the registry can list a name twice (e.g. a resource
+      // kept in two places), and rows are keyed by kind / project / name.
+      const folder = (key: string, label: string, items: OpenItem[], icon = ''): Node => {
+        const unique = new Map<string, OpenItem>();
+        for (const it of items) {
+          it.name = String(it.name ?? it.id ?? '?');
+          if (!unique.has(keyOf(it))) unique.set(keyOf(it), it);
+        }
+        const list = [...unique.values()].sort((a, b) => a.name.localeCompare(b.name));
+        return { key: `${ns}/${key}`, label, icon, count: list.length, children: list.map((it) => ({ key: keyOf(it), label: it.name, item: it })) };
+      };
       const byCat = new Map<string, OpenItem[]>();
       const canvases: OpenItem[] = [];
       for (const r of resources) {
