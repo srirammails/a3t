@@ -29,6 +29,7 @@
     onsection,
     aiKind = 'flow',
     aiName = '',
+    part = null,
   }: {
     initialYaml: string;
     onchange?: (val: string) => void;
@@ -48,6 +49,10 @@
     /// What the AI tab tells the agent it is editing, e.g. "template" and its name.
     aiKind?: string;
     aiName?: string;
+    /// Render one piece only, for hosts that lay the pieces out themselves (the
+    /// studio puts Form and AI in its own panels): `main` = Graph | Code,
+    /// `form`, or `ai`. Instances stay in step through `initialYaml`/`onchange`.
+    part?: 'main' | 'form' | 'ai' | null;
   } = $props();
 
   const nodeTypes = {
@@ -275,7 +280,31 @@
 {/snippet}
 
 <div class="fep">
-  {#if singleColumn}
+  {#if part === 'main'}
+    <div class="fep-solo">
+      <div class="fep-toolbar">
+        <div class="fep-tabs">
+          <button class="fep-tab" class:active={leftMode === 'graph'} onclick={() => leftMode = 'graph'}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="5" height="5" rx="1"/><rect x="10" y="10" width="5" height="5" rx="1"/><path d="M6 3.5h4M8 3.5v9"/></svg>
+            Graph
+          </button>
+          <button class="fep-tab" class:active={leftMode === 'code'} onclick={() => leftMode = 'code'}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3L1 8l4 5M11 3l4 5-4 5"/></svg>
+            Code
+          </button>
+        </div>
+      </div>
+      <div class="fep-pane-body part-main">
+        {#if leftMode === 'graph'}{@render graphView(true)}{:else}{@render codeView()}{/if}
+      </div>
+    </div>
+  {:else if part === 'form'}
+    <div class="fep-part">{@render formView()}</div>
+  {:else if part === 'ai'}
+    <div class="fep-part">
+      <DesignerChat kind={aiKind} name={aiName} readonly={readOnly} gettext={() => yamlSource} onapply={(t) => onCodeChange(t)} />
+    </div>
+  {:else if singleColumn}
     <!-- Narrow host: one tab bar, one view at a time, full width. -->
     <div class="fep-solo">
       <div class="fep-toolbar">
@@ -367,6 +396,8 @@
 
 <style>
   .fep { height: 100%; overflow: hidden; }
+  .fep-part { height: 100%; overflow: auto; }
+  .part-main { flex: 1; min-height: 0; overflow: hidden; }
   .fep-solo { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
   /* The form is the only view that scrolls vertically in solo mode. */
   .fep-solo .fep-pane-body { flex: 1; min-height: 0; overflow: auto; }

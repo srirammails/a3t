@@ -1,6 +1,6 @@
 <script lang="ts">
   /// One flow tab: its toolbar (Run/Debug split button, Deploy) and the graph /
-  /// code / form editor. The text lives in the studio's document, so switching
+  /// code editor (the studio shows its Form and AI in the right panels). The text lives in the studio's document, so switching
   /// tabs never loses an edit.
   import { flows as flowsMcp, mcpCall } from '$lib/services/api';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
@@ -77,7 +77,7 @@
   </div>
   <div class="fd-body">
     {#if doc.loaded || doc.isNew}
-      <FlowEditorPane aiKind="flow" aiName={`${doc.ns}/${doc.name}`} initialYaml={doc.yaml ?? ''} onchange={(v: string) => (doc.yaml = v)} />
+      <FlowEditorPane part="main" aiKind="flow" aiName={`${doc.ns}/${doc.name}`} initialYaml={doc.yaml ?? ''} onchange={(v: string) => (doc.yaml = v)} />
     {:else}
       <div class="loading">Loading {doc.ns}/{doc.name}…</div>
     {/if}

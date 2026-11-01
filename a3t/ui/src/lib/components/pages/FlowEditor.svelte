@@ -11,6 +11,7 @@
   import FlowDocument from '$lib/components/studio/FlowDocument.svelte';
   import ItemPreview from '$lib/components/studio/ItemPreview.svelte';
   import FlowRunPanel from '$lib/components/run/FlowRunPanel.svelte';
+  import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
   import { Studio } from '$lib/components/studio/layout.svelte.ts';
   import { parse, problems, stepKeys, newFlowYaml, type Doc, type OpenItem } from '$lib/components/studio/flow';
   import { getActivePanel } from '$lib/stores/panels.svelte.ts';
@@ -18,6 +19,7 @@
 
   const studio = new Studio('flows', {
     left: { size: 280, minimized: false, active: 'explorer' },
+    right: { size: 380, minimized: false, active: 'form' },
     bottom: { size: 320, minimized: true, active: 'runs' },
   });
 
@@ -112,6 +114,7 @@
   <StudioShell
     {studio}
     left={{ panels: [{ id: 'explorer', title: 'Explorer' }], panel: leftPanel }}
+    right={{ panels: [{ id: 'form', title: 'Form' }, { id: 'ai', title: 'AI' }], panel: rightPanel }}
     bottom={{ panels: [{ id: 'runs', title: 'Runs' }, { id: 'problems', title: 'Problems' }], panel: bottomPanel, badge: (id) => (id === 'problems' && issues.length ? issues.length : null) }}
     center={centerArea}
   />
@@ -146,6 +149,17 @@
       {/key}
     {/if}
   </div>
+{/snippet}
+
+{#snippet rightPanel(id: string)}
+  {#if activeFlow && (activeFlow.loaded || activeFlow.isNew)}
+    {#key `${activeFlow.id}:${id}`}
+      <FlowEditorPane part={id === 'ai' ? 'ai' : 'form'} aiKind="flow" aiName={`${activeFlow.ns}/${activeFlow.name}`}
+        initialYaml={activeFlow.yaml ?? ''} onchange={(v: string) => (activeFlow!.yaml = v)} />
+    {/key}
+  {:else}
+    <div class="note">{active ? `The ${id === 'ai' ? 'AI assistant' : 'form'} works on flows.` : 'Open a flow to edit it here.'}</div>
+  {/if}
 {/snippet}
 
 {#snippet bottomPanel(id: string)}
