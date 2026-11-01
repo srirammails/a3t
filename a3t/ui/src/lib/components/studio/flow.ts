@@ -82,17 +82,32 @@ export function newFlowYaml(ns: string, n: number): string {
 /// code" from the graph: each segment of the key is the nearest such key
 /// under the one before it.
 export function lineOfStep(yaml: string | undefined, stepKey: string): number | null {
+  try { return lineIn(YAML.parseDocument(yaml ?? ''), yaml ?? '', stepKey, true); } catch { return null; }
+}
+
+/// Each step key's line, parsing the text once.
+export function stepLines(yaml: string | undefined, keys: string[]): Map<string, number> {
+  const out = new Map<string, number>();
   let doc: YAML.Document;
-  try { doc = YAML.parseDocument(yaml ?? ''); } catch { return null; }
+  try { doc = YAML.parseDocument(yaml ?? ''); } catch { return out; }
+  for (const k of keys) {
+    const line = lineIn(doc, yaml ?? '', k, false);
+    if (line !== null) out.set(k, line);
+  }
+  return out;
+}
+
+/// `partial`: a key not found all the way down gives its nearest parent's line.
+function lineIn(doc: YAML.Document, yaml: string, stepKey: string, partial: boolean): number | null {
   let scope: unknown = doc.get('do', true) ?? doc.contents;
   let at: number | null = null;
   for (const seg of stepKey.split('/').filter(Boolean)) {
     const pair = nearest(scope, seg);
-    if (!pair) return at === null ? null : lineAt(yaml ?? '', at);
+    if (!pair) return at === null || !partial ? null : lineAt(yaml, at);
     at = (pair.key as any)?.range?.[0] ?? at;
     scope = pair.value;
   }
-  return at === null ? null : lineAt(yaml ?? '', at);
+  return at === null ? null : lineAt(yaml, at);
 }
 
 /// The shallowest `name:` pair under a node (breadth first).

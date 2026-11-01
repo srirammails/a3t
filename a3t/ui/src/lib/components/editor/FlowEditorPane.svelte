@@ -19,7 +19,7 @@
   import AgentTemplateEditor from './AgentTemplateEditor.svelte';
   import { parseWorkflowToGraph, isAgentTemplateYaml } from './workflowParser';
   import { runsApi, type Breakpoint, type DebugCommand } from '$lib/services/api';
-  import { lineOfStep } from '$lib/components/studio/flow';
+  import { lineOfStep, stepLines } from '$lib/components/studio/flow';
   import type { FlowDebug } from '$lib/components/run/debugState.svelte.ts';
 
   let {
@@ -250,16 +250,49 @@
   /// The node the shown run stands at, kept in view.
   const currentNode = $derived(debug?.current ? nodes.find((n) => n.data?.stepKey === debug!.current)?.id ?? null : null);
 
+  // ── The same in the code: step lines, their breakpoints and states ──
+  const lines = $derived(debug ? stepLines(yamlSource, nodes.map((n) => n.data?.stepKey as string).filter(Boolean)) : new Map<string, number>());
+  const keyAtLine = $derived(new Map([...lines].map(([k, l]) => [l, k])));
+  const codeMarks = $derived.by(() => {
+    if (!debug) return null;
+    const bps = debug.breakpoints, marks = debug.marks, current = debug.current;
+    return [...lines].map(([k, line]) => ({
+      line, bp: bps.find((b) => b.step_key === k)?.when ?? (bps.some((b) => b.step_key === k) ? 'before' : undefined),
+      state: marks[k], current: current === k,
+    }));
+  });
+  function onGutter(line: number) {
+    const k = keyAtLine.get(line);
+    if (!k) return;
+    note = '';
+    // A click sets a breakpoint before the step, or clears whichever is set.
+    void debug!.toggle(k, bpOf(k)?.when ?? 'before').then((err) => { if (err) note = err; });
+  }
+  function onCodeContext(e: MouseEvent, line: number): boolean {
+    const k = keyAtLine.get(line);
+    if (!k) return false;
+    openMenu(e, { data: { stepKey: k, label: k.split('/').pop() } }, 'code');
+    return true;
+  }
+  /// A node to bring into view on the graph ("Show on graph" from the code).
+  let graphFocus = $state<{ id: string; n: number } | null>(null);
+  function showOnGraph(key?: string) {
+    leftMode = 'graph';
+    soloMode = 'graph';
+    const id = key ? nodes.find((n) => n.data?.stepKey === key)?.id : null;
+    if (id) graphFocus = { id, n: ++revealN };
+  }
+
   // ── Context menu ──
-  type Menu = { x: number; y: number; key?: string; label?: string };
+  type Menu = { x: number; y: number; key?: string; label?: string; from: 'graph' | 'code' };
   let menu = $state<Menu | null>(null);
   let note = $state('');
   let reveal = $state<{ line: number; n: number } | null>(null);
   let revealN = 0;
 
-  function openMenu(event: MouseEvent, node?: any) {
+  function openMenu(event: MouseEvent, node?: any, from: Menu['from'] = 'graph') {
     event.preventDefault();
-    menu = { x: event.clientX, y: event.clientY, key: node?.data?.stepKey, label: node?.data?.label };
+    menu = { x: event.clientX, y: event.clientY, key: node?.data?.stepKey, label: node?.data?.label, from };
   }
   /// Close the menu and run its action on the step it was opened on (taken
   /// before closing: the menu's own fields go with it); a returned string or a
@@ -330,6 +363,7 @@
       <Controls />
       {#if showMiniMap}<MiniMap />{/if}
       <GraphFollow nodeId={currentNode} />
+      {#if graphFocus}{#key graphFocus.n}<GraphFollow nodeId={graphFocus.id} delay={300} />{/key}{/if}
     </SvelteFlow>
     {#if debug?.runId && Object.keys(debug.marks).length}
       <div class="run-legend" title="The run selected in the Runs panel">
@@ -343,7 +377,8 @@
 {/snippet}
 
 {#snippet codeView()}
-  <YamlEditor value={yamlSource} onchange={onCodeChange} {readOnly} {reveal} />
+  <YamlEditor value={yamlSource} onchange={onCodeChange} {readOnly} {reveal}
+    marks={codeMarks} ongutter={onGutter} oncontext={debug ? onCodeContext : undefined} />
 {/snippet}
 
 {#snippet contextMenu(m: Menu)}
@@ -368,7 +403,11 @@
         {/if}
       {/if}
       <hr />
-      <button role="menuitem" onclick={() => act(gotoCode)}><span class="cm-ic">{'</>'}</span>Go to code</button>
+      {#if m.from === 'code'}
+        <button role="menuitem" onclick={() => act(showOnGraph)}><span class="cm-ic">◇</span>Show on graph</button>
+      {:else}
+        <button role="menuitem" onclick={() => act(gotoCode)}><span class="cm-ic">{'</>'}</span>Go to code</button>
+      {/if}
       <button role="menuitem" onclick={() => act((k) => navigator.clipboard?.writeText(k))}><span class="cm-ic">⧉</span>Copy step key</button>
     {:else}
       {#if onrun}

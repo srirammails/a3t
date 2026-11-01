@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { gutter, GutterMarker, Decoration } from '@codemirror/view';
+  import { StateField, StateEffect, RangeSet, type Range } from '@codemirror/state';
   import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, highlightActiveLine, rectangularSelection } from '@codemirror/view';
   import { EditorState } from '@codemirror/state';
   import { yaml as yamlLang } from '@codemirror/lang-yaml';
@@ -8,9 +10,72 @@
   import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
   import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 
+  /// A step's line, as the host marks it: its breakpoint (`before` | `after` |
+  /// `on_error`), its state in the shown run, whether the run stands there.
+  type LineMark = { line: number; bp?: string; state?: string; current?: boolean };
+
   /// `reveal`: a line to select and scroll to; `n` makes a repeat request a change.
-  let { value = '', onchange, readOnly = false, reveal = null }:
-    { value: string; onchange?: (val: string) => void; readOnly?: boolean; reveal?: { line: number; n: number } | null } = $props();
+  /// `marks`: step lines — with them comes a breakpoint gutter (`ongutter` on a
+  /// click), line tints, and the current line kept in view. `oncontext`: a
+  /// right-click on a line; return true to take it over from the browser menu.
+  let { value = '', onchange, readOnly = false, reveal = null, marks = null, ongutter, oncontext }: {
+    value: string; onchange?: (val: string) => void; readOnly?: boolean; reveal?: { line: number; n: number } | null;
+    marks?: LineMark[] | null; ongutter?: (line: number) => void; oncontext?: (e: MouseEvent, line: number) => boolean;
+  } = $props();
+
+  // ── Step marks ──
+  const setMarks = StateEffect.define<LineMark[]>();
+  const marksField = StateField.define<LineMark[]>({
+    create: () => [],
+    update(v, tr) {
+      for (const e of tr.effects) if (e.is(setMarks)) return e.value;
+      return v;
+    },
+  });
+  class BpMarker extends GutterMarker {
+    kind: string;
+    constructor(kind: string) { super(); this.kind = kind; }
+    eq(o: BpMarker) { return o.kind === this.kind; }
+    toDOM() {
+      const el = document.createElement('span');
+      el.className = `cm-bp cm-bp-${this.kind}`;
+      el.title = this.kind === 'step' ? 'Add a breakpoint' : 'Breakpoint — click to remove';
+      return el;
+    }
+  }
+  const lineOf = (state: EditorState, n: number) => state.doc.line(Math.max(1, Math.min(n, state.doc.lines)));
+  const sorted = (ms: LineMark[]) => [...ms].filter((m) => m.line >= 1).sort((a, b) => a.line - b.line).filter((m, i, a) => i === 0 || a[i - 1].line !== m.line);
+  const stepGutter = gutter({
+    class: 'cm-bp-gutter',
+    markers: (v) => RangeSet.of(sorted(v.state.field(marksField)).filter((m) => m.line <= v.state.doc.lines)
+      .map((m) => new BpMarker(m.bp ?? 'step').range(lineOf(v.state, m.line).from))),
+    initialSpacer: () => new BpMarker('spacer'),
+    domEventHandlers: {
+      mousedown(view, block) {
+        const n = view.state.doc.lineAt(block.from).number;
+        if (!view.state.field(marksField).some((m) => m.line === n)) return false;
+        ongutter?.(n);
+        return true;
+      },
+    },
+  });
+  const stepLines = EditorView.decorations.compute([marksField], (state) => {
+    const out: Range<Decoration>[] = [];
+    for (const m of sorted(state.field(marksField))) {
+      if (m.line > state.doc.lines || !(m.state || m.current)) continue;
+      out.push(Decoration.line({ class: `cm-st cm-st-${m.state ?? 'none'}${m.current ? ' cm-here' : ''}` }).range(lineOf(state, m.line).from));
+    }
+    return Decoration.set(out);
+  });
+  const contextMenu = EditorView.domEventHandlers({
+    contextmenu(e, view) {
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      if (pos === null || !oncontext) return false;
+      if (!oncontext(e, view.state.doc.lineAt(pos).number)) return false;
+      e.preventDefault();
+      return true;
+    },
+  });
 
   let editorContainer: HTMLDivElement;
   let view: EditorView;
@@ -41,8 +106,12 @@
     const state = EditorState.create({
       doc: value,
       extensions: [
+        marksField,
+        stepGutter,
         lineNumbers(),
         highlightActiveLineGutter(),
+        stepLines,
+        contextMenu,
         highlightSpecialChars(),
         history(),
         foldGutter(),
@@ -75,7 +144,22 @@
     });
 
     view = new EditorView({ state, parent: editorContainer });
+    ready = true;
     goto(reveal);
+  });
+
+  let ready = $state(false);
+  // Marks follow the host; the run's current line is kept in view (without
+  // moving the caret).
+  let lastCurrent: number | null = null;
+  $effect(() => {
+    if (!ready) return;
+    const ms = marks ?? [];
+    const cur = ms.find((m) => m.current)?.line ?? null;
+    const effects: StateEffect<unknown>[] = [setMarks.of($state.snapshot(ms) as LineMark[])];
+    if (cur && cur !== lastCurrent && cur <= view.state.doc.lines) effects.push(EditorView.scrollIntoView(lineOf(view.state, cur).from, { y: 'nearest', yMargin: 60 }));
+    lastCurrent = cur;
+    view.dispatch({ effects });
   });
 
   function goto(r: { line: number } | null) {
@@ -136,4 +220,25 @@
      carries no Svelte scope class. */
   .yaml-editor :global(.cm-editor) { height: 100%; max-height: 100%; }
   .yaml-editor :global(.cm-scroller) { overflow: auto; min-height: 0; }
+
+  /* Breakpoint gutter: a hollow dot on hover for any step line, red when set. */
+  .yaml-editor :global(.cm-bp-gutter .cm-gutterElement) { width: 16px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .yaml-editor :global(.cm-bp) { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+  .yaml-editor :global(.cm-bp-step) { border: 1px solid transparent; }
+  .yaml-editor :global(.cm-gutterElement:hover .cm-bp-step) { border-color: var(--err, #d92d20); opacity: 0.6; }
+  .yaml-editor :global(.cm-bp-before) { background: var(--err, #d92d20); }
+  .yaml-editor :global(.cm-bp-after) { border: 1.5px solid var(--err, #d92d20); background: linear-gradient(90deg, transparent 50%, var(--err, #d92d20) 50%); }
+  .yaml-editor :global(.cm-bp-on_error) { background: var(--err, #d92d20); border-radius: 1px; transform: rotate(45deg) scale(0.85); }
+  .yaml-editor :global(.cm-bp-spacer) { visibility: hidden; }
+
+  /* The shown run: each step line's state, and where the run stands. */
+  .yaml-editor :global(.cm-st) { box-shadow: inset 3px 0 0 var(--st, transparent); }
+  .yaml-editor :global(.cm-st-done) { --st: var(--ok, #15803d); }
+  .yaml-editor :global(.cm-st-failed) { --st: var(--err, #d92d20); background: rgba(217, 45, 32, 0.07); }
+  .yaml-editor :global(.cm-st-waiting) { --st: var(--warn, #b45309); }
+  .yaml-editor :global(.cm-st-running) { --st: var(--spec, #5530a8); background: rgba(85, 48, 168, 0.08); }
+  .yaml-editor :global(.cm-st-paused) { --st: var(--warn, #b45309); background: rgba(180, 83, 9, 0.12); }
+  .yaml-editor :global(.cm-here::after) { content: '◀ paused here'; margin-left: 12px; font-size: 10.5px; font-weight: 600; color: var(--warn, #b45309); }
+  .yaml-editor :global(.cm-here.cm-st-running::after) { content: '◀ running'; color: var(--spec, #5530a8); }
+  .yaml-editor :global(.cm-here.cm-st-waiting::after) { content: '◀ waiting'; }
 </style>

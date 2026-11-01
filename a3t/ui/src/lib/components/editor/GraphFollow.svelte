@@ -3,7 +3,8 @@
   /// graph — centring on it whenever it changes to a node off screen.
   import { useSvelteFlow } from '@xyflow/svelte';
 
-  let { nodeId = null }: { nodeId?: string | null } = $props();
+  /// `delay`: time for a freshly shown graph to lay out and fit first.
+  let { nodeId = null, delay = 50 }: { nodeId?: string | null; delay?: number } = $props();
   const flow = useSvelteFlow();
 
   $effect(() => {
@@ -19,7 +20,7 @@
       const sx = x * vp.zoom + vp.x, sy = y * vp.zoom + vp.y, m = 60;
       const inView = el && sx >= m && sy >= m && sx + w * vp.zoom <= el.clientWidth - m && sy + h * vp.zoom <= el.clientHeight - m;
       if (!inView) void flow.setCenter(x + w / 2, y + h / 2, { zoom: vp.zoom, duration: 300 });
-    }, 50);
+    }, delay);
     return () => clearTimeout(t);
   });
 </script>

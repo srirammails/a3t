@@ -60,17 +60,17 @@ export class FlowDebug {
   }
 
   /// Set or clear a breakpoint; a live debug run picks the change up at once.
-  async toggle(key: string, when: Breakpoint['when'] = 'before') {
+  async toggle(key: string, when: Breakpoint['when'] = 'before'): Promise<string | null> {
     const at = this.breakpoints.find((b) => b.step_key === key);
     if (at && at.when === when) this.breakpoints = this.breakpoints.filter((b) => b !== at);
     else if (at) at.when = when;
     else this.breakpoints = [...this.breakpoints, { step_key: key, when }];
-    await this.changed();
+    return this.changed();
   }
 
-  async clear() {
+  async clear(): Promise<string | null> {
     this.breakpoints = [];
-    await this.changed();
+    return this.changed();
   }
 
   async changed(): Promise<string | null> {
