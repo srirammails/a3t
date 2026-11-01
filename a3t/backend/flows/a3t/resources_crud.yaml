@@ -3,6 +3,11 @@ document:
   namespace: a3t
   name: a3t-resources
   version: 1.0.0
+# Request/response for the dash: a run that is interrupted is retried by the
+# caller, so it keeps no step journal (spec §5.15).
+metadata:
+  a3t:
+    durability: ephemeral
 do:
 - route:
     switch:

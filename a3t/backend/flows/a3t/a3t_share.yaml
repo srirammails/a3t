@@ -12,6 +12,11 @@ document:
       stay on the server. A copy of something already there replaces it.
       Input: { kind: flow | resource | trigger, from, name | id, to }.
       Output: { ok, copied, kind }; a refusal fails the run with the reason.
+# Request/response for the dash: a run that is interrupted is retried by the
+# caller, so it keeps no step journal (spec §5.15).
+metadata:
+  a3t:
+    durability: ephemeral
 do:
 # A refusal (no read on the source, no write on the target) fails the run with
 # the reason, which the caller sees.

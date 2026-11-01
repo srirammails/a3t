@@ -6,6 +6,11 @@ document:
 # Key/value platform settings, org-scoped. Each action is a single lancedb
 # step (the runtime replaces context on every `call`, so multi-step upserts
 # lose `.input`). The UI performs an upsert as delete-then-set (two calls).
+# Request/response for the dash: a run that is interrupted is retried by the
+# caller, so it keeps no step journal (spec §5.15).
+metadata:
+  a3t:
+    durability: ephemeral
 do:
 - route:
     switch:

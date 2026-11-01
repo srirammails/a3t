@@ -12,6 +12,11 @@ document:
       (FlowR checks, as the caller).
       Input: { action: versions | activate, namespace, name, version? }.
       Output: { ok, namespace, name, versions?, active }.
+# Request/response for the dash: a run that is interrupted is retried by the
+# caller, so it keeps no step journal (spec §5.15).
+metadata:
+  a3t:
+    durability: ephemeral
 do:
 - route:
     switch:

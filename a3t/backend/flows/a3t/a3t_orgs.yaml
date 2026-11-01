@@ -13,6 +13,11 @@ document:
       isolated org's flows run only on its own runtimes (label a3t.io/org);
       shared ones on the platform's shared runtimes. FlowR enforces it at placement.
       Output: { ok, orgs? , error? }. The caller is $context._principal.
+# Request/response for the dash: a run that is interrupted is retried by the
+# caller, so it keeps no step journal (spec §5.15).
+metadata:
+  a3t:
+    durability: ephemeral
 do:
 - whoami:
     set:

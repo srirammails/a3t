@@ -17,6 +17,11 @@ document:
       Input: { action: list | create | update | delete | move, ... }.
       Output: { ok, projects? , project? , report? , error? }.
       The caller is $context._principal.
+# Request/response for the dash: a run that is interrupted is retried by the
+# caller, so it keeps no step journal (spec §5.15).
+metadata:
+  a3t:
+    durability: ephemeral
 do:
 - whoami:
     set:

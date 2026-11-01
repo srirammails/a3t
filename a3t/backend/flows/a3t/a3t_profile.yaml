@@ -9,6 +9,11 @@ document:
       namespaces (<handle>-<project>). Handles share one space with org handles.
       Input: { action: get } | { action: claim, handle, email, name }.
       Output: { ok, profile? , error? }. The caller is $context._principal.
+# Request/response for the dash: a run that is interrupted is retried by the
+# caller, so it keeps no step journal (spec §5.15).
+metadata:
+  a3t:
+    durability: ephemeral
 do:
 - whoami:
     set:
