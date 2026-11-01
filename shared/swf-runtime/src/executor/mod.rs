@@ -29,6 +29,8 @@ pub struct WorkflowExecutor {
     handlers: HashMap<String, Arc<dyn TaskHandler>>,
     /// Expression evaluator function
     eval_fn: Option<Arc<dyn Fn(&Value, &str, &Value) -> std::result::Result<Value, String> + Send + Sync>>,
+    /// Journal / debugger hook around every task of this executor's run.
+    step_hook: Option<Arc<dyn crate::traits::StepHook>>,
 }
 
 /// Compose a subflow's `a3t` template over the inherited (parent) one,
@@ -68,7 +70,13 @@ impl WorkflowExecutor {
         Self {
             handlers: HashMap::new(),
             eval_fn: None,
+            step_hook: None,
         }
+    }
+
+    /// Call `hook` around every task (the run's journal; the debugger).
+    pub fn set_step_hook(&mut self, hook: Arc<dyn crate::traits::StepHook>) {
+        self.step_hook = Some(hook);
     }
 
     /// Register a task handler
@@ -177,9 +185,22 @@ impl WorkflowExecutor {
             .map(|(i, t)| (t.name.as_str(), i))
             .collect();
 
+        // Visits per task, for tasks revisited through `then:` — each visit is
+        // its own step (`name#2`, `name#3`, …) so its record is its own.
+        let mut visits: HashMap<usize, u32> = HashMap::new();
+
         while task_idx < tasks.len() {
             let named_task = &tasks[task_idx];
-            let task_path = format!("{}/{}", scope_path, named_task.name);
+            let visit = {
+                let v = visits.entry(task_idx).or_insert(0);
+                *v += 1;
+                *v
+            };
+            let task_path = if visit > 1 {
+                format!("{}/{}#{}", scope_path, named_task.name, visit)
+            } else {
+                format!("{}/{}", scope_path, named_task.name)
+            };
 
             debug!(task = %named_task.name, idx = task_idx, "executing task");
 
@@ -219,6 +240,92 @@ impl WorkflowExecutor {
                 }
             }
 
+            // The step: replayed from the journal when it already ran in an
+            // earlier attempt of this run, otherwise executed (and recorded).
+            let replay = match &self.step_hook {
+                Some(h) => h.before_step(&task_path, named_task, &task_input).await?,
+                None => crate::traits::StepReplay::Run,
+            };
+            let (output, directive) = match replay {
+                crate::traits::StepReplay::Completed { output, context, directive } => {
+                    if let Some(mut c) = context {
+                        if let Some(obj) = c.as_object_mut() {
+                            obj.insert(data_flow::PRINCIPAL_KEY.to_string(), data_flow::principal_value(&ctx.principal));
+                        }
+                        ctx.context = c;
+                    }
+                    debug!(task = %named_task.name, "step replayed from the journal");
+                    (output, FlowDirective::from_record(&directive))
+                }
+                crate::traits::StepReplay::Failed { error } => {
+                    return Err(RuntimeError::TaskFailed { task: named_task.name.clone(), message: error });
+                }
+                crate::traits::StepReplay::Run => {
+                    let started = std::time::Instant::now();
+                    let res = self.run_task_body(named_task, task_idx, &current, task_input.clone(), ctx, &task_path).await;
+                    let us = started.elapsed().as_micros() as u64;
+                    if let Some(h) = &self.step_hook {
+                        match &res {
+                            Ok((output, directive)) => {
+                                let d = directive.as_record();
+                                h.after_step(&task_path, named_task, &task_input,
+                                    crate::traits::StepOutcome::Completed { output, context: &ctx.context, directive: &d }, us).await?;
+                            }
+                            Err(e) => {
+                                h.after_step(&task_path, named_task, &task_input, crate::traits::StepOutcome::Failed { error: e }, us).await?;
+                            }
+                        }
+                    }
+                    res?
+                }
+            };
+
+            match directive {
+                FlowDirective::Continue => {
+                    current = output;
+                    task_idx += 1;
+                }
+                FlowDirective::End => {
+                    current = output;
+                    break;
+                }
+                FlowDirective::Exit => {
+                    current = output;
+                    break;
+                }
+                FlowDirective::Goto(ref target) => {
+                    if let Some(&idx) = task_index.get(target.as_str()) {
+                        current = output;
+                        task_idx = idx;
+                    } else {
+                        return Err(RuntimeError::TaskFailed {
+                            task: named_task.name.clone(),
+                            message: format!("goto target '{}' not found", target),
+                        });
+                    }
+                }
+                FlowDirective::Suspend => {
+                    current = output;
+                    break;
+                }
+            }
+        }
+
+        Ok(current)
+    }
+
+    /// One task's body: extensions, the task, `output.as`, `export.as` and its
+    /// flow directive. Returns the output passed on and the directive.
+    #[async_recursion]
+    async fn run_task_body(
+        &self,
+        named_task: &NamedTask,
+        task_idx: usize,
+        current: &Value,
+        task_input: Value,
+        ctx: &mut ExecutionContext,
+        task_path: &str,
+    ) -> Result<(Value, FlowDirective)> {
             // Determine task type for extension matching
             let task_type = extensions::task_type_specific(&named_task.task);
 
@@ -227,12 +334,11 @@ impl WorkflowExecutor {
                 match directive {
                     FlowDirective::Exit => {
                         debug!(task = %named_task.name, "task skipped by before-extension");
-                        task_idx += 1;
-                        continue;
+                        return Ok((current.clone(), FlowDirective::Continue));
                     }
                     FlowDirective::End => {
                         debug!(task = %named_task.name, "workflow ended by before-extension");
-                        break;
+                        return Ok((current.clone(), FlowDirective::End));
                     }
                     _ => {}
                 }
@@ -301,38 +407,7 @@ impl WorkflowExecutor {
                 result.directive
             };
 
-            match directive {
-                FlowDirective::Continue => {
-                    current = output;
-                    task_idx += 1;
-                }
-                FlowDirective::End => {
-                    current = output;
-                    break;
-                }
-                FlowDirective::Exit => {
-                    current = output;
-                    break;
-                }
-                FlowDirective::Goto(ref target) => {
-                    if let Some(&idx) = task_index.get(target.as_str()) {
-                        current = output;
-                        task_idx = idx;
-                    } else {
-                        return Err(RuntimeError::TaskFailed {
-                            task: named_task.name.clone(),
-                            message: format!("goto target '{}' not found", target),
-                        });
-                    }
-                }
-                FlowDirective::Suspend => {
-                    current = output;
-                    break;
-                }
-            }
-        }
-
-        Ok(current)
+        Ok((output, directive))
     }
 
     /// Execute a single task by dispatching to the appropriate handler

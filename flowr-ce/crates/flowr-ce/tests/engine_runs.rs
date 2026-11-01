@@ -1,6 +1,7 @@
 //! Runs through the durable engine store (plan stage 3): the engine worker
 //! claims queued runs, records outcomes, honours cancel requests, keeps queued
-//! runs across a restart and never silently re-runs an interrupted one.
+//! runs across a restart, and resumes a run whose worker died (crash cases in
+//! `engine_resume.rs`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -99,7 +100,7 @@ async fn queued_runs_survive_a_restart() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_interrupted_run_is_faulted_not_rerun() {
+async fn a_run_whose_worker_died_resumes_elsewhere() {
     let dir = tempfile::tempdir().unwrap();
     let s = storage(dir.path()).await;
     let req = ExecutionRequest::new("t", "quick").with_input(json!({ "name": "cy" }));
@@ -112,7 +113,7 @@ async fn an_interrupted_run_is_faulted_not_rerun() {
 
     flowr_ce::spawn_worker(s.clone());
     let st = wait_for(s.as_ref(), id, finished).await;
-    assert_eq!(st.status, ExecutionStatus::Failed);
-    assert!(st.error.as_deref().unwrap_or("").contains("interrupted"), "{:?}", st.error);
-    assert!(st.output.is_none(), "not re-run");
+    assert_eq!(st.status, ExecutionStatus::Completed, "{:?}", st.error);
+    assert_eq!(st.output.unwrap()["hello"], "cy");
+    assert_eq!(engine.get(id).await.unwrap().unwrap().epoch, 2, "taken over by a new owner");
 }

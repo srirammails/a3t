@@ -135,3 +135,57 @@ pub trait TaskHandler: Send + Sync {
         ctx: &mut ExecutionContext,
     ) -> Result<TaskResult, RuntimeError>;
 }
+
+/// What a [`StepHook`] decides before a task runs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StepReplay {
+    /// Execute the task.
+    Run,
+    /// The task already completed in an earlier attempt of this run: use what
+    /// it produced instead of running it again. `context` is the run context
+    /// after the task (without `_principal`), or `None` if it did not change.
+    Completed { output: Value, context: Option<Value>, directive: String },
+    /// The task already failed (or must fail): raise this error.
+    Failed { error: String },
+}
+
+/// How a task ended, for [`StepHook::after_step`].
+pub enum StepOutcome<'a> {
+    /// `output` after `output.as`; `context` after `export.as`.
+    Completed { output: &'a Value, context: &'a Value, directive: &'a str },
+    Failed { error: &'a RuntimeError },
+}
+
+/// Called around every task of a run (`.ai/FLOWR_QUEUE_CHECKPOINT_SPEC.md`
+/// §5.5): the journal records each step and answers replays from it; the
+/// debugger pauses here. `key` is the task's path in the run — stable across
+/// attempts (names, `for[i]`, `fork[i]`, `try`/`catch`, and `#n` for a task
+/// revisited through `then:`).
+#[async_trait]
+pub trait StepHook: Send + Sync {
+    async fn before_step(&self, key: &str, task: &NamedTask, input: &Value) -> crate::error::Result<StepReplay>;
+    async fn after_step(&self, key: &str, task: &NamedTask, input: &Value, outcome: StepOutcome<'_>, duration_us: u64)
+        -> crate::error::Result<()>;
+}
+
+impl FlowDirective {
+    /// The directive as recorded in a journal.
+    pub fn as_record(&self) -> String {
+        match self {
+            Self::Continue => "continue".into(),
+            Self::End => "end".into(),
+            Self::Exit => "exit".into(),
+            Self::Goto(t) => format!("goto:{t}"),
+            Self::Suspend => "suspend".into(),
+        }
+    }
+
+    pub fn from_record(s: &str) -> Self {
+        match s {
+            "end" => Self::End,
+            "exit" => Self::Exit,
+            "suspend" => Self::Suspend,
+            other => other.strip_prefix("goto:").map(|t| Self::Goto(t.to_string())).unwrap_or(Self::Continue),
+        }
+    }
+}

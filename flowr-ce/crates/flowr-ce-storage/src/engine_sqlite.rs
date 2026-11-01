@@ -914,7 +914,7 @@ mod tests {
             let task = NewTask::start(&run);
             s.start(run, task).await.unwrap();
             let (_, _, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, std::time::Duration::from_millis(50)).await.unwrap().remove(0);
-            s.append(run_id, epoch, &[Record::RunStarted { def_hash: "h".into(), trigger: "api".into(), durability: Durability::Durable }])
+            s.append(run_id, epoch, &[Record::RunStarted { def_hash: "h".into(), trigger: "api".into(), durability: Durability::Durable, version: String::new() }])
                 .await
                 .unwrap();
         }
@@ -965,7 +965,7 @@ mod tests {
             let t = std::time::Instant::now();
             s.commit_step(id, epoch, StepCommit {
                 records: vec![Record::StepCompleted { step_key: format!("/do/{i}/s"), attempt: 0, output: serde_json::json!({ "i": i }),
-                    context: serde_json::json!({ "k": "v" }), class: StepClass::Effect, duration_us: 1 }],
+                    context: serde_json::json!({ "k": "v" }), class: StepClass::Effect, duration_us: 1, directive: String::new() }],
                 checkpoint: None, outbox: vec![],
             }).await.unwrap();
             lat.push(t.elapsed());
@@ -988,7 +988,7 @@ mod tests {
                 };
                 for i in 0..200 {
                     s.commit_step(id, epoch, StepCommit { records: vec![Record::StepCompleted { step_key: format!("/do/{i}/s"), attempt: 0,
-                        output: serde_json::json!(i), context: serde_json::json!({}), class: StepClass::Pure, duration_us: 1 }],
+                        output: serde_json::json!(i), context: serde_json::json!({}), class: StepClass::Pure, duration_us: 1, directive: String::new() }],
                         checkpoint: None, outbox: vec![] }).await.unwrap();
                 }
             }));

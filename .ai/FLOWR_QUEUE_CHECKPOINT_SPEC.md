@@ -308,7 +308,7 @@ An ephemeral flow that reaches a `wait` longer than `inline_wait_max`, a `listen
 ### 5.16 Security of stored state (R8)
 
 - `$secrets`, resolved resource credentials and `_principal` are never written to journal, checkpoint or blob.
-- Step inputs and outputs pass the same masking as `masked_config` (secret-typed resource values and key/password/token fields) before they are journaled. The masked form is what the console shows.
+- Journaled values are stored as they are and **masked when read** (the same masking as `masked_config`: secret-typed resource values and key/password/token fields). *(v0.3, from implementation: masking before journaling would break replay whenever a flow keeps a token in its context; today's executions table already stores outputs as they are, so this is no regression. Encryption at rest is open question 8.)*
 - Reading a run's journal, steps or checkpoints requires Read access to the run's namespace and passes the same `can_see_run` rule as `get_execution_status` (platform-flow runs only to their initiator).
 - EE: blobs and journal bodies may be encrypted at rest per namespace (open question 8).
 

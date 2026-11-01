@@ -324,9 +324,27 @@ pub enum StepClass {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Record {
-    RunStarted { def_hash: String, trigger: String, durability: Durability },
+    RunStarted {
+        def_hash: String,
+        trigger: String,
+        durability: Durability,
+        /// The definition version the run is pinned to.
+        #[serde(default)]
+        version: String,
+    },
     StepStarted { step_key: String, attempt: u32, idem_key: String, input_hash: String },
-    StepCompleted { step_key: String, attempt: u32, output: Value, context: Value, class: StepClass, duration_us: u64 },
+    /// `context` is the run context after the step, or null when unchanged
+    /// from the previous step; `directive` is the flow directive it took.
+    StepCompleted {
+        step_key: String,
+        attempt: u32,
+        output: Value,
+        context: Value,
+        class: StepClass,
+        duration_us: u64,
+        #[serde(default)]
+        directive: String,
+    },
     StepFailed { step_key: String, attempt: u32, error: Value, retryable: bool, duration_us: u64 },
     StepScheduled { step_key: String, pool: String },
     TimerSet { wait_id: String, fire_at: DateTime<Utc> },

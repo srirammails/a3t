@@ -12,6 +12,7 @@ pub mod token_stream;
 pub mod canvas;
 pub mod ops;
 mod engine_worker;
+mod journal_hook;
 pub mod integrity;
 pub mod handlers;
 pub mod registry;
@@ -100,9 +101,8 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
     let storage = LanceStorage::new(&db_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    // FLOWR_STORE=sqlite: runs go through the durable engine store
-    // (queue, runs, journal in <data_dir>/flowr.db); otherwise today's
-    // in-memory queue.
+    // Runs go through the durable engine store (queue, runs, journal in
+    // <data_dir>/flowr.db) unless FLOWR_STORE=lance.
     let storage = if engine {
         let path = format!("{}/flowr.db", data_dir);
         let engine = flowr_ce_storage::engine_sqlite::SqliteStore::open(&path).map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -121,9 +121,10 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
     }
 }
 
-/// Whether runs go through the durable engine store (`FLOWR_STORE=sqlite`).
+/// Whether runs go through the durable engine store — the default;
+/// `FLOWR_STORE=lance` keeps the previous in-memory queue.
 pub fn engine_enabled() -> bool {
-    std::env::var("FLOWR_STORE").map(|v| v.eq_ignore_ascii_case("sqlite")).unwrap_or(false)
+    !std::env::var("FLOWR_STORE").map(|v| v.eq_ignore_ascii_case("lance")).unwrap_or(false)
 }
 
 /// The deployment a runtime pod serves (`A3T_CANVAS` = `namespace/name`, set by the
@@ -2349,7 +2350,7 @@ pub async fn execute_workflow(
     _http_client: &reqwest::Client,
     request: flowr_types::ExecutionRequest,
 ) -> anyhow::Result<ExecutionState> {
-    run_request(storage, request, true).await
+    run_request(storage, request, true, None).await
 }
 
 /// Run one request. With `persist`, the execution record is written at start
@@ -2360,6 +2361,7 @@ pub(crate) async fn run_request(
     storage: Arc<dyn StorageBackend>,
     request: flowr_types::ExecutionRequest,
     persist: bool,
+    hook: Option<Arc<dyn swf_runtime::StepHook>>,
 ) -> anyhow::Result<ExecutionState> {
     let start = std::time::Instant::now();
 
@@ -2381,7 +2383,12 @@ pub(crate) async fn run_request(
     let (stop, stop_reason, _run_guard) = ops::register_run(request.instance_id, &flow_ref, agent.as_deref());
 
     // Load WorkflowRecord from storage
-    let record = match storage.workflows().get(&request.namespace, &request.name).await {
+    // A pinned version (a resumed run) loads exactly that definition.
+    let record = match request.version.as_deref() {
+        Some(v) => storage.workflows().get_version(&request.namespace, &request.name, v).await,
+        None => storage.workflows().get(&request.namespace, &request.name).await,
+    };
+    let record = match record {
         Ok(r) => r,
         Err(e) => {
             let error_msg = format!("Failed to load workflow: {}", e);
@@ -2420,6 +2427,9 @@ pub(crate) async fn run_request(
     let mut executor = swf_runtime::WorkflowExecutor::new();
     swf_runtime::handlers::register_builtin_handlers(&mut executor);
     handlers::register_clawdflow_handlers(&mut executor);
+    if let Some(h) = hook {
+        executor.set_step_hook(h);
+    }
 
     // Wire flowr-expr jq engine for runtime expressions
     let expr_engine = flowr_core::ExpressionEngine::new();

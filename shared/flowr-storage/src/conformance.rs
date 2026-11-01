@@ -72,7 +72,7 @@ fn completed(key: &str) -> Record {
         output: json!(1),
         context: json!({}),
         class: StepClass::Pure,
-        duration_us: 1,
+        duration_us: 1, directive: String::new(),
     }
 }
 

@@ -20,7 +20,7 @@ pub mod error;
 pub mod executor;
 pub mod handlers;
 
-pub use traits::{RuntimeProvider, TaskHandler, TaskResult, FlowDirective};
+pub use traits::{RuntimeProvider, TaskHandler, TaskResult, FlowDirective, StepHook, StepOutcome, StepReplay};
 pub use registry::RuntimeRegistry;
 pub use context::{ExecutionContext, TaskContext, RuntimeInfo, default_flow_principal};
 // Re-export so flow-start call sites can name the principal type without taking
