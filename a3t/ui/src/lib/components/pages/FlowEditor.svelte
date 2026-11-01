@@ -53,6 +53,16 @@ steps:
   const inputSchema = $derived(parsed?.input?.schema ?? null);
   function openRun(debug = false) { runDebug = debug; runsOpen = true; runDialog = true; }
 
+  /// One split button: the main part starts the last chosen mode, ▾ picks.
+  let runMode = $state<'run' | 'debug'>((() => { try { return localStorage.getItem('a3t.flow.runMode') === 'debug' ? 'debug' : 'run'; } catch { return 'run'; } })());
+  let runMenu = $state(false);
+  function pickMode(m: 'run' | 'debug') {
+    runMode = m; runMenu = false;
+    try { localStorage.setItem('a3t.flow.runMode', m); } catch { /* private window */ }
+    openRun(m === 'debug');
+  }
+  const runBlocked = $derived(!runTarget ? 'Open a saved flow to run it' : dirty ? 'Deploy your changes first — a run uses the saved flow' : '');
+
   /// The flow's steps as the engine keys them for breakpoints (loop and
   /// branch scopes left out): `/a`, `/loop/send`, `/guard/charge`.
   function stepKeys(tasks: any, prefix = ''): string[] {
@@ -176,16 +186,31 @@ steps:
 
     {#if dirty}<span class="dirty-badge">unsaved</span>{/if}
 
-    <button class="btn ghost sm" disabled={loading} onclick={() => { yamlSource = yamlSource; dirty = false; }}>Reset</button>
+    <div class="split">
+      <button class="btn sm split-main" disabled={!!runBlocked || loading} onclick={() => openRun(runMode === 'debug')}
+        title={runBlocked || (runMode === 'debug' ? 'Debug: breakpoints, stepping, step inputs and outputs' : 'Run with inputs')}>
+        {runMode === 'debug' ? '🐞 Debug' : '▶ Run'}
+      </button>
+      <button class="btn sm split-caret" disabled={!runTarget || loading} onclick={() => (runMenu = !runMenu)} aria-label="Run, debug or show runs" aria-haspopup="menu" aria-expanded={runMenu}>▾</button>
+      {#if runMenu}
+        <div class="split-overlay" role="presentation" onclick={() => (runMenu = false)}></div>
+        <div class="split-menu" role="menu">
+          <button role="menuitem" class:on={runMode === 'run'} disabled={!!runBlocked} onclick={() => pickMode('run')}>
+            <span>▶ Run</span><small>Run with inputs</small>
+          </button>
+          <button role="menuitem" class:on={runMode === 'debug'} disabled={!!runBlocked} onclick={() => pickMode('debug')}>
+            <span>🐞 Debug</span><small>Breakpoints, stepping, step inputs and outputs</small>
+          </button>
+          <div class="split-sep"></div>
+          <button role="menuitem" onclick={() => { runsOpen = !runsOpen; runMenu = false; }}>
+            <span>{runsOpen ? 'Hide runs' : 'Show runs'}</span><small>This flow's runs, newest first</small>
+          </button>
+        </div>
+      {/if}
+    </div>
     <button class="btn spec sm" disabled={loading || !dirty} onclick={deployFlow}>
       {loading ? 'Deploying...' : 'Deploy'}
     </button>
-    <button class="btn ghost sm" disabled={!runTarget} onclick={() => (runsOpen = !runsOpen)}
-      title={runTarget ? 'Show this flow\'s runs' : 'Open a saved flow to see its runs'}>Runs</button>
-    <button class="btn ghost sm" disabled={!runTarget || dirty || loading} onclick={() => openRun(true)}
-      title={!runTarget ? 'Open a saved flow to debug it' : dirty ? 'Deploy your changes first — a run uses the saved flow' : 'Debug: breakpoints, stepping, step inputs and outputs'}>🐞 Debug</button>
-    <button class="btn spec sm" disabled={!runTarget || dirty || loading} onclick={() => openRun(false)}
-      title={!runTarget ? 'Open a saved flow to run it' : dirty ? 'Deploy your changes first — a run uses the saved flow' : 'Run with inputs'}>▶ Run</button>
   </div>
 
   <div class="editor-content">
@@ -220,6 +245,21 @@ steps:
   }
   .file-menu-btn:hover { background: var(--bg-subtle); color: var(--text-1); border-color: var(--border-strong); }
   .file-menu-label { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .split { position: relative; display: inline-flex; }
+  /* Run is the secondary action (outlined); Deploy is the primary (solid). */
+  .split-main, .split-caret { background: var(--bg-surface); color: var(--spec); border: 1px solid var(--spec); }
+  .split-main:hover:not(:disabled), .split-caret:hover:not(:disabled) { background: var(--spec-bg); }
+  .split-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .split-caret { border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 7px; padding-right: 7px; border-left: 0; }
+  .split-sep { height: 1px; background: var(--border); margin: 4px 0; }
+  .split-menu button:disabled { opacity: 0.45; cursor: default; }
+  .split-overlay { position: fixed; inset: 0; z-index: 50; }
+  .split-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 51; min-width: 250px; display: flex; flex-direction: column;
+                background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); padding: 4px; }
+  .split-menu button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 0; background: transparent; padding: 7px 10px; border-radius: var(--r-sm); cursor: pointer; text-align: left; color: var(--text-1); font-size: 13px; }
+  .split-menu button:hover, .split-menu button.on { background: var(--bg-subtle); }
+  .split-menu small { color: var(--text-3); font-size: 11.5px; }
 
   .dirty-badge { font-family: var(--font-mono); font-size: 10px; color: var(--warn); background: var(--warn-bg); padding: 2px 6px; border-radius: 3px; }
 
