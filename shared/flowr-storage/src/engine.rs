@@ -372,6 +372,10 @@ pub enum Record {
         /// are cut down to their size.
         #[serde(default)]
         input: Value,
+        /// When the step ended. Pure steps are written in batches, so the
+        /// journal entry's time is when its batch was written, not this.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<DateTime<Utc>>,
     },
     StepFailed {
         step_key: String,
@@ -381,6 +385,9 @@ pub enum Record {
         duration_us: u64,
         #[serde(default)]
         input: Value,
+        /// When the step ended (see `StepCompleted::at`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<DateTime<Utc>>,
     },
     StepScheduled { step_key: String, pool: String },
     TimerSet { wait_id: String, fire_at: DateTime<Utc> },

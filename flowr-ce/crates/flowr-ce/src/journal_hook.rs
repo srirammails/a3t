@@ -522,7 +522,7 @@ impl StepHook for JournalHook {
                         "in-doubt side effect: step {key} started but did not record a result before the run was interrupted; \
                          it may or may not have taken effect"
                     );
-                    self.commit(vec![Record::StepFailed { step_key: key, attempt, error: Value::String(error.clone()), retryable: false, duration_us: 0, input: shown(input) }])
+                    self.commit(vec![Record::StepFailed { step_key: key, attempt, error: Value::String(error.clone()), retryable: false, duration_us: 0, input: shown(input), at: Some(chrono::Utc::now()) }])
                         .await?;
                     return Ok(StepReplay::Failed { error });
                 }
@@ -553,7 +553,7 @@ impl StepHook for JournalHook {
                 Some(fire_at) if fire_at <= now && limit.is_some() => {
                     let error = format!("timeout: task '{}' took longer than {}s", task.name, d.as_secs());
                     let attempt = *self.attempts.lock().unwrap().get(&key).unwrap_or(&0);
-                    self.commit(vec![Record::StepFailed { step_key: key, attempt, error: Value::String(error.clone()), retryable: false, duration_us: d.as_micros() as u64, input: shown(input) }]).await?;
+                    self.commit(vec![Record::StepFailed { step_key: key, attempt, error: Value::String(error.clone()), retryable: false, duration_us: d.as_micros() as u64, input: shown(input), at: Some(chrono::Utc::now()) }]).await?;
                     return Ok(StepReplay::Failed { error });
                 }
                 Some(fire_at) if fire_at <= now => {
@@ -567,6 +567,7 @@ impl StepHook for JournalHook {
                         duration_us: waited.num_microseconds().unwrap_or(0).max(0) as u64,
                         directive: "continue".into(),
                         input: shown(input),
+                        at: Some(now),
                     };
                     self.commit(vec![rec]).await?;
                     return Ok(StepReplay::Completed { output: input.clone(), context: None, directive: "continue".into() });
@@ -624,10 +625,10 @@ impl StepHook for JournalHook {
                         now
                     }
                 };
-                (Record::StepCompleted { step_key: key.clone(), attempt, output: output.clone(), context, class, duration_us, directive: directive.to_string(), input: shown(input) }, "after")
+                (Record::StepCompleted { step_key: key.clone(), attempt, output: output.clone(), context, class, duration_us, directive: directive.to_string(), input: shown(input), at: Some(chrono::Utc::now()) }, "after")
             }
             StepOutcome::Failed { error } => {
-                (Record::StepFailed { step_key: key.clone(), attempt, error: Value::String(error.to_string()), retryable: false, duration_us, input: shown(input) }, "on_error")
+                (Record::StepFailed { step_key: key.clone(), attempt, error: Value::String(error.to_string()), retryable: false, duration_us, input: shown(input), at: Some(chrono::Utc::now()) }, "on_error")
             }
         };
         let pause = if self.debug && !self.resuming_from(&key, when) { self.breakpoint(&key, when, input) } else { None };

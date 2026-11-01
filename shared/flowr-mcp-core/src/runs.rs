@@ -213,6 +213,14 @@ async fn list_runs(storage: &dyn StorageBackend, principal: &Principal, args: &V
     Ok(CallToolResult::json(json!({ "runs": runs, "next": page.next })))
 }
 
+/// A step's start and end: the end it recorded (older records: the time its
+/// journal entry was written), and the start its duration puts before that.
+fn span(written: chrono::DateTime<chrono::Utc>, at: Option<chrono::DateTime<chrono::Utc>>, duration_us: u64)
+    -> (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>) {
+    let end = at.unwrap_or(written);
+    (end - chrono::Duration::microseconds(duration_us.min(i64::MAX as u64) as i64), end)
+}
+
 /// Steps in the order they first appear in the journal.
 fn steps_of(entries: &[JournalEntry]) -> (Vec<Value>, Option<Value>) {
     let mut order: Vec<String> = Vec::new();
@@ -241,24 +249,26 @@ fn steps_of(entries: &[JournalEntry]) -> (Vec<Value>, Option<Value>) {
                 m.insert("seq".into(), json!(e.seq));
                 steps.insert(step_key.clone(), m);
             }
-            Record::StepCompleted { step_key, class, duration_us, attempt, .. } => {
+            Record::StepCompleted { step_key, class, duration_us, attempt, at, .. } => {
                 let mut m = entry(&mut steps, step_key, &mut order);
+                let (start, end) = span(e.at, *at, *duration_us);
                 m.insert("status".into(), json!("completed"));
                 m.insert("class".into(), json!(class));
                 m.insert("duration_us".into(), json!(duration_us));
                 m.insert("attempts".into(), json!(attempt + 1));
-                m.insert("completed_at".into(), json!(e.at));
-                m.entry("started_at").or_insert(json!(e.at));
+                m.insert("completed_at".into(), json!(end));
+                m.entry("started_at").or_insert(json!(start));
                 m.insert("seq".into(), json!(e.seq));
                 steps.insert(step_key.clone(), m);
             }
-            Record::StepFailed { step_key, error, duration_us, .. } => {
+            Record::StepFailed { step_key, error, duration_us, at, .. } => {
                 let mut m = entry(&mut steps, step_key, &mut order);
+                let (start, end) = span(e.at, *at, *duration_us);
                 m.insert("status".into(), json!("failed"));
                 m.insert("error".into(), error.clone());
                 m.insert("duration_us".into(), json!(duration_us));
-                m.insert("completed_at".into(), json!(e.at));
-                m.entry("started_at").or_insert(json!(e.at));
+                m.insert("completed_at".into(), json!(end));
+                m.entry("started_at").or_insert(json!(start));
                 m.insert("seq".into(), json!(e.seq));
                 steps.insert(step_key.clone(), m);
             }

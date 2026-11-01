@@ -136,19 +136,65 @@
   }
 
   // ── Timeline ──
-  const span = $derived.by(() => {
-    const ts = steps.flatMap((s) => [s.started_at, s.completed_at, s.fire_at]).filter(Boolean).map((t) => Date.parse(t as string));
-    if (!ts.length) return null;
-    const start = Math.min(...ts);
-    const end = Math.max(...ts, live ? Date.now() : 0);
-    return { start, total: Math.max(end - start, 1) };
+  // From the moment the run was queued (`created_at`) to its end (or now):
+  // the wait for a worker, the run's own life — loading, pauses, timers,
+  // each (re)claim by a worker — and every step on the same axis.
+  type Seg = { from: number; to: number; kind: 'queued' | 'requeued' | 'loading' | 'paused' | 'timer'; title: string };
+  const ms = (t?: string | null) => (t ? Date.parse(t) : NaN);
+  /// When a journal record happened: a step's own start (its recorded end less
+  /// its duration — pure steps are written in batches, later), else when written.
+  const happened = (e: Entry) => (e.record?.at ? ms(e.record.at) - (e.record.duration_us ?? 0) / 1000 : ms(e.at));
+  const tl = $derived.by(() => {
+    if (!run) return null;
+    const created = ms(run.created_at);
+    if (isNaN(created)) return null;
+    const started = ms(run.started_at);
+    const lastAt = entries.length ? ms(entries[entries.length - 1].at) : created;
+    const end = !isNaN(ms(run.completed_at)) ? ms(run.completed_at) : live ? Date.now() : Math.max(lastAt, isNaN(started) ? created : started);
+    const queue: Seg[] = [], life: Seg[] = [];
+    const claims: { at: number; epoch: number }[] = [];
+    queue.push({ from: created, to: isNaN(started) ? end : started, kind: 'queued', title: isNaN(started) ? 'Queued — waiting for a worker' : 'Queued until a worker picked it up' });
+    let pausedAt: number | null = null, pausedWhy = '';
+    let resumeAt: number | null = null, resumeEpoch = 0;
+    let epoch = 0;
+    for (const e of entries) {
+      const at = happened(e), r = e.record ?? {};
+      if (e.epoch > epoch) {
+        if (epoch) claims.push({ at, epoch: e.epoch });
+        epoch = e.epoch;
+      }
+      if (resumeAt !== null && e.epoch > resumeEpoch) {
+        queue.push({ from: resumeAt, to: at, kind: 'requeued', title: 'Resumed — waiting for a worker to pick it up again' });
+        resumeAt = null;
+      }
+      if (r.kind === 'run_started' && !isNaN(started) && at > started) life.push({ from: started, to: at, kind: 'loading', title: 'Worker loading the flow' });
+      if (r.kind === 'paused') { pausedAt = at; pausedWhy = r.reason ?? `paused at ${r.step_key}`; }
+      if ((r.kind === 'debug_command' || r.kind === 'resumed') && pausedAt !== null) {
+        life.push({ from: pausedAt, to: at, kind: 'paused', title: pausedWhy });
+        pausedAt = null;
+        resumeAt = at; resumeEpoch = e.epoch;
+      }
+      if (r.kind === 'timer_set' && r.fire_at) life.push({ from: at, to: Math.min(ms(r.fire_at), end), kind: 'timer', title: `Timer ${r.wait_id} until ${new Date(r.fire_at).toLocaleTimeString()}` });
+    }
+    if (pausedAt !== null) life.push({ from: pausedAt, to: end, kind: 'paused', title: pausedWhy });
+    if (resumeAt !== null) queue.push({ from: resumeAt, to: end, kind: 'requeued', title: 'Resumed — waiting for a worker to pick it up again' });
+    const total = Math.max(end - created, 1);
+    const sum = (k: Seg['kind'][], list: Seg[]) => list.filter((x) => k.includes(x.kind)).reduce((n, x) => n + Math.max(x.to - x.from, 0), 0);
+    const queued = sum(['queued', 'requeued'], queue), pausedMs = sum(['paused'], life);
+    return { start: created, end, total, started, queue, life, claims, queued, paused: pausedMs, running: Math.max(total - queued - pausedMs, 0) };
   });
-  function bar(s: Step) {
-    if (!span || !s.started_at) return 'display:none';
-    const a = Date.parse(s.started_at);
-    const b = s.completed_at ? Date.parse(s.completed_at) : s.fire_at ? Date.parse(s.fire_at) : Date.now();
-    return `left:${((a - span.start) / span.total) * 100}%;width:${Math.max(((b - a) / span.total) * 100, 0.6)}%`;
+  function pos(from: number, to: number) {
+    if (!tl) return 'display:none';
+    return `left:${((from - tl.start) / tl.total) * 100}%;width:${Math.max(((to - from) / tl.total) * 100, 0.4)}%`;
   }
+  function bar(s: Step) {
+    if (!tl || !s.started_at) return 'display:none';
+    const a = ms(s.started_at);
+    const b = s.completed_at ? ms(s.completed_at) : s.fire_at ? Math.min(ms(s.fire_at), tl.end) : tl.end;
+    return pos(a, b);
+  }
+  const msDur = (n: number) => dur(Math.round(n * 1000));
+  const ticks = [0, 0.25, 0.5, 0.75, 1];
 
   // ── Formatting ──
   const pretty = (v: any) => (v === undefined || v === null ? '—' : typeof v === 'string' ? v : JSON.stringify(v, null, 2));
@@ -273,13 +319,46 @@
       </div>
     {:else if tab === 'timeline'}
       <div class="rv-timeline">
-        {#each steps as s (s.step_key)}
-          <div class="tl-row">
-            <span class="mono tl-key">{s.step_key}</span>
-            <span class="tl-track"><span class="tl-bar {s.status}" style={bar(s)} title="{dur(s.duration_us)}"></span></span>
+        {#if tl}
+          <div class="tl-sum">
+            <span>Queued <b>{new Date(tl.start).toLocaleTimeString()}</b></span>
+            <span title="Waiting for a worker, including after each resume">waited <b>{msDur(tl.queued)}</b></span>
+            <span>running <b>{msDur(tl.running)}</b></span>
+            {#if tl.paused}<span>paused <b>{msDur(tl.paused)}</b></span>{/if}
+            <span>total <b>{msDur(tl.total)}</b>{live ? ' so far' : ''}</span>
           </div>
-        {/each}
-        {#if !steps.length}<div class="rv-empty">Nothing to show yet.</div>{/if}
+          <div class="tl-row axis">
+            <span></span>
+            <span class="tl-axis">{#each ticks as f}<span style="left:{f * 100}%">{f === 0 ? '0' : `+${msDur(tl.total * f)}`}</span>{/each}</span>
+          </div>
+          <div class="tl-row lane">
+            <span class="tl-key">Queue</span>
+            <span class="tl-track">
+              {#each tl.queue as g}<span class="tl-bar seg-{g.kind}" style={pos(g.from, g.to)} title="{g.title} · {msDur(g.to - g.from)}"></span>{/each}
+            </span>
+          </div>
+          <div class="tl-row lane">
+            <span class="tl-key">Run</span>
+            <span class="tl-track">
+              {#if !isNaN(tl.started)}<span class="tl-bar seg-active" style={pos(tl.started, tl.end)} title="Owned by a worker from {new Date(tl.started).toLocaleTimeString()}"></span>{/if}
+              {#each tl.life as g}<span class="tl-bar seg-{g.kind}" style={pos(g.from, g.to)} title="{g.title} · {msDur(g.to - g.from)}"></span>{/each}
+              {#if !isNaN(tl.started)}<span class="tl-mark" style="left:{((tl.started - tl.start) / tl.total) * 100}%" title="Picked up by a worker at {new Date(tl.started).toLocaleTimeString()}"></span>{/if}
+              {#each tl.claims as c}<span class="tl-mark" style="left:{((c.at - tl.start) / tl.total) * 100}%" title="Claimed again by a worker (epoch {c.epoch}) at {new Date(c.at).toLocaleTimeString()}"></span>{/each}
+            </span>
+          </div>
+          {#each steps as s (s.step_key)}
+            <div class="tl-row">
+              <span class="mono tl-key" title={s.step_key}>{s.step_key}</span>
+              <span class="tl-track"><span class="tl-bar {s.status}" style={bar(s)} title="{s.step_key} · {dur(s.duration_us)}{s.started_at ? ` · started +${msDur(ms(s.started_at) - tl.start)}` : ''}"></span></span>
+            </div>
+          {/each}
+          <div class="tl-legend">
+            <span class="lg seg-queued">queued</span><span class="lg seg-active">running</span><span class="lg seg-loading">loading</span>
+            <span class="lg seg-paused">paused</span><span class="lg seg-timer">timer</span><span class="lg mark">worker claim</span>
+          </div>
+        {:else}
+          <div class="rv-empty">Nothing to show yet.</div>
+        {/if}
       </div>
     {:else if tab === 'journal'}
       <table class="rv-table"><tbody>
@@ -353,6 +432,24 @@
   .rv-table td { padding: 3px 6px; border-bottom: 1px solid var(--border); }
   .rv-timeline { display: flex; flex-direction: column; gap: 3px; }
   .tl-row { display: grid; grid-template-columns: minmax(120px, 30%) 1fr; gap: 8px; align-items: center; }
+  .tl-sum { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11.5px; color: var(--text-3); padding: 2px 0 6px; }
+  .tl-sum b { color: var(--text-1); font-weight: 600; font-family: var(--font-mono); }
+  .tl-row.axis { height: 14px; }
+  .tl-axis { position: relative; height: 14px; font-size: 10px; color: var(--text-4); font-family: var(--font-mono); }
+  .tl-axis span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+  .tl-axis span:first-child { transform: none; } .tl-axis span:last-child { transform: translateX(-100%); }
+  .tl-row.lane .tl-key { font-size: 11px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
+  .tl-row.lane .tl-track { height: 14px; }
+  .tl-bar.seg-queued, .lg.seg-queued::before { background: repeating-linear-gradient(45deg, var(--text-5, #c8c3b6), var(--text-5, #c8c3b6) 3px, transparent 3px, transparent 6px); }
+  .tl-bar.seg-requeued { background: repeating-linear-gradient(45deg, var(--text-4), var(--text-4) 3px, transparent 3px, transparent 6px); }
+  .tl-bar.seg-active, .lg.seg-active::before { background: rgba(85, 48, 168, 0.22); }
+  .tl-bar.seg-loading, .lg.seg-loading::before { background: var(--text-4); }
+  .tl-bar.seg-paused, .lg.seg-paused::before { background: var(--warn, #b45309); }
+  .tl-bar.seg-timer, .lg.seg-timer::before { background: repeating-linear-gradient(45deg, var(--warn, #b45309), var(--warn, #b45309) 3px, transparent 3px, transparent 6px); }
+  .tl-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--spec, #5530a8); }
+  .tl-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; font-size: 10.5px; color: var(--text-4); }
+  .tl-legend .lg::before { content: ''; display: inline-block; width: 14px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .tl-legend .lg.mark::before { width: 2px; background: var(--spec, #5530a8); }
   .tl-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tl-track { position: relative; height: 12px; background: var(--bg-subtle); border-radius: 3px; }
   .tl-bar { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--ok, #15803d); }

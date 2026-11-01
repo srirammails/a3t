@@ -978,7 +978,7 @@ mod tests {
             let t = std::time::Instant::now();
             s.commit_step(id, epoch, StepCommit {
                 records: vec![Record::StepCompleted { step_key: format!("/do/{i}/s"), attempt: 0, output: serde_json::json!({ "i": i }),
-                    context: serde_json::json!({ "k": "v" }), class: StepClass::Effect, duration_us: 1, directive: String::new(), input: serde_json::Value::Null }],
+                    context: serde_json::json!({ "k": "v" }), class: StepClass::Effect, duration_us: 1, directive: String::new(), input: serde_json::Value::Null, at: None }],
                 checkpoint: None, outbox: vec![],
             }).await.unwrap();
             lat.push(t.elapsed());
@@ -1001,7 +1001,7 @@ mod tests {
                 };
                 for i in 0..200 {
                     s.commit_step(id, epoch, StepCommit { records: vec![Record::StepCompleted { step_key: format!("/do/{i}/s"), attempt: 0,
-                        output: serde_json::json!(i), context: serde_json::json!({}), class: StepClass::Pure, duration_us: 1, directive: String::new(), input: serde_json::Value::Null }],
+                        output: serde_json::json!(i), context: serde_json::json!({}), class: StepClass::Pure, duration_us: 1, directive: String::new(), input: serde_json::Value::Null, at: None }],
                         checkpoint: None, outbox: vec![] }).await.unwrap();
                 }
             }));
