@@ -9,7 +9,7 @@
   /// (hibernate / pause / resume) is an admin action because a runtime hosts other
   /// teams' work too.
   import { onMount, onDestroy } from 'svelte';
-  import { opsApi, executions, canvasApi } from '$lib/services/api';
+  import { opsApi, executions, canvasApi, mcpCall } from '$lib/services/api';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { hasRole } from '$lib/stores/auth';
   import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
@@ -145,7 +145,12 @@
     inFlight: allRows.reduce((n, d) => n + d.stats.inFlight, 0),
   });
 
+  /// Work pools: which have a worker claiming runs (through the engine
+  /// gateway, or this console's own) and how much is queued on each.
+  let pools = $state<{ pool: string; live: boolean; served_here: boolean; queued: number }[]>([]);
+
   async function load() {
+    void mcpCall('list_pools', {}).then((r) => { pools = r.ok && Array.isArray(r.data?.pools) ? r.data.pools : []; });
     const res = await opsApi.overview();
     loading = false;
     if (!res.ok) { error = res.error || 'Could not load runtimes'; return; }
@@ -307,6 +312,21 @@
       accent="runtime"
     />
     {#if host}{@render hostCard(host)}{/if}
+    {#if pools.length}
+      <h3 class="sec">Work pools</h3>
+      <table class="pools">
+        <thead><tr><th>Pool</th><th>Worker</th><th>Queued</th></tr></thead>
+        <tbody>
+          {#each pools as p (p.pool)}
+            <tr>
+              <td class="mono">{p.pool}</td>
+              <td>{#if p.live}<span class="ok">● claiming{p.served_here ? ' (this console)' : ''}</span>{:else}<span class="dim">○ none</span>{/if}</td>
+              <td>{p.queued}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
     <h3 class="sec">Runtimes on this host</h3>
     {#if runtimes.length === 0}
       <div class="empty"><p>No runtimes are registered yet.</p>
@@ -774,4 +794,10 @@
   .plan tr.isolated td { background: var(--warn-bg, #fff8e6); }
   .modal-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   .owner-tag { font-family: var(--font-mono); font-size: 10.5px; padding: 2px 8px; border-radius: 10px; background: var(--bg-subtle); color: var(--text-3); border: 1px solid var(--border); }
+  .pools { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-bottom: 14px; }
+  .pools th { text-align: left; font-weight: 500; color: var(--text-3); padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  .pools td { padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  .pools .mono { font-family: var(--font-mono); }
+  .pools .ok { color: var(--ok, #15803d); }
+  .pools .dim { color: var(--text-4); }
 </style>

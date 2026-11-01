@@ -1649,6 +1649,35 @@ pub(crate) async fn handle_agent_tool_call(
             let runtimes = crate::access::filter_runtimes(principal, crate::canvas::collect_runtimes(storage.as_ref()).await).await;
             return Some(CallToolResult::json(json!({ "count": runtimes.len(), "runtimes": runtimes })));
         }
+        "list_pools" => {
+            // Which pools have a worker claiming (via the engine gateway, or
+            // this process's own) and how much work is queued on each.
+            let Some(engine) = storage.engine() else {
+                return Some(CallToolResult::error("this server runs without the run store".to_string()));
+            };
+            let mut names: Vec<String> = crate::access::filter_runtimes(principal, crate::canvas::collect_runtimes(storage.as_ref()).await)
+                .await
+                .iter()
+                .map(|r| r.name.clone())
+                .collect();
+            names.push(flowr_storage::engine::DEFAULT_POOL.to_string());
+            names.extend(engine_remote::live_pools());
+            names.extend(engine_worker::worker_pools());
+            names.sort();
+            names.dedup();
+            let own = engine_worker::worker_pools();
+            let mut pools = Vec::new();
+            for p in names {
+                let queued = engine.pending(&p).await.unwrap_or(0);
+                pools.push(json!({
+                    "pool": p,
+                    "live": engine_remote::pool_is_live(&p) || own.contains(&p),
+                    "served_here": own.contains(&p),
+                    "queued": queued,
+                }));
+            }
+            return Some(CallToolResult::json(json!({ "pools": pools, "gateway": std::env::var("FLOWR_ENGINE_TOKEN").map(|t| !t.is_empty()).unwrap_or(false) })));
+        }
         "get_canvas" => {
             let Some(n) = args.get("name").and_then(|v| v.as_str()) else {
                 return Some(CallToolResult::error("name is required".to_string()));
