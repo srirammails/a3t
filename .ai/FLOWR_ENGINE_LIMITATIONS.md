@@ -13,7 +13,7 @@ Status values: `open` · `in progress` · `fixed (<commit>, <date>)` · `won't f
 
 | ID | Limitation | Impact today | Workaround | Planned fix | Status |
 |---|---|---|---|---|---|
-| L1 | `listen` and human approvals (`InputManager`, `authz` approvals) are held in memory. | A restart while a run waits for an event or an approval loses the wait; the run is faulted or stays stuck. | Avoid restarting the console while approvals are pending. | Move waits onto the `waits` table with `RunRequest` wake-ups (spec §5.9). Plan stage 5 remainder. | open |
+| L1 | `listen` and human approvals (`InputManager`, `authz` approvals) are held in memory. | A restart while a run waits for an event or an approval loses the wait; the run is faulted or stays stuck. | Avoid restarting the console while approvals are pending. | Approvals are raised inside the agent loop, mid-turn (`approval.rs`, 5-minute wait in the chat). Making them durable needs the agent's fine mode (spec §5.12: each model and tool call journaled) so a turn can resume without repeating calls; then the wait moves onto `waits` with a `RunRequest` wake-up. Do together with L2. | open — needs agent fine mode |
 | L2 | A subflow (`run: workflow`, agent tool flows) is one effect step in its parent's journal; it has no journal of its own. | A crash inside a subflow leaves the parent step in doubt: the parent faults (or retries if idempotent) instead of the child resuming. | Mark subflow steps `idempotent` + `inDoubt: retry` where re-running the child is safe. | Child runs with their own `run_id` and journal scope (spec §5.11). | open |
 | L3 | Cron triggers still fire from the per-minute loop in `TriggerManager`; there is no `schedules` table. | No misfire policy; a restart near a tick can skip it or, rarely, fire it twice. Each tick does enqueue a durable run. | — | Done: each tick names its minute; a flow target gets one run per tick (`cron:<trigger>:<flow>:<minute>` dedupe), so a repeat delivery is dropped. Remaining: agent targets; a misfire policy for ticks missed while down (they are skipped); a `schedules` table if cron moves out of the trigger manager (spec §5.10). | in progress (dedupe fixed, 1 Nov 2026) |
 | L4 | Run and task timeouts (`timeout` in the document or on a task) are not enforced. | A hung step holds its run until someone cancels it. | — | Task `timeout.after` (inline and on durable waits; a catchable timeout) and the document `timeout` (counted from the first start, waits included; a parked run wakes at its deadline; debug runs exempt). | fixed (see git log, 1 Nov 2026) |
@@ -56,3 +56,10 @@ Status values: `open` · `in progress` · `fixed (<commit>, <date>)` · `won't f
 | L26 | Breakpoints are kept per flow in the browser's local storage. | They don't follow you to another browser or device. | — | Store per user on the server (console spec open question 1). | open |
 | L27 | No Logs or Policy tab in the step inspector; no dead-letter view; no run presets shared in the project. | Logs and policy decisions are only in the pod logs and audit log. | Audit log page; pod logs. | Console spec §6 (Logs, Policy), §9 (dead-letter), §4 (presets). | open |
 | L28 | "Run to" lists only the flow's top-level and nested step names, not individual loop iterations. | Cannot run to iteration n of a loop. | Breakpoint with a `condition` on the step input. | Iteration picker. | open |
+
+## Found later
+
+| ID | Limitation | Impact today | Workaround | Planned fix | Status |
+|---|---|---|---|---|---|
+| L29 | The `listen` task has no handler in FlowR (the executor dispatches to `listen`, nothing is registered). | A flow with `listen` fails at that step. | Use a trigger (webhook, topic, event) that starts a flow instead of waiting inside one. | Implement `listen` on the `waits` table: journal `WaitForEvents`, release the run, wake it on a matching event (spec §5.9). | open |
+
