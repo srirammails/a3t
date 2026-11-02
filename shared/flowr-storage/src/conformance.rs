@@ -43,6 +43,7 @@ where
     event_waits_wake_matching_runs_once(&make().await).await;
     repeated_event_ids_are_dropped(&make().await).await;
     approvals_are_answered_once(&make().await).await;
+    pools_that_claim_are_live(&make().await).await;
 }
 
 fn new_run(ns: &str, flow: &str) -> NewRun {
@@ -492,4 +493,13 @@ async fn repeated_event_ids_are_dropped<S: EngineStore>(s: &S) {
     assert!(s.deliver_event("p", json!({ "id": "e1", "type": "t" })).await.unwrap().is_empty(), "a repeat wakes nothing");
     assert_eq!(s.deliver_event("p", json!({ "id": "e2", "type": "t" })).await.unwrap(), vec![b]);
     // Events without an id are never deduplicated (nothing to compare).
+}
+
+async fn pools_that_claim_are_live<S: EngineStore>(s: &S) {
+    assert!(s.live_pools(LEASE).await.unwrap().is_empty());
+    s.claim_runs("gpu", "w", 1, LEASE).await.unwrap();
+    s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap();
+    assert_eq!(s.live_pools(LEASE).await.unwrap(), vec![DEFAULT_POOL.to_string(), "gpu".to_string()], "sorted");
+    tokio::time::sleep(SHORT).await;
+    assert!(s.live_pools(Duration::from_millis(10)).await.unwrap().is_empty(), "not within the window");
 }

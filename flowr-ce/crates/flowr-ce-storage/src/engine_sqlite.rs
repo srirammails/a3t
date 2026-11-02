@@ -130,6 +130,8 @@ CREATE TABLE IF NOT EXISTS outbox (
 pub struct SqliteStore {
     conn: Arc<Mutex<Connection>>,
     subscribers: Mutex<HashMap<String, Vec<UnboundedSender<Value>>>>,
+    /// Last claim per pool (live pools; not stored).
+    live: Mutex<HashMap<String, DateTime<Utc>>>,
 }
 
 fn be<E: std::fmt::Display>(e: E) -> StoreError {
@@ -329,7 +331,7 @@ impl SqliteStore {
             conn.execute_batch("DROP TABLE waits").map_err(be)?;
         }
         conn.execute_batch(SCHEMA).map_err(be)?;
-        Ok(Self { conn: Arc::new(Mutex::new(conn)), subscribers: Mutex::new(HashMap::new()) })
+        Ok(Self { conn: Arc::new(Mutex::new(conn)), subscribers: Mutex::new(HashMap::new()), live: Mutex::new(HashMap::new()) })
     }
 
     /// Run `f` on the connection on a blocking thread.
@@ -436,6 +438,13 @@ impl TaskQueue for SqliteStore {
         })
         .await
     }
+
+    async fn live_pools(&self, within: Duration) -> StoreResult<Vec<String>> {
+        let since = Utc::now() - chrono::Duration::from_std(within).unwrap_or(chrono::Duration::MAX);
+        let mut v: Vec<String> = self.live.lock().unwrap().iter().filter(|(_, t)| **t >= since).map(|(p, _)| p.clone()).collect();
+        v.sort();
+        Ok(v)
+    }
 }
 
 #[async_trait]
@@ -497,6 +506,7 @@ impl RunStore for SqliteStore {
 
     async fn claim_runs(&self, pool: &str, worker: &str, n: usize, lease: Duration)
         -> StoreResult<Vec<(Lease, Task, Epoch)>> {
+        self.live.lock().unwrap().insert(pool.to_string(), Utc::now());
         let (pool, worker) = (pool.to_string(), worker.to_string());
         self.write(move |tx| {
             let now = nanos(Utc::now());

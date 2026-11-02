@@ -173,6 +173,11 @@ pub trait TaskQueue: Send + Sync {
     async fn nack(&self, lease: &Lease, retry_at: Option<DateTime<Utc>>) -> StoreResult<()>;
     /// Tasks not yet acked, for operators and tests.
     async fn pending(&self, pool: &str) -> StoreResult<usize>;
+    /// Pools with a worker that claimed within `within` (the router sends runs
+    /// only to live pools). Stores that don't track it answer none.
+    async fn live_pools(&self, _within: Duration) -> StoreResult<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 
 // ── Runs ──

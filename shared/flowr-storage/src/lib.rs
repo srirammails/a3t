@@ -16,6 +16,7 @@
 //! - [`TriggerStore`] - Trigger CRUD (Value-based, backend-agnostic)
 
 pub mod engine;
+pub mod engine_core;
 pub mod engine_memory;
 pub mod filter;
 #[cfg(any(test, feature = "conformance"))]

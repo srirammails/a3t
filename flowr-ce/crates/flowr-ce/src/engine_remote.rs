@@ -102,6 +102,7 @@ async fn dispatch(store: &dyn EngineStore, op: &str, a: &Value) -> StoreResult<V
         "ack" => out(store.ack(&arg(a, "lease")?).await),
         "nack" => out(store.nack(&arg(a, "lease")?, arg(a, "retry_at")?).await),
         "pending" => out(store.pending(&arg::<String>(a, "pool")?).await),
+        "live_pools" => out(store.live_pools(ms(a, "within_ms")?).await),
         "start" => out(store.start(arg(a, "run")?, arg(a, "task")?).await),
         "claim_runs" => {
             let pool: String = arg(a, "pool")?;
@@ -305,6 +306,9 @@ impl TaskQueue for RemoteEngineStore {
     }
     async fn pending(&self, pool: &str) -> StoreResult<usize> {
         self.op("pending", json!({ "pool": pool })).await
+    }
+    async fn live_pools(&self, within: Duration) -> StoreResult<Vec<String>> {
+        self.op("live_pools", json!({ "within_ms": within.as_millis() as u64 })).await
     }
 }
 
