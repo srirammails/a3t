@@ -46,13 +46,13 @@ export const templateKind: ItemKind = {
     doc.data.agents = a.ok ? a.data.filter((x: any) => x.template_id === r.data.id) : [];
   },
   /// Saving changes what every agent built from it runs.
-  async beforeSave(doc) {
+  async beforePush(doc) {
     const used = (doc.data?.agents ?? []) as any[];
     if (!used.length) return null;
     const names = used.map((a) => a.name ?? a.id).slice(0, 10).join(', ');
     return `This template is used by ${used.length} agent(s): ${names}${used.length > 10 ? '…' : ''}.\n\nSaving changes what those agents run. Continue?`;
   },
-  async save(doc) {
+  async push(doc) {
     const r = await agents.updateTemplate(doc.data.template, doc.text ?? '');
     if (!r.ok) return r;
     doc.saved = doc.text;
@@ -114,7 +114,7 @@ export const agentKind: ItemKind = {
     doc.saved = doc.text;
     doc.data = { agent, template };
   },
-  async save(doc) {
+  async push(doc) {
     const { value, error } = fromText(doc.text);
     if (error) return fail(`Not valid JSON: ${error}`);
     const spec = doc.data?.template?.spec_yaml ?? '';

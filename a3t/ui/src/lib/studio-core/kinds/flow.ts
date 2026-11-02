@@ -31,7 +31,7 @@ export const flowKind: ItemKind = {
     return { ref: { project, kind: 'flow', name: n > 1 ? `new-flow-${n}` : 'new-flow' }, text: newFlowYaml(project, n) };
   },
 
-  async save(doc) {
+  async push(doc) {
     const text = doc.text ?? '';
     const { doc: parsed, error } = parse(text);
     if (error || !parsed) return fail(`Not valid YAML: ${error}`);

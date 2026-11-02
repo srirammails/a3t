@@ -44,6 +44,13 @@ export type RuntimeAction = 'hibernate' | 'pause' | 'resume';
 export const runtime = (name: string, action: RuntimeAction): Promise<Result<unknown>> =>
   safely(action, async () => result(await opsApi.runtime(name, action), `${action} runtime`));
 
+/// Terminate a runtime: its runs are cancelled, it is removed, and what was
+/// deployed on it is rescheduled. `plan` says what that would do, changing nothing.
+export const terminatePlan = (name: string): Promise<Result<any>> =>
+  safely('terminate plan', async () => result(await opsApi.terminatePlan(name), 'Terminate plan'));
+export const terminate = (name: string): Promise<Result<any>> =>
+  safely('terminate', async () => result(await opsApi.terminate(name), 'Terminate runtime'));
+
 /// Where a flow would be placed, and why (changes nothing).
 export const placement = (ns: string, name: string): Promise<Result<any>> =>
   safely('placement', async () => result(await canvasApi.placement(ns, name), 'Placement'));

@@ -2,7 +2,7 @@
   /// A canvas: the flow it deploys (pick one, or drop a flow from the Explorer),
   /// where that flow would be placed, its live deployment, and Deploy / Pause /
   /// Resume / Restart / Undeploy. Placement, lifecycle and health are in the Form
-  /// panel. Deploy uses the canvas as saved.
+  /// panel. Deploy uses the canvas as pushed.
   import EditButton from '../parts/EditButton.svelte';
   import SaveBar from '../parts/SaveBar.svelte';
   import KeyValues from '../parts/KeyValues.svelte';
@@ -15,7 +15,7 @@
   const spec = $derived((parsed.value ?? {}) as any);
   const flowRef = $derived(String(spec.flowRef ?? ''));
   const [flowNs, flowName] = $derived(flowRef.includes('/') ? [flowRef.split('/')[0], flowRef.split('/').slice(1).join('/')] : ['', '']);
-  const dirty = $derived(workspace.isDirty(doc));
+  const dirty = $derived(workspace.isUnpushed(doc));
   const nameProblem = $derived(doc.isNew ? kind.checkName?.(doc.ref.name) ?? '' : '');
 
   let projectFlows = $state<string[]>([]);
@@ -107,7 +107,7 @@
       <button class="btn ghost sm" disabled={!!busy} onclick={() => act('undeploy')}>Undeploy</button>
     {/if}
     <button class="btn spec sm" disabled={!!busy || !flowNs || dirty || !!doc.isNew}
-      title={doc.isNew || dirty ? 'Save the canvas first — Deploy uses it as saved' : !flowNs ? 'Attach a flow first' : 'Deploy the flow with this canvas'}
+      title={doc.isNew || dirty ? 'Push the canvas first — Deploy uses the registry’s copy' : !flowNs ? 'Attach a flow first' : 'Deploy the flow with this canvas'}
       onclick={deploy}>{busy === 'deploy' ? 'Deploying…' : live ? 'Redeploy' : 'Deploy'}</button>
     <SaveBar {doc} {workspace} valid={!parsed.error && !nameProblem} />
   </div>

@@ -157,7 +157,7 @@
     busy = true;
     const r = await runsApi.cancel(runId, 'cancelled from the console');
     busy = false;
-    if (!r.ok) message = r.error ?? 'Cancel failed';
+    if (!r.ok) message = r.error ?? 'Stop failed';
     await load();
   }
   async function rerun(debug: boolean, fromSeq?: number) {
@@ -268,7 +268,7 @@
       {#if run.resume_count > 0}<span class="dim" title="Resumed after an interruption, a timer or a pause">resumed {run.resume_count}×</span>{/if}
       {#if run.current_step}<span class="dim">at <span class="mono">{run.current_step}</span></span>{/if}
       <span class="grow"></span>
-      {#if live && run.can_steer}<button class="lnk" disabled={busy} onclick={cancel}>Cancel</button>{/if}
+      {#if live && run.can_steer}<button class="lnk" disabled={busy} onclick={cancel} title="Stop this run">■ Stop</button>{/if}
       {#if !live && run.can_steer}
         <span class="tip-wrap">
           <button class="ib" disabled={busy} onclick={() => rerun(false)} aria-label="Re-run">

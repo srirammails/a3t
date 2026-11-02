@@ -57,7 +57,7 @@
     <div class="err">Could not load {doc.ref.name}: {doc.error}</div>
   {:else}
     {#if parsed.error}<div class="err">Not valid JSON: {parsed.error}</div>{/if}
-    <div class="code"><YamlEditor value={doc.text ?? ''} readOnly={!kind.save} onchange={(v: string) => (doc.text = v)} /></div>
+    <div class="code"><YamlEditor value={doc.text ?? ''} readOnly={!kind.push} onchange={(v: string) => (doc.text = v)} /></div>
   {/if}
 </div>
 

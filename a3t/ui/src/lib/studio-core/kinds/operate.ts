@@ -25,8 +25,8 @@ export const canvasKind: ItemKind = {
     return { ref: { project, kind: 'canvas', name: n > 1 ? `new-canvas-${n}` : 'new-canvas' }, text: toText(NEW_CANVAS) };
   },
   /// A new canvas is created under the name chosen in its view; an existing one is updated.
-  async save(doc) {
-    if (!doc.isNew) return resourceConfig.save!(doc);
+  async push(doc) {
+    if (!doc.isNew) return resourceConfig.push!(doc);
     const { value, error } = fromText(doc.text);
     if (error) return fail(`Not valid JSON: ${error}`);
     if (!FLOW_NAME.test(doc.ref.name)) return fail('Name the canvas: lowercase letters, digits and dashes');

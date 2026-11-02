@@ -1,11 +1,13 @@
 <script lang="ts">
-  /// A flow's center view: the graph / code editor, with the flow's name, its
-  /// Run/Debug split button and Deploy on the editor's own Graph | Code bar.
+  /// A flow's center view: the graph / code editor, with the flow's name and its
+  /// life on the editor's own Graph | Code bar — Save (a draft here), Push (to the
+  /// registry), Deploy (onto a runtime) and the Run/Debug split button.
   /// Form and AI are right-region panels on the same document; the text lives
   /// on the document, so switching tabs never loses an edit.
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
   import { flowDebug } from '$lib/components/run/debugState.svelte.ts';
-  import { addTask, getTrigger, ITEM_MIME, paletteStep, putTrigger, STEP_MIME, taskForItem, type Doc, type Item, type Workspace } from '$lib/studio-core';
+  import SaveBar from '../parts/SaveBar.svelte';
+  import { addTask, getTrigger, ITEM_MIME, ops, paletteStep, putTrigger, STEP_MIME, taskForItem, type Doc, type Item, type Workspace } from '$lib/studio-core';
   import type { Studio } from '../layout.svelte.ts';
 
   let { doc, workspace, studio }: { doc: Doc; workspace: Workspace; studio: Studio } = $props();
@@ -15,7 +17,8 @@
 
   let busy = $state(false);
   let message = $state('');
-  const dirty = $derived((doc.text ?? '') !== (doc.saved ?? ''));
+  /// Not yet in the registry as edited: runs and deploys use the registry's copy.
+  const unpushed = $derived(workspace.isUnpushed(doc));
 
   $effect(() => {
     if (doc.loaded || doc.isNew) return;
@@ -33,7 +36,7 @@
   // ── Run / Debug split button ──
   let runMode = $state<'run' | 'debug'>((() => { try { return localStorage.getItem('a3t.flow.runMode') === 'debug' ? 'debug' : 'run'; } catch { return 'run'; } })());
   let runMenu = $state(false);
-  const blocked = $derived(doc.isNew ? 'Deploy the flow first — a run uses the saved flow' : dirty ? 'Deploy your changes first — a run uses the saved flow' : '');
+  const blocked = $derived(doc.isNew ? 'Push the flow first — a run uses the registry’s copy' : unpushed ? 'Push your changes first — a run uses the registry’s copy' : '');
   function pick(m: 'run' | 'debug') {
     runMode = m; runMenu = false;
     try { localStorage.setItem('a3t.flow.runMode', m); } catch { /* private window */ }
@@ -74,7 +77,7 @@
   }
   /// A trigger is not a step: it starts flows. Dropping one adds this flow to its targets.
   async function wire(it: Item) {
-    if (doc.isNew) { message = 'Deploy the flow first — a trigger starts the saved flow.'; return; }
+    if (doc.isNew) { message = 'Push the flow first — a trigger starts the registry’s copy.'; return; }
     if (!it.id) return;
     if (!(await workspace.host.confirm(`Start ${doc.ref.project}/${doc.ref.name} from trigger ${it.name} too?`))) return;
     const t = await getTrigger(it.id);
@@ -93,11 +96,16 @@
     if (s) addStep(s.base, s.task());
   });
 
+  /// Deploy: the pushed flow onto a runtime, where its canvas places it.
+  let deployNote = $state('');
   async function deploy() {
-    busy = true; message = '';
-    const r = await workspace.save(doc);
+    busy = true; message = ''; deployNote = '';
+    const r = await ops.deploy(doc.ref.project, doc.ref.name);
     busy = false;
-    if (!r.ok) message = r.error;
+    if (!r.ok) { message = r.error; return; }
+    const d: any = r.data ?? {};
+    if (d.deployed === false) message = d.error ?? 'Not deployed.';
+    else deployNote = `Deployed on ${d.placedRuntime ?? d.placement?.runtime ?? 'its runtime'}.`;
   }
 </script>
 
@@ -113,10 +121,10 @@
                one bar for the document instead of two. -->
           <div class="fd-title">
             <span class="fd-name mono" title={`${doc.ref.project}/${doc.ref.name}`}>{doc.ref.project}/{doc.ref.name}</span>
-            {#if dirty}<span class="dirty">unsaved</span>{/if}
           </div>
-          <span class="grow"></span>
-          {#if message}<span class="msg" title={message}>{message}</span>{/if}
+          {#if message}<span class="msg" title={message}>{message}</span>{:else if deployNote}<span class="msg ok" title={deployNote}>{deployNote}</span>{/if}
+          <SaveBar {doc} {workspace} quiet />
+          <button class="btn sm deploy" disabled={busy || !!blocked} onclick={deploy} title={blocked ? blocked.replace('a run uses', 'a deploy uses') : 'Deploy the flow onto a runtime (where its canvas places it)'}>{busy ? 'Deploying…' : 'Deploy'}</button>
           <div class="split">
             <button class="btn sm split-main" disabled={!!blocked || busy} onclick={() => onrun(runMode === 'debug')} title={blocked || (runMode === 'debug' ? 'Debug: breakpoints, stepping, step inputs and outputs' : 'Run with inputs')}>
               {runMode === 'debug' ? '🐞 Debug' : '▶ Run'}
@@ -130,7 +138,6 @@
               </div>
             {/if}
           </div>
-          <button class="btn spec sm" disabled={busy || (!dirty && !doc.isNew)} onclick={deploy}>{busy ? 'Deploying…' : 'Deploy'}</button>
         {/snippet}
       </FlowEditorPane>
     {:else}
@@ -144,13 +151,13 @@
   .fd.dropping { outline: 2px dashed var(--spec); outline-offset: -4px; }
   .drop-hint { position: absolute; left: 50%; top: 56px; transform: translateX(-50%); z-index: 30; pointer-events: none;
                padding: 4px 12px; border-radius: 12px; background: var(--spec); color: white; font-size: 12px; }
-  /* Centred on the whole bar, not the gap between tabs and buttons; kept narrow
-     enough to clear both, and ellipsised past that. */
-  .fd-title { position: absolute; left: 50%; transform: translateX(-50%); max-width: 36%;
-              display: flex; align-items: center; gap: 6px; }
+  /* The name takes the room between the tabs and the actions, ellipsised. */
+  .fd-title { flex: 1 1 auto; min-width: 60px; display: flex; align-items: center; justify-content: center; gap: 6px; overflow: hidden; }
   .fd-name { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mono { font-family: var(--font-mono); }
-  .dirty { font-family: var(--font-mono); font-size: 10px; color: var(--warn); background: var(--warn-bg); padding: 2px 6px; border-radius: 3px; }
+  .msg.ok { color: var(--ok, #15803d); }
+  .deploy { background: var(--bg-surface); color: var(--runtime, #1a7158); border: 1px solid var(--runtime, #1a7158); }
+  .deploy:hover:not(:disabled) { background: var(--runtime-bg, #e3f4ef); }
   .msg { font-size: 11.5px; color: var(--err, #b42318); max-width: 24%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .grow { flex: 1; }
   .fd-body { flex: 1; min-height: 0; position: relative; overflow: hidden; }

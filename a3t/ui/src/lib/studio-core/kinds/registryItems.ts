@@ -30,7 +30,7 @@ function loaded(doc: Doc, text: string, data: any) {
 
 /// A resource: its `config`, saved through the registry. New ones start from
 /// their type's usual config and are created under the name given in the view.
-export const resourceConfig: Pick<ItemKind, 'load' | 'save' | 'dirty' | 'masked' | 'create' | 'checkName'> = {
+export const resourceConfig: Pick<ItemKind, 'load' | 'push' | 'dirty' | 'masked' | 'create' | 'checkName'> = {
   create(project, n, type = 'secret') {
     const base = categoryOf(type) === 'credentials' ? 'secret' : type;
     return { ref: { project, kind: 'resource', name: n > 1 ? `new-${base}-${n}` : `new-${base}` }, text: toText(startingConfig(type)), type };
@@ -42,7 +42,7 @@ export const resourceConfig: Pick<ItemKind, 'load' | 'save' | 'dirty' | 'masked'
     doc.type = r.data.type;
     loaded(doc, toText(r.data.config), r.data);
   },
-  async save(doc) {
+  async push(doc) {
     const { value, error } = fromText(doc.text);
     if (error) return fail(`Not valid JSON: ${error}`);
     if (doc.isNew) {
@@ -94,7 +94,7 @@ export const triggerKind: ItemKind = {
     const { name, enabled, description, config: c, targets } = r.data;
     loaded(doc, toText({ name, enabled, description: description ?? '', config: c, targets }), r.data);
   },
-  async save(doc) {
+  async push(doc) {
     const { value, error } = fromText(doc.text);
     if (error) return fail(`Not valid JSON: ${error}`);
     if (doc.isNew) {

@@ -17,7 +17,7 @@
   <div class="note">Loading…</div>
 {:else}
   {#key doc.address}
-    <DesignerChat kind={AI_KIND[kind.id] ?? 'resource'} name={`${doc.ref.project}/${doc.ref.name}`} readonly={!kind.save}
+    <DesignerChat kind={AI_KIND[kind.id] ?? 'resource'} name={`${doc.ref.project}/${doc.ref.name}`} readonly={!kind.push}
       gettext={() => doc.text ?? ''} onapply={(t: string) => (doc.text = t)} />
   {/key}
 {/if}

@@ -39,11 +39,13 @@ export interface ItemKind {
   /// A new, unsaved item in `project` (the n-th this session); `type` picks the
   /// resource type for kinds that cover several.
   create?(project: string, n: number, type?: string): { ref: ItemRef; text: string; type?: string };
-  /// Asked before saving: a question to confirm with the user (e.g. "this
-  /// template is used by 3 agents"), or null to save without asking.
-  beforeSave?(doc: Doc): Promise<string | null>;
-  /// Persist the document; answers where it now lives.
-  save?(doc: Doc): Promise<Result<ItemRef>>;
+  /// Asked before pushing: a question to confirm with the user (e.g. "this
+  /// template is used by 3 agents"), or null to push without asking.
+  beforePush?(doc: Doc): Promise<string | null>;
+  /// Push the document to the registry; answers where it now lives. (Saving
+  /// is the Workspace's: a local draft. Deploying to a runtime is the view's.)
+  push?(doc: Doc): Promise<Result<ItemRef>>;
+  /// It differs from what the registry has (not pushed).
   dirty?(doc: Doc): boolean;
   /// Paths (`pathKey`) of values the platform showed masked in the loaded document.
   masked?(doc: Doc): Set<string>;

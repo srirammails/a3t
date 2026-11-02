@@ -568,6 +568,23 @@ token and makes every backend call (webviews never hold credentials). Saving an
 
 ---
 
+
+### Lifecycle terms (decided 2 Nov 2026)
+
+One vocabulary everywhere in the Studio (buttons, menus, messages):
+
+| Term | Meaning | Backend |
+|---|---|---|
+| **Save** (Ctrl/⌘+S) | keep the edits as a draft, locally (the host's storage); survives a reload, nobody else sees it; a new item comes back still new | none — `Workspace.saveDraft` / `discardDraft` |
+| **Push** | send the item to the registry; the draft is done with | `create_flow`, template / agent / resource / trigger updates — `ItemKind.push` |
+| **Deploy** | put a pushed flow on a runtime, where its canvas places it | `POST /canvas/flows/<ns>/<name>/deploy` |
+| **Run / Debug** | execute the pushed flow | runs API |
+| **Stop** | stop a run | `cancel_run` (and the debugger's stop) |
+| **Terminate** | kill a runtime: its runs stop, it is removed, what was deployed there is rescheduled | `POST /ops/runtimes/<n>/terminate` |
+| **Hibernate** | snapshot a runtime (gVisor checkpoint) and stop it; Resume restores it | `POST /ops/runtimes/<n>` hibernate |
+
+Run, Debug and Deploy use the registry's copy, so they wait for a Push. A draft whose registry copy changed since it was made says so ("registry changed"); pushing replaces the registry copy. Drafts are per browser until the backend has a draft store (gap: server-side drafts, shared with the team).
+
 ## 15. Plan
 
 Each step ships on dash.dev and is checked there before the next.

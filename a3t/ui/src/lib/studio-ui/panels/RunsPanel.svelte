@@ -15,7 +15,7 @@
   <FlowRunPanel ns={flow.ref.project} name={flow.ref.name} schema={parsed?.input?.schema ?? null} steps={stepKeys(parsed?.do)}
     bind:dialogOpen={flow.ui.runDialog} bind:debugMode={flow.ui.runDebug} />
 {:else}
-  <div class="note">{flow ? 'Deploy this flow to run it.' : 'Open a flow to see its runs.'}</div>
+  <div class="note">{flow ? 'Push this flow to run it — a run uses the registry’s copy.' : 'Open a flow to see its runs.'}</div>
 {/if}
 
 <style>

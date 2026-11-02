@@ -106,7 +106,9 @@
       ...(kind.views.code && kind.views.code !== kind.views.center
         ? [code ? { label: 'Back to its view', icon: '←', run: () => workspace.view(d, 'action') } : { label: 'Edit as code', icon: '</>', run: () => workspace.view(d, 'code') }]
         : []),
-      { label: 'Save', icon: '⤓', kbd: 'Ctrl+S', disabled: !kind.save || !workspace.isDirty(d), run: () => void workspace.save(d) },
+      { label: 'Save draft', icon: '⤓', kbd: 'Ctrl+S', disabled: typeof d.text !== 'string' || !workspace.isDirty(d), run: () => void workspace.saveDraft(d) },
+      { label: 'Push to registry', icon: '⇡', disabled: !kind.push || !workspace.isUnpushed(d), run: () => void workspace.push(d).then((r) => { d.ui.saved = r.ok ? { ok: true, text: 'Pushed to the registry.' } : { ok: false, text: r.error }; }) },
+      ...(d.draft ? [{ label: 'Discard draft', icon: '↺', run: () => void workspace.discardDraft(d) }] : []),
       'sep',
       { label: 'Copy name', icon: '⎘', run: () => void workspace.host.clipboard(d.ref.name) },
       { label: 'Close', icon: '×', run: () => void workspace.close(d.address) },
@@ -122,7 +124,8 @@
     return [
       { label: 'Open', icon: '▸', run: () => { studio.state.centerPanel = null; workspace.open({ ...d.ref, type: d.type }, { view: 'action' }); } },
       ...(k.views.code ? [{ label: 'Edit as code', icon: '</>', run: () => { studio.state.centerPanel = null; workspace.open({ ...d.ref, type: d.type }, { view: 'code' }); } }] : []),
-      { label: 'Save', icon: '⤓', disabled: !k.save || !workspace.isDirty(d), run: () => void workspace.save(d) },
+      { label: 'Save draft', icon: '⤓', disabled: typeof d.text !== 'string' || !workspace.isDirty(d), run: () => void workspace.saveDraft(d) },
+      { label: 'Push to registry', icon: '⇡', disabled: !k.push || !workspace.isUnpushed(d), run: () => void workspace.push(d).then((r) => { d.ui.saved = r.ok ? { ok: true, text: 'Pushed to the registry.' } : { ok: false, text: r.error }; }) },
       'sep',
       { label: 'Copy name', icon: '⎘', run: () => void workspace.host.clipboard(d.ref.name) },
       'sep',

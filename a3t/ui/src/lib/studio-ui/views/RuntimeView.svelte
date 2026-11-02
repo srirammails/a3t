@@ -38,6 +38,17 @@
     message = r.ok ? { ok: true, text: `Runtime: ${action} done.` } : { ok: false, text: r.error };
     await refresh();
   }
+  /// Terminate: kill the runtime (its runs stop; what was deployed there is rescheduled).
+  async function terminate() {
+    const plan = await ops.terminatePlan(doc.ref.name);
+    const what = plan.ok ? JSON.stringify(plan.data?.summary ?? plan.data ?? {}).slice(0, 300) : '';
+    if (!(await workspace.host.confirm(`Terminate runtime ${doc.ref.name}? Its runs are stopped, it is removed, and what is deployed on it is rescheduled.${what ? `\n\n${what}` : ''}`))) return;
+    busy = 'terminate'; message = null;
+    const r = await ops.terminate(doc.ref.name);
+    busy = '';
+    message = r.ok ? { ok: true, text: `Runtime ${doc.ref.name} terminated.` } : { ok: false, text: r.error };
+    await refresh();
+  }
   async function deploymentAct(row: DeploymentRow, action: DeploymentAction) {
     if (action === 'undeploy' && !(await workspace.host.confirm(`Undeploy ${row.deployment.target}?`))) return;
     busy = `${row.deployment.id}:${action}`; message = null;
@@ -67,10 +78,11 @@
     {#if entry?.canControl}
       {#if entry.state === 'active'}
         <button class="btn ghost sm" disabled={!!busy} onclick={() => runtimeAct('pause')}>Pause runtime</button>
-        <button class="btn ghost sm" disabled={!!busy} onclick={() => runtimeAct('hibernate')}>Hibernate</button>
+        <button class="btn ghost sm" disabled={!!busy} onclick={() => runtimeAct('hibernate')} title="Snapshot the runtime (gVisor checkpoint) and stop it; Resume restores it">Hibernate</button>
       {:else}
         <button class="btn ghost sm" disabled={!!busy} onclick={() => runtimeAct('resume')}>Resume runtime</button>
       {/if}
+      <button class="btn ghost sm danger" disabled={!!busy} onclick={terminate} title="Kill the runtime: stop its runs, remove it, reschedule what was deployed on it">Terminate</button>
     {/if}
     <button class="btn ghost sm" onclick={refresh}>↻</button>
   </div>
@@ -148,6 +160,7 @@
   .acts { white-space: nowrap; }
   .lnk { border: 0; background: transparent; color: var(--spec); cursor: pointer; font-size: 12px; padding: 0 6px 0 0; }
   .lnk.danger { color: var(--err, #b42318); }
+  .btn.danger { color: var(--err, #b42318); }
   .lnk:disabled { opacity: 0.5; cursor: default; }
   .stats :global(dl) { font-size: 11px; }
   .dim { margin: 0; color: var(--text-4); font-size: 12.5px; }
