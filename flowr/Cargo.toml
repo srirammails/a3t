@@ -24,6 +24,9 @@ authors = ["FlowR Contributors"]
 license = "Apache-2.0"
 
 [workspace.dependencies]
+# ADB's engine, embedded (stage H: FlowR's engine store is ADB; CE runs it
+# in-process). The sibling ADB checkout, like AQL.
+adb-executor = { path = "../../ADB/crates/adb-executor" }
 # Shared crates
 flowr-expr = { path = "../shared/flowr-expr" }
 flowr-types = { path = "../shared/flowr-types" }
@@ -92,3 +95,8 @@ clap = { version = "4.5", features = ["derive", "env"] }
 
 # ADB (Agent Database) - ClawDB/LanceDB storage
 flowr-ce-storage = { path = "../flowr-ce/crates/flowr-ce-storage" }
+
+# ADB takes the AQL parser from git; FlowR builds against the sibling AQL
+# checkout. One parser for both (stage H).
+[patch."https://github.com/srirammails/AQL.git"]
+aql-parser = { path = "../../AQL/crates/aql-parser" }

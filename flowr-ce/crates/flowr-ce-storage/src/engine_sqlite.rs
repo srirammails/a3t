@@ -601,11 +601,39 @@ impl RunStore for SqliteStore {
     async fn release(&self, run: RunId, epoch: Epoch, phase: RunPhase, outcome: RunOutcome, lease: &Lease)
         -> StoreResult<()> {
         let lease = lease.clone();
-        self.write(move |tx| {
+        let phase = self.write(move |tx| {
             check_epoch(tx, run, epoch)?;
             check_lease(tx, &lease)?;
             let now = nanos(Utc::now());
             tx.execute("DELETE FROM tasks WHERE task_id = ?1", [lease.task_id.to_string()]).map_err(be)?;
+            // A cancel asked for while owned ends the run when its owner lets go
+            // to wait, not when the wait would have woken it.
+            let cancelled: bool = tx
+                .query_row("SELECT cancel_requested FROM runs WHERE run_id = ?1", [run.to_string()], |r| r.get::<_, i64>(0))
+                .map_err(be)?
+                != 0;
+            if cancelled && !phase.is_terminal() {
+                let rid = run.to_string();
+                let reason: String = tx
+                    .query_row(
+                        "SELECT json_extract(body, '$.reason') FROM journal WHERE run_id = ?1 AND kind = 'cancel_requested' ORDER BY seq DESC LIMIT 1",
+                        [&rid],
+                        |r| r.get::<_, Option<String>>(0),
+                    )
+                    .optional()
+                    .map_err(be)?
+                    .flatten()
+                    .unwrap_or_else(|| "cancelled".into());
+                push(tx, run, epoch, &[Record::RunCancelled { reason: reason.clone() }], now)?;
+                tx.execute(
+                    "UPDATE runs SET owner = NULL, owner_lease_until = NULL, phase = ?2, error = ?3, completed_at = ?4, updated_at = ?4 WHERE run_id = ?1",
+                    params![rid, tag(&RunPhase::Cancelled), reason, now],
+                )
+                .map_err(be)?;
+                tx.execute("DELETE FROM tasks WHERE run_id = ?1 AND lease_owner IS NULL", [&rid]).map_err(be)?;
+                tx.execute("DELETE FROM waits WHERE run_id = ?1", [&rid]).map_err(be)?;
+                return Ok(RunPhase::Cancelled);
+            }
             tx.execute(
                 "UPDATE runs SET owner = NULL, owner_lease_until = NULL, phase = ?2, \
                  output = COALESCE(?3, output), error = COALESCE(?4, error), \
@@ -614,7 +642,7 @@ impl RunStore for SqliteStore {
                 params![run.to_string(), tag(&phase), outcome.output.as_ref().map(js), outcome.error, phase.is_terminal(), now],
             )
             .map_err(be)?;
-            Ok(())
+            Ok(phase)
         })
         .await?;
         self.notify(&run_topic(run), json!({ "phase": phase }));

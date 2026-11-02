@@ -12,6 +12,7 @@ pub mod token_stream;
 pub mod canvas;
 pub mod ops;
 mod engine_worker;
+pub mod engine_adb;
 pub mod events;
 pub mod engine_remote;
 mod journal_hook;
@@ -103,18 +104,29 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
     let storage = LanceStorage::new(&db_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    // Runs go through the durable engine store (queue, runs, journal in
-    // <data_dir>/flowr.db) unless FLOWR_STORE=lance.
-    let storage = if let Some(remote) = engine_remote::remote_from_env().filter(|_| engine) {
+    // Runs go through the durable engine store — ADB (stage H): an ADB server
+    // when FLOWR_ENGINE_ADB_URL is set, else ADB embedded in <data_dir>/adb —
+    // unless FLOWR_STORE=lance. A runtime pod without an ADB URL reaches the
+    // console's store through its gateway (FLOWR_ENGINE_URL), which also
+    // carries its chat and agent streams to the console either way.
+    let gateway = engine_remote::remote_from_env().filter(|_| engine);
+    if let Some(g) = &gateway {
+        g.transport().forward_streams();
+    }
+    let storage = if let Some(adb) = engine_adb::remote_from_env(data_dir).filter(|_| engine) {
+        info!(url = %std::env::var("FLOWR_ENGINE_ADB_URL").unwrap_or_default(), space = %engine_adb::space(data_dir), "engine store: ADB (remote)");
+        storage.with_engine(Arc::new(adb))
+    } else if let Some(remote) = gateway {
         // A runtime: the console holds the queue, runs and journals.
         info!(url = %std::env::var("FLOWR_ENGINE_URL").unwrap_or_default(), "engine store: remote (console gateway)");
-        remote.transport().forward_streams();
         storage.with_engine(Arc::new(remote))
-    } else if engine {
+    } else if engine && std::env::var("FLOWR_STORE").is_ok_and(|v| v.eq_ignore_ascii_case("sqlite")) {
         let path = format!("{}/flowr.db", data_dir);
         let engine = flowr_ce_storage::engine_sqlite::SqliteStore::open(&path).map_err(|e| anyhow::anyhow!("{}", e))?;
         info!(path = %path, "engine store: SQLite");
         storage.with_engine(Arc::new(engine))
+    } else if engine {
+        storage.with_engine(engine_adb::embedded(data_dir).await?)
     } else {
         storage
     };
@@ -351,6 +363,9 @@ pub fn build_ce_router(storage: Arc<dyn StorageBackend>) -> Router {
 
 /// Spawn the background execution worker
 pub fn spawn_worker(storage: Arc<dyn StorageBackend>) {
+    if let Some(engine) = storage.engine() {
+        engine_adb::spawn_live_pools(engine);
+    }
     tokio::spawn(async move {
         run_worker(storage).await;
     });

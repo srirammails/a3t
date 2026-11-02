@@ -44,6 +44,7 @@ where
     repeated_event_ids_are_dropped(&make().await).await;
     approvals_are_answered_once(&make().await).await;
     pools_that_claim_are_live(&make().await).await;
+    a_cancel_while_owned_ends_the_run_when_it_lets_go(&make().await).await;
 }
 
 fn new_run(ns: &str, flow: &str) -> NewRun {
@@ -502,4 +503,24 @@ async fn pools_that_claim_are_live<S: EngineStore>(s: &S) {
     assert_eq!(s.live_pools(LEASE).await.unwrap(), vec![DEFAULT_POOL.to_string(), "gpu".to_string()], "sorted");
     tokio::time::sleep(SHORT).await;
     assert!(s.live_pools(Duration::from_millis(10)).await.unwrap().is_empty(), "not within the window");
+}
+
+async fn a_cancel_while_owned_ends_the_run_when_it_lets_go<S: EngineStore>(s: &S) {
+    let id = start(s, new_run("p", "f")).await;
+    let (lease, _, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    s.open_wait(id, epoch, "/w", json!({ "mode": "any", "filters": [{ "type": "x" }] })).await.unwrap();
+    // Owned: the request only marks it.
+    s.request(id, RunRequest::Cancel { by: "u1".into(), reason: "stop now".into() }).await.unwrap();
+    assert_eq!(s.get(id).await.unwrap().unwrap().phase, RunPhase::Running);
+    // The owner lets go to wait (its timer wake-up already queued): cancelled at once.
+    s.enqueue(NewTask::resume(id, "p", Some(format!("{id}:timer")), Utc::now() + chrono::Duration::seconds(30))).await.unwrap();
+    s.release(id, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
+    let row = s.get(id).await.unwrap().unwrap();
+    assert_eq!(row.phase, RunPhase::Cancelled);
+    assert_eq!(row.error.as_deref(), Some("stop now"));
+    assert!(row.completed_at.is_some());
+    assert_eq!(s.pending(DEFAULT_POOL).await.unwrap(), 0, "its wake-up is gone");
+    assert!(s.deliver_event("p", json!({ "type": "x" })).await.unwrap().is_empty(), "and its wait");
+    let j = s.read_from(id, 0).await.unwrap();
+    assert!(matches!(&j.last().unwrap().record, Record::RunCancelled { reason } if reason == "stop now"));
 }

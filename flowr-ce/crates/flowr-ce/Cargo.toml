@@ -27,6 +27,7 @@ flowr-types.workspace = true
 flowr-storage.workspace = true
 flowr-mcp-core.workspace = true
 flowr-policy.workspace = true
+adb-executor.workspace = true
 
 # ClawdFlow crates
 flowr-ce-storage.workspace = true

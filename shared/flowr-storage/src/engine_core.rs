@@ -591,6 +591,25 @@ impl EngineCore {
         self.check_epoch(run, epoch)?;
         self.check_lease(lease)?;
         self.del_task(lease.task_id);
+        // A cancel asked for while the run was still owned, and the owner lets go
+        // to wait (a timer, an event, an answer, a pause): it ends here, not when
+        // the wait would have woken it.
+        if self.runs[&run].row.cancel_requested && !phase.is_terminal() {
+            let reason = self.cancel_reason(run);
+            self.push(run, epoch, &[Record::RunCancelled { reason: reason.clone() }], now);
+            let mut s = self.runs[&run].clone();
+            s.owner_until = None;
+            s.row.owner = None;
+            s.row.phase = RunPhase::Cancelled;
+            s.row.error = Some(reason);
+            s.row.completed_at = Some(now);
+            s.row.updated_at = now;
+            self.put_run(s);
+            self.drop_unleased_tasks(run);
+            self.drop_waits(run);
+            self.notice(run_topic(run), json!({ "phase": RunPhase::Cancelled }));
+            return Ok(());
+        }
         let mut s = self.runs[&run].clone();
         s.owner_until = None;
         s.row.owner = None;
@@ -611,6 +630,19 @@ impl EngineCore {
         self.put_run(s);
         self.notice(run_topic(run), json!({ "phase": phase }));
         Ok(())
+    }
+
+    /// Why a cancel was asked for (its journal record), for the run's error.
+    fn cancel_reason(&self, run: RunId) -> String {
+        self.journal
+            .get(&run)
+            .and_then(|j| {
+                j.iter().rev().find_map(|e| match &e.record {
+                    Record::CancelRequested { reason, .. } => Some(reason.clone()),
+                    _ => None,
+                })
+            })
+            .unwrap_or_else(|| "cancelled".into())
     }
 
     pub fn request(&mut self, now: DateTime<Utc>, run: RunId, req: RunRequest) -> StoreResult<()> {
