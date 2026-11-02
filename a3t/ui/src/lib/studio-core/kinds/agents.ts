@@ -9,6 +9,7 @@ import { getTemplate } from '../adapters/config';
 import { fail, ok } from '../items';
 import { fromText, toText } from '../config';
 import { agentValues, missing, toRecord } from '../agent/model';
+import { problems } from '../flow/model';
 import type { Doc } from '../workspace';
 import type { ItemKind } from './types';
 
@@ -25,6 +26,13 @@ export const templateKind: ItemKind = {
   views: {
     center: 'template',
     right: [{ id: 'form', title: 'Form', component: 'flow-form' }, { id: 'fields', title: 'Agent fields', component: 'template-fields' }, AI],
+    /// The agents built from it; Problems only when its YAML has some.
+    bottom: [{ id: 'agents', title: 'Agents', component: 'template-agents' }, { id: 'problems', title: 'Problems', onlyWithBadge: true }],
+  },
+  badge(doc, panel) {
+    if (panel === 'agents') return (doc.data?.agents ?? []).length || null;
+    if (panel === 'problems' && doc.loaded) return problems(doc.text).length || null;
+    return null;
   },
   console: { section: 'templates', title: 'Templates' },
   async load(doc) {

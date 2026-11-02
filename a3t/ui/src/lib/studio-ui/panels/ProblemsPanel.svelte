@@ -4,7 +4,8 @@
   import type { Doc } from '$lib/studio-core';
 
   let { doc }: { doc: Doc | null } = $props();
-  const flow = $derived(doc?.kind === 'flow' ? doc : null);
+  /// Any workflow document: a flow, or an agent template.
+  const flow = $derived(doc && typeof doc.text === 'string' ? doc : null);
   const issues = $derived(flow && (flow.loaded || flow.isNew) ? problems(flow.text) : []);
 </script>
 

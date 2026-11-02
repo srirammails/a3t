@@ -8,7 +8,11 @@ export type Capability = 'edit' | 'run' | 'debug' | 'create' | 'delete' | 'renam
 /// A panel a kind shows in a studio region. `id` is the region's tab (kept as
 /// the active tab across kinds, e.g. every kind's "form"); `component` names the
 /// studio-ui panel that renders it (default: `id`).
-export type PanelDef = { id: string; title: string; component?: string };
+export type PanelDef = {
+  id: string; title: string; component?: string;
+  /// Shown only while the kind's `badge` for it is above zero (e.g. Problems).
+  onlyWithBadge?: boolean;
+};
 
 /// Everything the Studio knows about one sort of item. Adding a sort of item
 /// (or a resource type with its own behaviour) means adding a kind; nothing

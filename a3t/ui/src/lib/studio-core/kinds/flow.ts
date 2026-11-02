@@ -13,7 +13,7 @@ export const flowKind: ItemKind = {
   views: {
     center: 'flow',
     right: [{ id: 'form', title: 'Form', component: 'flow-form' }, { id: 'ai', title: 'AI', component: 'ai' }],
-    bottom: [{ id: 'runs', title: 'Runs' }, { id: 'problems', title: 'Problems' }],
+    bottom: [{ id: 'runs', title: 'Runs' }, { id: 'problems', title: 'Problems', onlyWithBadge: true }],
   },
 
   /// The run dialog of the Runs panel, opened by the view's Run / Debug.

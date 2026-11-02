@@ -37,7 +37,7 @@
     // An open item's own panels; the home kind's only while nothing is open.
     ...((kind ? kind.views.right : fallback.views.right) ?? []).map((p) => ({ ...p, home: 'right' as const })),
     ...((kind ? kind.views.bottom : fallback.views.bottom) ?? []).map((p) => ({ ...p, home: 'bottom' as const })),
-  ]);
+  ].filter((p) => !p.onlyWithBadge || (active && kind?.badge?.(active, p.id))));
   const where = (p: Placed) => studio.state.placement[p.id] ?? p.home;
   const inRegion = (r: RegionId | 'center') => panels.filter((p) => where(p) === r);
   const left = $derived(inRegion('left'));
