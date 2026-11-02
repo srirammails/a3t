@@ -19,7 +19,7 @@
   import AgentTemplateEditor from './AgentTemplateEditor.svelte';
   import { parseWorkflowToGraph, isAgentTemplateYaml } from './workflowParser';
   import { runsApi, type Breakpoint, type DebugCommand } from '$lib/services/api';
-  import { lineOfStep, stepLines } from '$lib/components/studio/flow';
+  import { lineOfStep, stepLines } from '$lib/studio-core/flow/model';
   import type { FlowDebug } from '$lib/components/run/debugState.svelte.ts';
   import type { Snippet } from 'svelte';
 

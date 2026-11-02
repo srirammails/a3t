@@ -1,0 +1,51 @@
+import * as flows from '../adapters/flows';
+import { fail, ok } from '../items';
+import { FLOW_NAME, newFlowYaml, parse, problems } from '../flow/model';
+import type { ItemKind } from './types';
+
+export const flowKind: ItemKind = {
+  id: 'flow',
+  label: 'Flow',
+  icon: 'ƒ',
+  match: (it) => it.kind === 'flow',
+  capabilities: ['edit', 'run', 'debug', 'create', 'delete', 'rename', 'duplicate'],
+  views: {
+    center: 'flow',
+    right: [{ id: 'form', title: 'Form' }, { id: 'ai', title: 'AI' }],
+    bottom: [{ id: 'runs', title: 'Runs' }, { id: 'problems', title: 'Problems' }],
+  },
+
+  async load(doc) {
+    const r = await flows.getYaml(doc.ref.project, doc.ref.name);
+    doc.text = r.ok ? r.data : '';
+    doc.saved = doc.text;
+    doc.error = r.ok ? undefined : r.error;
+  },
+
+  create(project, n) {
+    return { ref: { project, kind: 'flow', name: n > 1 ? `new-flow-${n}` : 'new-flow' }, text: newFlowYaml(project, n) };
+  },
+
+  async save(doc) {
+    const text = doc.text ?? '';
+    const { doc: parsed, error } = parse(text);
+    if (error || !parsed) return fail(`Not valid YAML: ${error}`);
+    const r = await flows.deploy(text);
+    if (!r.ok) return r;
+    doc.saved = text;
+    return ok({ project: parsed.document?.namespace ?? doc.ref.project, kind: 'flow', name: parsed.document?.name ?? doc.ref.name });
+  },
+
+  dirty: (doc) => !!doc.isNew || (doc.loaded && (doc.text ?? '') !== (doc.saved ?? '')),
+
+  badge(doc, panel) {
+    if (panel !== 'problems' || !(doc.loaded || doc.isNew)) return null;
+    return problems(doc.text).length || null;
+  },
+
+  remove: (it) => flows.remove(it.project, it.name),
+  rename: (it, to) => flows.rename(it.project, it.name, to),
+  duplicate: (it, to) => flows.copy(it.project, it.name, to),
+  checkName: (n) => (FLOW_NAME.test(n) ? '' : 'Lowercase letters, digits and dashes (not at either end).'),
+  renameNote: 'Saves the flow under the new name, then removes the old one. Past runs stay under the old name; triggers and canvases that name it need rewiring. A deployed flow cannot be renamed.',
+};

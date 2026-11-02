@@ -188,6 +188,9 @@ The open documents and layout of one Studio:
   run dialog of a flow);
 - `open(ref)`, `close`, `rename`, `remove`, `newDoc(kind, project)`;
 - persisted through `host.storage` (web: `localStorage`; VS Code: workspace state);
+- it mutates a state object it is given: the web passes a Svelte `$state` object
+  (`studio-ui/workspace.svelte.ts`), so views follow it; the VS Code extension
+  passes a plain object and calls `subscribe`;
 - the layout model (regions, sizes, minimized, maximized) — today's
   `layout.svelte.ts`, moved behind the same store interface.
 
@@ -377,23 +380,28 @@ a3t/vscode/        the extension (later): host/vscode.ts, tree views, file syste
 ```
 
 Later: an npm workspace with `packages/a3t-client`, `packages/studio-core`,
-`packages/studio-ui`; `a3t/ui` and `a3t/vscode` depend on them. An ESLint
-`no-restricted-imports` rule keeps the layer rules of §4 from day one.
+`packages/studio-ui`; `a3t/ui` and `a3t/vscode` depend on them. The layer
+rules of §4 are checked by `a3t/ui/scripts/check-layers.mjs`, which the Vite build
+runs first (a violation fails the build; also `npm run check:layers`).
 
 ### 12.1 StudioHost
 
 ```ts
 interface StudioHost {
   storage: { get(key: string): unknown; set(key: string, v: unknown): void };
+  confirm(msg: string): Promise<boolean>;
+  clipboard(text: string): Promise<void>;
+  openConsole(section: string, title: string): void;     // a Console section page
+  // added with the steps that need them:
   token(): Promise<string | null>;              // web: session; VS Code: SecretStorage
   open(ref: ItemRef, opts?: { side?: boolean }): void;   // web: route; VS Code: editor tab
   openExternal(url: string): void;
   notify(msg: string, level: 'info' | 'warn' | 'error'): void;
-  confirm(msg: string): Promise<boolean>;
-  clipboard(text: string): Promise<void>;
   theme(): 'light' | 'dark';
 }
 ```
+
+Today: `studio-core/host.ts` has the first four; the web host is `host/web.ts`.
 
 ---
 
@@ -438,7 +446,7 @@ Each step ships on dash.dev and is checked there before the next.
 
 | # | Step | Result |
 |---|---|---|
-| 1 | `studio-core` seams in-tree: items, kinds, workspace, inventory; `Workbench`; Flow Editor moved onto it | no visible change; lint rules on |
+| 1 | `studio-core` seams in-tree: items, kinds, workspace, inventory; `Workbench`; Flow Editor moved onto it | no visible change; lint rules on — **done 2 Nov 2026** (branch `a3t-studio`) |
 | 2 | `config` adapter + ConfigForm; every non-flow item opens as a config form | JSON previews gone |
 | 3 | `query` adapter + `database` kind; DB Console = Workbench pinned to Databases (history, saved queries kept) | DB Console in the Studio |
 | 4 | `chat`, `mcp`, `trigger` kinds | act on every resource |

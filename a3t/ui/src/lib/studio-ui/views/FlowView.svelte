@@ -1,38 +1,34 @@
 <script lang="ts">
-  /// One flow tab: the graph / code editor, with the flow's name and its Run/Debug
-  /// split button and Deploy on the editor's own Graph | Code bar (the studio shows its Form and AI in the right panels). The text lives in the studio's document, so switching
-  /// tabs never loses an edit.
-  import { mcpCall } from '$lib/services/api';
+  /// A flow's center view: the graph / code editor, with the flow's name, its
+  /// Run/Debug split button and Deploy on the editor's own Graph | Code bar.
+  /// Form and AI are right-region panels on the same document; the text lives
+  /// on the document, so switching tabs never loses an edit.
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
   import { flowDebug } from '$lib/components/run/debugState.svelte.ts';
-  import { parse, loadFlowYaml, type Doc } from './flow';
+  import type { Doc, Workspace } from '$lib/studio-core';
+  import type { Studio } from '../layout.svelte.ts';
 
-  let { doc, onrun, ondeployed, onshowrun }: {
-    doc: Doc;
-    onrun: (debug: boolean) => void;
-    ondeployed: (ns: string, name: string) => void;
-    /// Bring up the Runs panel (a step picked on the graph is shown there).
-    onshowrun?: () => void;
-  } = $props();
+  let { doc, workspace, studio }: { doc: Doc; workspace: Workspace; studio: Studio } = $props();
 
   /// Breakpoints and the run shown below, marked on the graph (deployed flows).
-  const debug = $derived(doc.isNew ? null : flowDebug(doc.ns, doc.name));
+  const debug = $derived(doc.isNew ? null : flowDebug(doc.ref.project, doc.ref.name));
 
   let busy = $state(false);
   let message = $state('');
-  const dirty = $derived((doc.yaml ?? '') !== (doc.saved ?? ''));
+  const dirty = $derived((doc.text ?? '') !== (doc.saved ?? ''));
 
   $effect(() => {
     if (doc.loaded || doc.isNew) return;
-    const d = doc;
-    void (async () => {
-      const { yaml, error } = await loadFlowYaml(d.ns, d.name);
-      d.yaml = yaml;
-      d.saved = yaml;
-      d.loaded = true;
-      if (error) message = error;
-    })();
+    void workspace.load(doc).then(() => { if (doc.error) message = doc.error; });
   });
+
+  /// Open the run dialog in the Runs panel.
+  function onrun(debugRun: boolean) {
+    doc.ui.runDebug = debugRun;
+    studio.reveal('bottom', 'runs');
+    doc.ui.runDialog = true;
+  }
+  const onshowrun = () => studio.reveal('bottom', 'runs');
 
   // ── Run / Debug split button ──
   let runMode = $state<'run' | 'debug'>((() => { try { return localStorage.getItem('a3t.flow.runMode') === 'debug' ? 'debug' : 'run'; } catch { return 'run'; } })());
@@ -45,29 +41,23 @@
   }
 
   async function deploy() {
-    const { doc: parsed, error } = parse(doc.yaml);
-    if (error || !parsed) { message = `Not valid YAML: ${error}`; return; }
     busy = true; message = '';
-    const res = await mcpCall('create_flow', { yaml: doc.yaml });
+    const r = await workspace.save(doc);
     busy = false;
-    if (!res.ok) { message = res.error ?? 'Deploy failed'; return; }
-    doc.saved = doc.yaml;
-    const ns = parsed.document?.namespace ?? doc.ns;
-    const name = parsed.document?.name ?? doc.name;
-    ondeployed(ns, name);
+    if (!r.ok) message = r.error;
   }
 </script>
 
 <div class="fd">
   <div class="fd-body">
     {#if doc.loaded || doc.isNew}
-      <FlowEditorPane part="main" aiKind="flow" aiName={`${doc.ns}/${doc.name}`} initialYaml={doc.yaml ?? ''} onchange={(v: string) => (doc.yaml = v)}
+      <FlowEditorPane part="main" aiKind="flow" aiName={`${doc.ref.project}/${doc.ref.name}`} initialYaml={doc.text ?? ''} onchange={(v: string) => (doc.text = v)}
         {debug} onrun={blocked ? undefined : onrun} {onshowrun}>
         {#snippet toolbar()}
           <!-- Name centred on the Graph | Code bar, actions at its right end:
                one bar for the document instead of two. -->
           <div class="fd-title">
-            <span class="fd-name mono" title={`${doc.ns}/${doc.name}`}>{doc.ns}/{doc.name}</span>
+            <span class="fd-name mono" title={`${doc.ref.project}/${doc.ref.name}`}>{doc.ref.project}/{doc.ref.name}</span>
             {#if dirty}<span class="dirty">unsaved</span>{/if}
           </div>
           <span class="grow"></span>
@@ -89,7 +79,7 @@
         {/snippet}
       </FlowEditorPane>
     {:else}
-      <div class="loading">Loading {doc.ns}/{doc.name}…{#if message}<span class="msg"> {message}</span>{/if}</div>
+      <div class="loading">Loading {doc.ref.project}/{doc.ref.name}…{#if message}<span class="msg"> {message}</span>{/if}</div>
     {/if}
   </div>
 </div>

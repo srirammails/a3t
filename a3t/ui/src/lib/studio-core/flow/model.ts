@@ -1,24 +1,7 @@
-/// Flow documents in the studio: what an open flow tab holds, and what the
-/// panels read from it (its steps for breakpoints, its input schema, problems).
+/// What the studio knows about a flow's text, without the network: parsing, its
+/// steps as the engine keys them, problems before deploy, where a step is in
+/// the YAML, and renaming. Plain TypeScript (studio-core).
 import * as YAML from 'yaml';
-import { flows as flowsMcp } from '$lib/services/api';
-
-export type OpenItem = { kind: 'flow' | 'resource' | 'trigger' | 'template' | 'canvas'; ns: string; name: string; id?: string; data?: any };
-
-export type Doc = {
-  /// `flow:<ns>/<name>`, `resource:<ns>/<name>`, … or `flow:new:<n>`.
-  id: string;
-  kind: 'flow' | 'resource' | 'trigger' | 'template' | 'canvas';
-  ns: string;
-  name: string;
-  /// Flows: the text being edited and the text last loaded or deployed.
-  yaml?: string;
-  saved?: string;
-  loaded?: boolean;
-  isNew?: boolean;
-  /// Other items: what the explorer listed.
-  data?: any;
-};
 
 export function parse(yaml: string | undefined): { doc: any; error: string | null } {
   try {
@@ -130,14 +113,6 @@ function nearest(root: unknown, name: string): YAML.Pair | null {
 }
 
 const lineAt = (text: string, offset: number) => text.slice(0, offset).split('\n').length;
-
-/// A deployed flow's YAML as the server returns it (bare, or fenced in a reply).
-export async function loadFlowYaml(ns: string, name: string): Promise<{ yaml: string; error: string | null }> {
-  const res = await flowsMcp.get(name, ns);
-  const text = res.ok ? (typeof res.data === 'string' ? res.data : res.data?.text ?? '') : '';
-  const yaml = (text.match(/```yaml\n([\s\S]*?)```/)?.[1] ?? text).trim() + '\n';
-  return { yaml, error: res.ok ? null : res.error ?? 'Could not load the flow' };
-}
 
 /// The same flow under another `document.name`, comments and layout kept.
 export function withFlowName(yaml: string, name: string): string {
