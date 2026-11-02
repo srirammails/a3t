@@ -46,6 +46,21 @@ access itself: it asks the backend what the user may do with an item (§5.4) and
 greys out what they may not. Every Console detail page offers **Open in Studio**
 when the user may; every Studio document offers **Open in Console**.
 
+### 2.1 Who works on which kind (user's guidelines, 2 Nov 2026)
+
+Each kind is a persona's workspace; its views answer that persona's questions.
+Governance (approvals, audit) comes later.
+
+| Kind | Who | What they need to see and decide |
+|---|---|---|
+| **Agent template** | Architects, lead developers | (a) the **hooks** — connect SecOps / governance / SRE flows or agents (any workflow or agent can be wired) and decide per hook whether agents may override it; (b) which **LLMs / gateways** and which **tools** are allowed or denied, and how an agent that adds tools gets approval for prod; (c) the **memory** allocated; (d) **resource limits** (max tokens, iterations, …); (e) which **agents and workflows inherit** the template |
+| **Agent** | Developers delivering business value | (a) the **prompt**, and the **workflows** it adds — business or SRE sub-flows, connected agents; (b) **where and how exceptions are logged**; (c) **how memory is saved**; (d) its **tool access** and the **MCP servers** it may connect; (e) **where it deploys** — the template's canvas, and whether it may override to another runtime; (f) the **runtimes** it may use; (g) when testing: **debug, performance, checkpoints** |
+| **Resources** | Infrastructure team | what is made available to agents and templates |
+| **Resources → Workflows** | Developers | deterministic flows to connect to agents |
+| **Resources → MCP** | SRE: how to connect; developers: what tools there are, each tool's **schema**, test them |
+| **Resources → Databases** | Developers: what data agents have, what agents share (AQL), what my agents save; Security: logs, audit, incident triage |
+| **Triggers** | Developers and infrastructure |
+
 ---
 
 ## 3. What a developer does in the Studio
