@@ -10,6 +10,7 @@
 /// key, lists of named items (a flow's `do`, cases, extensions) by name — two
 /// sides adding different tasks at the end clash as lines but not as structure.
 import * as YAML from 'yaml';
+import { write } from './yamlText';
 
 export type Conflict = { path: (string | number)[]; mine: unknown; theirs: unknown };
 export type Merged = { text: string; conflicts: Conflict[]; applied: number };
@@ -162,6 +163,5 @@ export function mergeStructural(baseText: string, mineText: string, theirsText: 
   walk([], base, mine, theirs);
   // Written in the draft's style: lists indented under their key or not, and
   // long text not re-wrapped.
-  const indentSeq = !/^([ \t]*)[^\s#-][^\n]*:[ \t]*\n\1- /m.test(mineText);
-  return { text: applied ? doc.toString({ indentSeq, lineWidth: 0 }) : mineText, conflicts, applied };
+  return { text: applied ? write(doc, mineText) : mineText, conflicts, applied };
 }

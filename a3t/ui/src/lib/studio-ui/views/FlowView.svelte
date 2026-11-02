@@ -7,7 +7,7 @@
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
   import { flowDebug } from '$lib/components/run/debugState.svelte.ts';
   import SaveBar from '../parts/SaveBar.svelte';
-  import { addTask, getTrigger, ITEM_MIME, ops, paletteStep, putTrigger, STEP_MIME, taskForItem, type Doc, type Item, type Workspace } from '$lib/studio-core';
+  import { addTask, getTrigger, insertTask, ITEM_MIME, ops, paletteStep, putTrigger, STEP_MIME, taskForItem, type Doc, type Item, type Workspace } from '$lib/studio-core';
   import type { Studio } from '../layout.svelte.ts';
 
   let { doc, workspace, studio }: { doc: Doc; workspace: Workspace; studio: Studio } = $props();
@@ -58,15 +58,22 @@
     const t = e.dataTransfer?.types ?? [];
     if (t.includes(STEP_MIME) || t.includes(ITEM_MIME)) { e.preventDefault(); dropping = true; }
   }
-  /// Add a task and open it in the Form panel.
-  function addStep(base: string, task: Record<string, unknown>) {
-    const r = addTask(doc.text ?? '', base, task);
+  type At = { list: (string | number)[]; index: number; label: string };
+  /// Add a task — at `at` (dropped on a step or a connector), else at the end —
+  /// and open it in the Form panel.
+  function addStep(base: string, task: Record<string, unknown>, at?: At) {
+    const r = at ? insertTask(doc.text ?? '', at.list, at.index, base, task) : addTask(doc.text ?? '', base, task);
     doc.text = r.yaml;
     doc.ui.focusStep = { name: r.name, n: Date.now() };
     studio.reveal('right', 'form');
     message = '';
   }
-  async function ondrop(e: DragEvent) {
+  /// A drop on the graph's steps or connectors comes with its place.
+  function ondropat(e: DragEvent, at: At): boolean {
+    void ondrop(e, at);
+    return true;
+  }
+  async function ondrop(e: DragEvent, at?: At) {
     dropping = false;
     const step = e.dataTransfer?.getData(STEP_MIME);
     const raw = e.dataTransfer?.getData(ITEM_MIME);
@@ -74,14 +81,14 @@
     e.preventDefault();
     if (step) {
       const s = paletteStep(step);
-      if (s) addStep(s.base, s.task());
+      if (s) addStep(s.base, s.task(), at);
       return;
     }
     const it = JSON.parse(raw!) as Item;
     if (it.kind === 'trigger') { await wire(it); return; }
     if (it.kind === 'flow' && it.project === doc.ref.project && it.name === doc.ref.name) { message = 'A flow cannot run itself as a sub-flow.'; return; }
     const made = taskForItem(it);
-    if (made) addStep(made.base, made.task);
+    if (made) addStep(made.base, made.task, at);
     else message = `${it.name} is not something a flow step uses.`;
   }
   /// A trigger is not a step: it starts flows. Dropping one adds this flow to its targets.
@@ -115,7 +122,7 @@
   <div class="fd-body">
     {#if doc.loaded || doc.isNew}
       <FlowEditorPane part="main" aiKind="flow" aiName={`${doc.ref.project}/${doc.ref.name}`} initialYaml={doc.text ?? ''} onchange={(v: string) => (doc.text = v)} showCode={doc.ui.codeAsked}
-        {debug} onrun={blocked ? undefined : onrun} {onshowrun} palette gotoLine={doc.ui.gotoLine ?? null}
+        {debug} onrun={blocked ? undefined : onrun} {onshowrun} palette gotoLine={doc.ui.gotoLine ?? null} {ondropat}
         onaddstep={(id: string) => { const s = paletteStep(id); if (s) addStep(s.base, s.task()); }}>
         {#snippet toolbar()}
           <!-- Name centred on the Graph | Code bar, actions at its right end:

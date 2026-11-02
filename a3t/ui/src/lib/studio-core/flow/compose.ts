@@ -4,6 +4,7 @@
 /// flow's `do` (CNCF DSL 1.0), named uniquely; the form edits them from there.
 import * as YAML from 'yaml';
 import type { Item } from '../items';
+import { write } from '../yamlText';
 
 export const STEP_MIME = 'application/x-a3t-step';
 
@@ -94,25 +95,56 @@ export function taskForItem(it: Item): { base: string; task: Body } | null {
   return { base: `use-${it.name}`, task: { set: { resource: ref } } };
 }
 
-/// Task names already used at the top of the flow.
-function names(doc: YAML.Document): Set<string> {
-  const d = doc.get('do');
+type Path = (string | number)[];
+const keyOf = (p: YAML.Pair) => String((p.key as any)?.value ?? p.key);
+/// Task names already used in a list.
+function names(seq: unknown): Set<string> {
   const out = new Set<string>();
-  if (YAML.isSeq(d)) for (const e of d.items) if (YAML.isMap(e)) for (const p of e.items) out.add(String((p.key as any)?.value ?? p.key));
+  if (YAML.isSeq(seq)) for (const e of seq.items) if (YAML.isMap(e)) for (const p of e.items) out.add(keyOf(p));
   return out;
 }
-
-/// The flow with a task added at the end of its `do`, under a name not yet
-/// taken (`base`, `base-2`…); layout and comments kept.
-export function addTask(yaml: string, base: string, task: Body): { yaml: string; name: string } {
-  const doc = YAML.parseDocument(yaml || 'do: []\n');
-  const taken = names(doc);
+const unique = (base: string, taken: Set<string>) => {
   const clean = base.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'step';
   let name = clean;
   for (let i = 2; taken.has(name); i++) name = `${clean}-${i}`;
-  const entry = doc.createNode({ [name]: task });
-  const d = doc.get('do');
-  if (YAML.isSeq(d)) d.items.push(entry);
-  else doc.set('do', doc.createNode([{ [name]: task }]));
-  return { yaml: doc.toString(), name };
+  return name;
+};
+
+/// The flow with a task put into the list at `list` (`['do']`, a loop's
+/// `do`…) at `index` (past the end: appended), under a name not yet used in
+/// that list (`base`, `base-2`…); layout and comments kept.
+export function insertTask(yaml: string, list: Path, index: number, base: string, task: Body): { yaml: string; name: string; path: Path } {
+  const doc = YAML.parseDocument(yaml || 'do: []\n');
+  let seq = doc.getIn(list, true);
+  if (!YAML.isSeq(seq)) { doc.setIn(list, doc.createNode([])); seq = doc.getIn(list, true); }
+  const s = seq as YAML.YAMLSeq;
+  const name = unique(base, names(s));
+  const at = Math.max(0, Math.min(index, s.items.length));
+  s.items.splice(at, 0, doc.createNode({ [name]: task }) as any);
+  return { yaml: write(doc, yaml), name, path: [...list, at, name] };
+}
+
+/// …at the end of the flow's `do`.
+export function addTask(yaml: string, base: string, task: Body): { yaml: string; name: string } {
+  return insertTask(yaml, ['do'], Number.MAX_SAFE_INTEGER, base, task);
+}
+
+/// A task's `then:` — where the flow goes after it (a task in the same list,
+/// or continue / exit / end).
+export function setThen(yaml: string, task: Path, to: string): string {
+  const doc = YAML.parseDocument(yaml);
+  if (to === 'continue') doc.deleteIn([...task, 'then']);
+  else doc.setIn([...task, 'then'], to);
+  return write(doc, yaml);
+}
+
+/// A new case on a switch, going to `to` (its condition left for the user).
+export function addCase(yaml: string, task: Path, to: string): { yaml: string; name: string } {
+  const doc = YAML.parseDocument(yaml);
+  const cases = doc.getIn([...task, 'switch'], true);
+  const name = unique(`to-${to}`, names(cases));
+  const entry = { [name]: { when: '${ true }', then: to } };
+  if (YAML.isSeq(cases)) cases.items.push(doc.createNode(entry) as any);
+  else doc.setIn([...task, 'switch'], doc.createNode([entry]));
+  return { yaml: write(doc, yaml), name };
 }

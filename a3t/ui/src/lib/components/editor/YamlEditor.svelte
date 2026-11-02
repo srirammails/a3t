@@ -8,7 +8,7 @@
   import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
   import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, foldKeymap, indentOnInput } from '@codemirror/language';
   import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-  import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
+  import { autocompletion, completionKeymap, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
 
   /// A step's line, as the host marks it: its breakpoint (`before` | `after` |
   /// `on_error`), its state in the shown run, whether the run stands there.
@@ -21,11 +21,28 @@
   /// `issues`: problems the host found (the CNCF schema's), tinted on their
   /// lines with the message on hover.
   type Issue = { line: number; level: 'error' | 'warning'; message: string };
-  let { value = '', onchange, readOnly = false, reveal = null, marks = null, ongutter, oncontext, issues = null }: {
+  /// `complete`: what fits at a position (the schema's keys and values), offered
+  /// as you type and on Ctrl+Space.
+  type Suggestions = { from: number; options: { label: string; detail?: string; info?: string; apply: string; boost?: number }[] } | null;
+  let { value = '', onchange, readOnly = false, reveal = null, marks = null, ongutter, oncontext, issues = null, complete }: {
     value: string; onchange?: (val: string) => void; readOnly?: boolean; reveal?: { line: number; n: number } | null;
     marks?: LineMark[] | null; ongutter?: (line: number) => void; oncontext?: (e: MouseEvent, line: number) => boolean;
     issues?: Issue[] | null;
+    complete?: (text: string, pos: number) => Suggestions;
   } = $props();
+
+  function suggest(ctx: CompletionContext): CompletionResult | null {
+    if (!complete) return null;
+    const r = complete(ctx.state.doc.toString(), ctx.pos);
+    if (!r || !r.options.length) return null;
+    // While typing, only once a word is started (or right after `key: `); Ctrl+Space always.
+    if (!ctx.explicit && r.from === ctx.pos && !/:\s$/.test(ctx.state.sliceDoc(Math.max(0, ctx.pos - 2), ctx.pos))) return null;
+    return {
+      from: r.from,
+      options: r.options.map((o) => ({ label: o.label, detail: o.detail, info: o.info, apply: o.apply, boost: o.boost, type: 'property' })),
+      validFor: /^[\w.:@-]*$/,
+    };
+  }
 
   // ── Problems ──
   const setIssues = StateEffect.define<Issue[]>();
@@ -144,7 +161,7 @@
         indentOnInput(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         bracketMatching(),
-        autocompletion(),
+        autocompletion(complete ? { override: [suggest] } : {}),
         rectangularSelection(),
         highlightActiveLine(),
         highlightSelectionMatches(),

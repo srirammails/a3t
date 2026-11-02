@@ -10,6 +10,7 @@
 import * as YAML from 'yaml';
 import { schema as DOCS, type SchemaNode } from './swfDocs';
 import { PALETTE } from './compose';
+import { write } from '../yamlText';
 
 // ── Shapes ────────────────────────────────────────────────────────────
 type Val = 'string' | 'expression' | 'integer' | 'number' | 'boolean' | 'duration' | 'directive' | 'any';
@@ -274,7 +275,9 @@ class Builder {
         return;
       }
       case 'obj': {
-        if (!YAML.isMap(n)) { if (!(YAML.isScalar(n) && (n.value === null || isExpr(n.value)))) this.flag(node, 'error', 'expected a map of keys'); return; }
+        // Written but empty (`with:`): its keys, all to add.
+        if (YAML.isScalar(n) && n.value === null) { node.children = this.ghosts(path, sh, depth); return; }
+        if (!YAML.isMap(n)) { if (!(YAML.isScalar(n) && isExpr(n.value))) this.flag(node, 'error', 'expected a map of keys'); return; }
         node.children = this.object(path, sh, n, depth);
         return;
       }
@@ -348,6 +351,13 @@ class Builder {
 
   /// A task: its type's keys first, then the fields every task has.
   task(node: ONode, n: unknown, depth: number) {
+    if (YAML.isScalar(n) && n.value === null) {
+      // Named but empty (`- fresh:`): its type comes first.
+      node.task = '?';
+      this.flag(node, 'error', `no task type — add one of ${TASK_TYPE_KEYS.join(', ')}`);
+      node.children = this.ghosts(node.path, obj(COMMON), depth);
+      return;
+    }
     if (!YAML.isMap(n)) { this.flag(node, 'error', 'a task is a map: its type (call, set, switch…) and fields'); return; }
     const keys = n.items.map(keyOf);
     const types = keys.filter((k) => k in TASK_TYPES && !(k === 'do' && keys.includes('for')));
@@ -415,7 +425,7 @@ export function outline(text: string): Outline {
 function edit(text: string, f: (d: YAML.Document) => void): string {
   const d = YAML.parseDocument(text || '{}');
   f(d);
-  return d.toString();
+  return write(d, text);
 }
 
 /// Set a key (adding it if absent), layout and comments kept.
@@ -474,3 +484,84 @@ export function addKeyAt(text: string, path: Path, base: string, value: unknown)
 
 /// The task types a "+" on a task list offers (the palette's steps).
 export const TASK_CHOICES = PALETTE;
+
+// ── Completion while typing ──────────────────────────────────────────
+export type Suggestion = { label: string; detail: string; info?: string; apply: string; boost?: number };
+
+/// What fits at `pos` in the text: the keys the DSL allows in the map the
+/// cursor is in (required first, the ones already set left out), or — after
+/// `call:` / `then:` / `dsl:` — the values that fit there. `from` is where the
+/// word being typed starts.
+export function completeAt(text: string, pos: number): { from: number; options: Suggestion[] } | null {
+  const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
+  const prefix = text.slice(lineStart, pos);
+  const lineNo = text.slice(0, lineStart).split('\n').length;   // 1-based
+  // The outline of the text without the line being typed (it may not parse yet).
+  const lines = text.split('\n');
+  lines[lineNo - 1] = '';
+  const o = outline(lines.join('\n'));
+  const all: ONode[] = [];
+  const walk = (ns: ONode[]) => { for (const n of ns) { all.push(n); walk(n.children); } };
+  walk(o.nodes);
+
+  // A value after `key: `.
+  const val = prefix.match(/^\s*(?:- )?([\w.$:-]+):\s+([\w:.@-]*)$/);
+  if (val) {
+    const [, key, word] = val;
+    const from = pos - word.length;
+    if (key === 'call') {
+      const fns = all.filter((n) => n.path.length === 3 && n.path[0] === 'use' && n.path[1] === 'functions').map((n) => n.key);
+      return { from, options: [
+        ...BUILTIN_CALLS.map((c) => ({ label: c, detail: 'call', apply: c })),
+        ...fns.map((f) => ({ label: f, detail: 'use.functions', apply: f, boost: 1 })),
+      ] };
+    }
+    if (key === 'then') {
+      const tasks = [...new Set(all.filter((n) => n.type === 'task').map((n) => n.key))];
+      return { from, options: [
+        ...['continue', 'exit', 'end'].map((d) => ({ label: d, detail: 'flow directive', apply: d })),
+        ...tasks.map((t) => ({ label: t, detail: 'task', apply: t, boost: 1 })),
+      ] };
+    }
+    if (key === 'dsl') return { from, options: [{ label: "'1.0.3'", detail: 'DSL version', apply: "'1.0.3'" }] };
+    return null;
+  }
+
+  // A key: the map is the nearest line above with less indentation.
+  const keyM = prefix.match(/^(\s*)(- )?([\w-]*)$/);
+  if (!keyM) return null;
+  const indent = keyM[1].length + (keyM[2] ? 2 : 0);
+  const from = pos - keyM[3].length;
+  const indentOf = (l: string) => { const m = l.match(/^(\s*)(- )?/)!; return m[1].length + (m[2] ? 2 : 0); };
+  let parentLine = 0;
+  for (let i = lineNo - 2; i >= 0; i--) {
+    const l = text.split('\n')[i];
+    if (!l.trim() || l.trim().startsWith('#')) continue;
+    if (indentOf(l) < indent || (keyM[2] && indentOf(l) <= indent - 2 && !l.trim().startsWith('- '))) { parentLine = i + 1; break; }
+  }
+  let candidates: ONode[];
+  if (!parentLine) candidates = o.nodes;
+  else {
+    const parent = all.find((n) => n.line === parentLine && n.present);
+    if (!parent) return null;
+    candidates = parent.children;
+    // A task without a type yet: its type is the first thing to write.
+    if (parent.type === 'task' && parent.task === '?') {
+      return { from, options: TASK_TYPE_KEYS.map((k) => ({ label: k, detail: 'task type', info: docNode(TASK_TYPES[k][k]?.doc)?.d, apply: applyFor(k, typeLabel(TASK_TYPES[k][k].sh), indent), boost: 2 })) };
+    }
+  }
+  const options = candidates.filter((n) => !n.present).map((n) => ({
+    label: n.key, detail: `${n.type}${n.required ? ' · required' : ''}`,
+    info: [n.d, n.ex].filter(Boolean).join('\n\n') || undefined,
+    apply: applyFor(n.key, n.type, indent), boost: n.required ? 2 : 0,
+  }));
+  return options.length ? { from, options } : null;
+}
+
+/// What choosing a key writes: `key: ` for a value, a nested map or list started.
+function applyFor(key: string, type: string, indent: number): string {
+  if (/^(array|map ·)/.test(type) && type.includes('task')) return `${key}:\n${' '.repeat(indent)}- `;
+  if (type === 'object' || type.startsWith('map')) return `${key}:\n${' '.repeat(indent + 2)}`;
+  if (type.startsWith('array')) return `${key}:\n${' '.repeat(indent)}- `;
+  return `${key}: `;
+}
