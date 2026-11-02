@@ -45,7 +45,7 @@
   const tone = $derived(ACCENTS[accent] ?? ACCENTS.spec);
 
   const docsUrl = $derived(
-    docsPath ? `https://docs.a3t.com${docsPath.startsWith('/') ? '' : '/'}${docsPath}` : 'https://docs.a3t.com',
+    docsPath ? `https://docs.a3t.io${docsPath.startsWith('/') ? '' : '/'}${docsPath}` : 'https://docs.a3t.io',
   );
 </script>
 

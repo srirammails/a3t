@@ -1,6 +1,7 @@
 /// Flow documents in the studio: what an open flow tab holds, and what the
 /// panels read from it (its steps for breakpoints, its input schema, problems).
 import * as YAML from 'yaml';
+import { flows as flowsMcp } from '$lib/services/api';
 
 export type OpenItem = { kind: 'flow' | 'resource' | 'trigger' | 'template' | 'canvas'; ns: string; name: string; id?: string; data?: any };
 
@@ -129,3 +130,22 @@ function nearest(root: unknown, name: string): YAML.Pair | null {
 }
 
 const lineAt = (text: string, offset: number) => text.slice(0, offset).split('\n').length;
+
+/// A deployed flow's YAML as the server returns it (bare, or fenced in a reply).
+export async function loadFlowYaml(ns: string, name: string): Promise<{ yaml: string; error: string | null }> {
+  const res = await flowsMcp.get(name, ns);
+  const text = res.ok ? (typeof res.data === 'string' ? res.data : res.data?.text ?? '') : '';
+  const yaml = (text.match(/```yaml\n([\s\S]*?)```/)?.[1] ?? text).trim() + '\n';
+  return { yaml, error: res.ok ? null : res.error ?? 'Could not load the flow' };
+}
+
+/// The same flow under another `document.name`, comments and layout kept.
+export function withFlowName(yaml: string, name: string): string {
+  const d = YAML.parseDocument(yaml);
+  d.setIn(['document', 'name'], name);
+  return d.toString();
+}
+
+/// `document.name` as the CNCF DSL defines it: lowercase letters and digits,
+/// dashes only inside.
+export const FLOW_NAME = /^[a-z0-9](-?[a-z0-9])*$/;

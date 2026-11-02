@@ -3,15 +3,28 @@
   /// Flows, Resources (a folder per kind: LLM, Databases, MCP Servers, Secrets…),
   /// Triggers, Templates, Canvases. With several projects in view, one node per
   /// project. A filter narrows every folder; folder state is remembered.
+  /// Right-click (or F2 / Delete on a row) for an item's actions.
   import { untrack } from 'svelte';
-  import { flows as flowsMcp, mcpCall, execFlow } from '$lib/services/api';
+  import { flows as flowsMcp, resources as resourcesApi, mcpCall, execFlow } from '$lib/services/api';
+  import { navigateTo } from '$lib/stores/panels.svelte.ts';
   import { namespacesFor } from '$lib/stores/context.svelte.ts';
   import { contextRev_ } from '$lib/stores/apps.svelte.ts';
   import { categorize, catMeta } from '$lib/core/resources/categories';
 
-  import type { OpenItem } from './flow';
+  import DeleteConfirm from '$lib/components/shared/DeleteConfirm.svelte';
+  import { loadFlowYaml, withFlowName, FLOW_NAME, type OpenItem } from './flow';
 
-  let { onopen, onnewflow, activeId = '' }: { onopen: (it: OpenItem) => void; onnewflow: (ns: string) => void; activeId?: string } = $props();
+  let { onopen, onnewflow, onremoved, onrenamed, activeId = '', dirtyIds = [] }: {
+    onopen: (it: OpenItem) => void;
+    onnewflow: (ns: string) => void;
+    /// An item was deleted (its tab, if open, goes with it).
+    onremoved?: (key: string) => void;
+    /// A flow now lives under another name (its tab, if open, follows it).
+    onrenamed?: (oldKey: string, it: OpenItem) => void;
+    activeId?: string;
+    /// Open tabs with edits not yet deployed, so rename and delete can warn.
+    dirtyIds?: string[];
+  } = $props();
 
   type Node = { key: string; label: string; count?: number; children?: Node[]; item?: OpenItem; icon?: string };
 
@@ -125,6 +138,82 @@
   const shown = $derived(visible(tree));
   const single = $derived(shown.length === 1);
   const icons: Record<string, string> = { flow: 'ƒ', resource: '◆', trigger: '⚡', template: '▤', canvas: '▦' };
+
+  // ── Context menu: an item's actions, or a folder's ──
+  /// Where each kind is edited in full (flows are edited here).
+  const APPS: Record<string, [string, string]> = {
+    resource: ['resources', 'Resources'], trigger: ['triggers', 'Triggers'],
+    template: ['templates', 'Templates'], canvas: ['canvas', 'Canvas'],
+  };
+  type Menu = { x: number; y: number; item?: OpenItem; folder?: { ns: string; label: string } };
+  let menu = $state<Menu | null>(null);
+  /// The outcome of the last action, shown under the tools.
+  let notice = $state<{ ok: boolean; text: string } | null>(null);
+
+  function openMenu(e: MouseEvent, m: Omit<Menu, 'x' | 'y'>) {
+    e.preventDefault();
+    menu = { x: e.clientX, y: e.clientY, ...m };
+  }
+  function act(fn: () => void) { menu = null; fn(); }
+  function rowKey(e: KeyboardEvent, it: OpenItem) {
+    if (e.key === 'F2' && it.kind === 'flow') { e.preventDefault(); askName('rename', it); }
+    else if (e.key === 'Delete') { e.preventDefault(); delTarget = it; }
+  }
+
+  // ── Rename / Duplicate (flows): a copy under the new name, then the old one removed ──
+  let naming = $state<{ mode: 'rename' | 'duplicate'; item: OpenItem; value: string; error: string; busy: boolean } | null>(null);
+  function askName(mode: 'rename' | 'duplicate', item: OpenItem) {
+    naming = { mode, item, value: mode === 'rename' ? item.name : `${item.name}-copy`, error: '', busy: false };
+  }
+  const flowNames = (ns: string) => new Set(tree.find((n) => n.key === ns)?.children?.find((c) => c.label === 'Flows')?.children?.map((c) => c.label) ?? []);
+  const nameProblem = $derived.by(() => {
+    if (!naming) return '';
+    const v = naming.value.trim();
+    if (!v) return 'A name is required.';
+    if (!FLOW_NAME.test(v)) return 'Lowercase letters, digits and dashes (not at either end).';
+    if (v === naming.item.name) return naming.mode === 'rename' ? 'That is its name already.' : '';
+    if (flowNames(naming.item.ns).has(v)) return `${naming.item.ns} already has a flow named ${v}.`;
+    return '';
+  });
+  async function submitName() {
+    if (!naming || nameProblem || naming.busy) return;
+    const n = naming, name = n.value.trim(), it = n.item;
+    n.busy = true; n.error = '';
+    const { yaml, error } = await loadFlowYaml(it.ns, it.name);
+    if (error) { n.busy = false; n.error = error; return; }
+    const made = await mcpCall('create_flow', { yaml: withFlowName(yaml, name) });
+    if (!made.ok) { n.busy = false; n.error = made.error ?? 'Could not create the flow'; return; }
+    const next: OpenItem = { kind: 'flow', ns: it.ns, name };
+    if (n.mode === 'rename') {
+      const gone = await resourcesApi.remove(it.ns, it.name);
+      if (!gone.ok) {
+        // The copy exists; say so rather than leave two flows unexplained.
+        notice = { ok: false, text: `Copied to ${name}, but ${it.name} could not be removed: ${gone.error ?? gone.status}` };
+      } else {
+        notice = { ok: true, text: `Renamed ${it.name} to ${name}.` };
+        onrenamed?.(keyOf(it), next);
+      }
+    } else {
+      notice = { ok: true, text: `Duplicated ${it.name} as ${name}.` };
+      onopen(next);
+    }
+    naming = null;
+    await load();
+  }
+
+  // ── Delete: typed-name confirmation, then the kind's own delete ──
+  let delTarget = $state<OpenItem | null>(null);
+  async function remove(it: OpenItem) {
+    delTarget = null;
+    const res = it.kind === 'trigger' ? await mcpCall('delete_trigger', { id: it.id })
+      : it.kind === 'template' ? await execFlow('a3t-templates-delete', 'a3t', { id: it.id, org_id: 'org-default' })
+      // Flows, canvases and resources share the registry's delete (it refuses a deployed flow).
+      : await resourcesApi.remove(it.ns, it.name);
+    if (!res.ok) { notice = { ok: false, text: `Could not delete ${it.name}: ${res.error ?? res.status}` }; return; }
+    notice = { ok: true, text: `Deleted ${it.kind} ${it.name}.` };
+    onremoved?.(keyOf(it));
+    await load();
+  }
 </script>
 
 <div class="ex">
@@ -134,6 +223,9 @@
   </div>
   {#if loading && !tree.length}<div class="ex-empty">Loading…</div>{/if}
   {#if !loading && !shown.length}<div class="ex-empty">{filter ? 'Nothing matches.' : 'No project in view — pick one in the project switcher (or turn on Show platform for a3t / system).'}</div>{/if}
+  {#if notice}
+    <div class="ex-note" class:bad={!notice.ok}><span>{notice.text}</span><button title="Dismiss" onclick={() => (notice = null)}>×</button></div>
+  {/if}
   {#if errors.length}<div class="ex-err" title={errors.join('\n')}>Could not load: {errors.join('; ')}</div>{/if}
   <div class="ex-scope" title="Projects listed here">{looked.length ? looked.join(', ') : '—'}</div>
   <ul class="tree">
@@ -156,13 +248,14 @@
   {#each nodes as n (n.key)}
     <li>
       {#if n.item}
-        <button class="row leaf" class:on={activeId === n.key} style="padding-left: {10 + depth * 14}px" onclick={() => onopen(n.item!)} title="{n.item.kind} {n.item.ns}/{n.label}">
+        <button class="row leaf" class:on={activeId === n.key} style="padding-left: {10 + depth * 14}px" onclick={() => onopen(n.item!)} title="{n.item.kind} {n.item.ns}/{n.label}"
+          oncontextmenu={(e) => openMenu(e, { item: n.item })} onkeydown={(e) => rowKey(e, n.item!)}>
           <span class="ic {n.item.kind}">{icons[n.item.kind]}</span><span class="nm">{n.label}</span>
         </button>
       {:else}
         {@const def = n.label === 'Flows'}
         {@const isOpen = (open[n.key] ?? def) || !!filter}
-        <div class="folder-row" style="padding-left: {4 + depth * 14}px">
+        <div class="folder-row" style="padding-left: {4 + depth * 14}px" role="presentation" oncontextmenu={(e) => openMenu(e, { folder: { ns, label: n.label } })}>
           <button class="row folder" onclick={() => toggle(n.key, def)}>
             <span class="tw">{isOpen ? '▾' : '▸'}</span><span class="nm">{n.label}</span><span class="ct">{n.count ?? ''}</span>
           </button>
@@ -178,6 +271,56 @@
     </li>
   {/each}
 {/snippet}
+
+{#if menu}
+  {@const it = menu.item}
+  <div class="cm-overlay" role="presentation" onclick={() => (menu = null)} oncontextmenu={(e) => { e.preventDefault(); menu = null; }}></div>
+  <div class="cm" role="menu" style="left: {Math.min(menu.x, window.innerWidth - 240)}px; top: {Math.min(menu.y, window.innerHeight - 260)}px">
+    {#if it}
+      <div class="cm-head"><span>{it.name}</span><code>{it.kind} · {it.ns}</code></div>
+      <button role="menuitem" onclick={() => act(() => onopen(it))}><span class="cm-ic">✎</span>{it.kind === 'flow' ? 'Edit' : 'Open'}</button>
+      {#if APPS[it.kind]}
+        <button role="menuitem" onclick={() => act(() => navigateTo(APPS[it.kind][0], APPS[it.kind][1]))}><span class="cm-ic">↗</span>Edit in {APPS[it.kind][1]}</button>
+      {/if}
+      {#if it.kind === 'flow'}
+        <button role="menuitem" onclick={() => act(() => askName('rename', it))}><span class="cm-ic">A</span>Rename…<kbd>F2</kbd></button>
+        <button role="menuitem" onclick={() => act(() => askName('duplicate', it))}><span class="cm-ic">⧉</span>Duplicate…</button>
+      {/if}
+      <button role="menuitem" onclick={() => act(() => navigator.clipboard?.writeText(it.name))}><span class="cm-ic">⎘</span>Copy name</button>
+      <hr />
+      <button role="menuitem" class="danger" onclick={() => act(() => (delTarget = it))}><span class="cm-ic">🗑</span>Delete…<kbd>Del</kbd></button>
+    {:else if menu.folder}
+      {@const f = menu.folder}
+      {#if f.label === 'Flows'}
+        <button role="menuitem" onclick={() => act(() => onnewflow(f.ns))}><span class="cm-ic">+</span>New flow</button>
+      {/if}
+      <button role="menuitem" onclick={() => act(() => load())}><span class="cm-ic">↻</span>Refresh</button>
+    {/if}
+  </div>
+{/if}
+
+{#if naming}
+  {@const n = naming}
+  <div class="nd-overlay" role="presentation" onclick={() => !n.busy && (naming = null)}></div>
+  <form class="nd" onsubmit={(e) => { e.preventDefault(); void submitName(); }}>
+    <h3>{n.mode === 'rename' ? 'Rename' : 'Duplicate'} <span class="mono">{n.item.ns}/{n.item.name}</span></h3>
+    <!-- svelte-ignore a11y_autofocus -->
+    <input class="mono" bind:value={n.value} autofocus spellcheck="false" onkeydown={(e) => e.key === 'Escape' && !n.busy && (naming = null)} />
+    {#if nameProblem && n.value !== n.item.name}<div class="nd-err">{nameProblem}</div>{/if}
+    {#if n.error}<div class="nd-err">{n.error}</div>{/if}
+    {#if n.mode === 'rename'}
+      <p class="nd-note">Saves the flow under the new name, then removes the old one. Past runs stay under {n.item.name}; triggers and canvases that name it need rewiring. A deployed flow cannot be renamed.</p>
+      {#if dirtyIds.includes(keyOf(n.item))}<p class="nd-note warn">Its open tab has changes that are not deployed; they will be discarded.</p>{/if}
+    {/if}
+    <div class="nd-actions">
+      <button type="button" class="btn ghost sm" disabled={n.busy} onclick={() => (naming = null)}>Cancel</button>
+      <button type="submit" class="btn spec sm" disabled={!!nameProblem || n.busy}>{n.busy ? 'Saving…' : n.mode === 'rename' ? 'Rename' : 'Duplicate'}</button>
+    </div>
+  </form>
+{/if}
+
+<DeleteConfirm open={!!delTarget} entityType={delTarget?.kind ?? 'item'} entityName={delTarget?.name ?? ''}
+  onconfirm={() => delTarget && remove(delTarget)} oncancel={() => (delTarget = null)} />
 
 <style>
   .ex { display: flex; flex-direction: column; height: 100%; font-size: 12.5px; }
@@ -203,4 +346,35 @@
   .ic { width: 14px; text-align: center; font-size: 11px; color: var(--text-3); }
   .ic.flow { color: var(--spec); } .ic.trigger { color: var(--warn, #b45309); } .ic.resource { color: var(--control-ink, #3a5a85); }
   .none { color: var(--text-4); font-size: 11.5px; padding: 2px 0; }
+  .ex-note { display: flex; align-items: flex-start; gap: 6px; margin: 6px; padding: 6px 8px; border-radius: var(--r-sm); background: var(--runtime-bg, #e3f4ef); color: var(--runtime, #1a7158); font-size: 11.5px; }
+  .ex-note.bad { background: var(--err-bg, #fde8e8); color: var(--err, #b42318); }
+  .ex-note span { flex: 1; }
+  .ex-note button { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0 2px; }
+  /* Same menu as the graph's (FlowEditorPane). */
+  .cm-overlay { position: fixed; inset: 0; z-index: 90; }
+  .cm { position: fixed; z-index: 91; min-width: 210px; max-width: 280px; display: flex; flex-direction: column; padding: 4px;
+        background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); font-size: 12.5px; }
+  .cm-head { display: flex; flex-direction: column; gap: 1px; padding: 5px 8px 6px; border-bottom: 1px solid var(--border); margin-bottom: 3px; }
+  .cm-head span { font-weight: 600; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cm-head code { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-4); }
+  .cm button { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 5px 8px; border-radius: 4px;
+               cursor: pointer; text-align: left; color: var(--text-1); font-size: 12.5px; }
+  .cm button:hover { background: var(--bg-subtle); }
+  .cm button.danger { color: var(--err, #b42318); }
+  .cm kbd { margin-left: auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-4); }
+  .cm-ic { width: 16px; text-align: center; color: var(--text-3); font-size: 11px; }
+  .cm hr { border: 0; border-top: 1px solid var(--border); margin: 3px 0; }
+  .nd-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 200; }
+  .nd { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 201; width: 420px; max-width: 90vw;
+        display: flex; flex-direction: column; gap: 10px; padding: 20px 24px; background: var(--bg-surface);
+        border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); }
+  .nd h3 { font-family: var(--font-serif); font-size: 16px; font-weight: 500; }
+  .nd h3 .mono, .nd input.mono { font-family: var(--font-mono); }
+  .nd h3 .mono { font-size: 13px; color: var(--text-3); }
+  .nd input { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-page); color: var(--text-1); font-size: 13px; }
+  .nd input:focus { outline: none; border-color: var(--spec); }
+  .nd-err { color: var(--err, #b42318); font-size: 12px; }
+  .nd-note { color: var(--text-3); font-size: 12px; line-height: 1.5; }
+  .nd-note.warn { color: var(--warn, #b45309); }
+  .nd-actions { display: flex; justify-content: flex-end; gap: 8px; }
 </style>

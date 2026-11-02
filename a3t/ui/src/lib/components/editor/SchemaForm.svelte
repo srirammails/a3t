@@ -663,6 +663,12 @@
   .form-label.full { grid-column: 1 / -1; }
   .form-label span { color: var(--text-2); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
   .form-label em { color: var(--err); font-style: normal; margin-left: 2px; }
+  /* Same fields as the agent-template form (AgentTemplateEditor), not the
+     roomier page-form defaults from app.css. */
+  .form-label input, .form-label select, .form-label textarea {
+    padding: 7px 10px; font-size: 13px; font-family: var(--font-mono);
+  }
+  .form-label input:focus, .form-label select:focus, .form-label textarea:focus { box-shadow: none; }
 
   /* Steps */
   .steps-list { display: flex; flex-direction: column; gap: 4px; }

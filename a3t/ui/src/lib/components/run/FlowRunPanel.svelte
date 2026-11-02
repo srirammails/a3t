@@ -49,6 +49,26 @@
   function write(key: string, v: any) {
     try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* private window */ }
   }
+  // ── Runs list width: dragged on its edge, kept per browser ──
+  const LIST_KEY = 'a3t.runs.listWidth';
+  let listWidth = $state(read(LIST_KEY, 250));
+  function dragList(e: PointerEvent) {
+    const el = e.currentTarget as HTMLElement;
+    const box = el.parentElement!.getBoundingClientRect();
+    el.setPointerCapture(e.pointerId);
+    const start = { x: e.clientX, w: listWidth };
+    const move = (ev: PointerEvent) => {
+      listWidth = Math.round(Math.max(140, Math.min(box.width * 0.7, start.w + ev.clientX - start.x)));
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      write(LIST_KEY, listWidth);
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  }
+
   function seed(input: any) {
     inputText = JSON.stringify(input ?? {}, null, 2);
     formValues = { ...(input ?? {}) };
@@ -155,7 +175,7 @@
 </script>
 
 <section class="rp">
-  <div class="rp-list">
+  <div class="rp-list" style="width: {listWidth}px">
     <div class="rp-head"><span>Runs</span><button class="rp-link" onclick={() => loadRuns()} title="Refresh">↻</button></div>
     {#if runs.length === 0}<div class="rp-empty">No runs yet. ▶ Run or 🐞 Debug to start one.</div>{/if}
     {#each runs as r (r.run_id)}
@@ -168,6 +188,7 @@
     {/each}
     {#if next}<button class="rp-link more" onclick={() => loadRuns(true)}>Older runs…</button>{/if}
   </div>
+  <div class="rp-split" role="separator" aria-orientation="vertical" aria-label="Resize runs list" onpointerdown={dragList}></div>
   <div class="rp-detail">
     {#if message}<div class="rp-msg">{message}</div>{/if}
     {#if selected && !legacy}
@@ -249,7 +270,10 @@
 
 <style>
   .rp { display: flex; height: 100%; min-height: 0; border-top: 1px solid var(--border); background: var(--bg-surface); font-size: 12.5px; }
-  .rp-list { width: 250px; flex-shrink: 0; border-right: 1px solid var(--border); overflow-y: auto; }
+  .rp-list { flex-shrink: 0; overflow-y: auto; }
+  .rp-split { flex-shrink: 0; width: 1px; background: var(--border); cursor: col-resize; position: relative; touch-action: none; }
+  .rp-split::after { content: ''; position: absolute; inset: 0 -3px; }
+  .rp-split:hover, .rp-split:active { background: var(--spec); }
   .rp-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; font-weight: 600; color: var(--text-2); }
   .rp-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 12px; border: 0; background: transparent; cursor: pointer; text-align: left; color: var(--text-2); }
   .rp-row:hover, .rp-row.sel { background: var(--bg-subtle); color: var(--text-1); }
@@ -267,7 +291,6 @@
   .rp-link.more { padding: 8px 12px; }
   .mono { font-family: var(--font-mono); }
   .dim { color: var(--text-3); } .small { font-size: 11.5px; }
-  @media (max-width: 800px) { .rp-list { width: 170px; } }
   .rd-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.15); z-index: 200; }
   .rd { position: fixed; top: 8vh; left: 50%; transform: translateX(-50%); width: min(640px, calc(100vw - 32px)); max-height: 84vh; overflow-y: auto; z-index: 201;
         background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow-lg);

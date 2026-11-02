@@ -5,6 +5,8 @@
   /// form; other items preview), and Runs / Problems below. Every region resizes,
   /// minimizes to its edge and maximizes; the layout and open tabs are kept.
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
+  import PageBanner from '$lib/components/shared/PageBanner.svelte';
+  import AppHome from '$lib/shell/AppHome.svelte';
   import StudioShell from '$lib/components/studio/StudioShell.svelte';
   import Explorer from '$lib/components/studio/Explorer.svelte';
   import DocTabs from '$lib/components/studio/DocTabs.svelte';
@@ -66,6 +68,27 @@
     persist();
   }
 
+  /// Deleted in the explorer: its tab goes, edits and all (there is nothing left to deploy them to).
+  function removed(id: string) {
+    const i = docs.findIndex((d) => d.id === id);
+    if (i < 0) return;
+    docs.splice(i, 1);
+    if (activeId === id) activeId = docs[Math.min(i, docs.length - 1)]?.id ?? null;
+    persist();
+  }
+
+  /// Renamed in the explorer: the tab stays where it was and reloads under the new name.
+  function renamed(oldId: string, it: OpenItem) {
+    const d = docs.find((x) => x.id === oldId);
+    if (!d) return;
+    const id = idOf(it);
+    const other = docs.findIndex((x) => x.id === id && x !== d);
+    if (other >= 0) docs.splice(other, 1);
+    Object.assign(d, { id, name: it.name, yaml: undefined, saved: undefined, loaded: false });
+    if (activeId === oldId) activeId = id;
+    persist();
+  }
+
   function newFlow(ns?: string) {
     newCount += 1;
     const n = ns || getProject() || 'a3t';
@@ -121,7 +144,8 @@
 </div>
 
 {#snippet leftPanel(_id: string)}
-  <Explorer onopen={open} onnewflow={(ns) => newFlow(ns)} activeId={activeId ?? ''} />
+  <Explorer onopen={open} onnewflow={(ns) => newFlow(ns)} onremoved={removed} onrenamed={renamed} activeId={activeId ?? ''}
+    dirtyIds={tabs.filter((t) => t.dirty).map((t) => t.id)} />
 {/snippet}
 
 {#snippet centerArea()}
@@ -135,9 +159,21 @@
   </div>
   <div class="center-body">
     {#if !active}
-      <div class="empty">
-        <p>Open a flow from the Explorer, or start a new one.</p>
-        <button class="btn spec sm" onclick={() => newFlow()}>+ New flow</button>
+      <!-- Nothing open: lead like the other section pages, with what the editor
+           is for, then the flows you return to. -->
+      <div class="welcome">
+        <PageBanner
+          headline="Author a flow."
+          highlightWord="flow"
+          subtitle="CNCF Serverless Workflow definitions, edited as a graph, as YAML, or as a form."
+          description="Open a flow from the Explorer or start a new one. Check it under Problems, deploy it, then run or debug it from Runs — all without leaving the editor."
+          accent="spec"
+          docsPath="/concepts/workflows/"
+        />
+        <div class="welcome-actions">
+          <button class="btn spec sm" onclick={() => newFlow()}>+ New flow</button>
+        </div>
+        <AppHome appType="flow-editor" embedded />
       </div>
     {:else}
       {#key active.id}
@@ -190,7 +226,8 @@
   .center-body > :global(*) { flex: 1; min-height: 0; }
   .new { border: 0; background: transparent; color: var(--spec); font-size: 12px; padding: 0 10px; cursor: pointer; white-space: nowrap; }
   .new:hover { background: var(--bg-subtle); }
-  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-3); }
+  .welcome { overflow-y: auto; padding: 20px 32px 40px; }
+  .welcome-actions { margin: -8px 0 16px; }
   .note { padding: 14px; color: var(--text-4); font-size: 12.5px; }
   .note.ok { color: var(--ok, #15803d); }
   .problems { list-style: none; margin: 0; padding: 8px 12px; font-size: 12.5px; }

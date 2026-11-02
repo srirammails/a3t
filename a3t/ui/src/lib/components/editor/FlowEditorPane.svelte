@@ -21,6 +21,7 @@
   import { runsApi, type Breakpoint, type DebugCommand } from '$lib/services/api';
   import { lineOfStep, stepLines } from '$lib/components/studio/flow';
   import type { FlowDebug } from '$lib/components/run/debugState.svelte.ts';
+  import type { Snippet } from 'svelte';
 
   let {
     initialYaml = '',
@@ -37,6 +38,7 @@
     debug = null,
     onrun,
     onshowrun,
+    toolbar,
   }: {
     initialYaml: string;
     onchange?: (val: string) => void;
@@ -66,6 +68,9 @@
     /// Context menu → Run / Debug, and → show a step in the Runs panel.
     onrun?: (debug: boolean) => void;
     onshowrun?: () => void;
+    /// Host content for the Graph | Code toolbar (`main` only), after the tabs —
+    /// the studio puts the flow's name and Run/Deploy here instead of a bar of its own.
+    toolbar?: Snippet;
   } = $props();
 
   const nodeTypes = {
@@ -232,7 +237,12 @@
 
   // Nodes and edges directly from parser (expansion handled inside node components)
   let nodes = $derived.by<Node[]>(() => baseGraph?.nodes ?? []);
-  let edges = $derived.by<Edge[]>(() => baseGraph?.edges ?? []);
+  /// Edges flow only while the shown run is live (running, or a debug run paused);
+  /// at rest the graph is still.
+  let edges = $derived.by<Edge[]>(() => {
+    const live = !!debug?.live;
+    return (baseGraph?.edges ?? []).map((e) => (e.animated && !live ? { ...e, animated: false } : e));
+  });
 
   // ── Breakpoints and the run's position on the graph ──
   let shownNodes = $derived.by<Node[]>(() => {
@@ -453,6 +463,7 @@
             Code
           </button>
         </div>
+        {@render toolbar?.()}
       </div>
       <div class="fep-pane-body part-main">
         {#if leftMode === 'graph'}{@render graphView(true)}{:else}{@render codeView()}{/if}
@@ -580,6 +591,7 @@
   .fep-divider:hover::after, .fep-split.dragging .fep-divider::after { background: white; }
 
   .fep-toolbar {
+    position: relative;   /* a host's toolbar may centre its title on the bar */
     display: flex; align-items: center; gap: 8px;
     padding: 5px 10px; border-bottom: 1px solid var(--border);
     background: var(--bg-surface); flex-shrink: 0;
