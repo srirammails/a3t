@@ -4,10 +4,10 @@
 ///   a3t://<project>/<kind>/<name or id>
 ///
 /// `kind` here is the item's sort as the platform stores it (flow, resource,
-/// trigger, template, canvas…); which behaviour module handles it is decided by
+/// trigger, template, canvas, run…); which behaviour module handles it is decided by
 /// the kinds registry (`kinds/`), which may look at `type` too.
 
-export type ItemSort = 'flow' | 'resource' | 'trigger' | 'template' | 'canvas';
+export type ItemSort = 'flow' | 'resource' | 'trigger' | 'template' | 'canvas' | 'run';
 
 export type ItemRef = {
   project: string;
@@ -29,6 +29,9 @@ export function address(ref: ItemRef): string {
 }
 
 export const sameRef = (a: ItemRef, b: ItemRef) => address(a) === address(b);
+
+/// The drag payload type for an item (its JSON, without listing data).
+export const ITEM_MIME = 'application/x-a3t-item';
 
 /// What every adapter returns: never throws, says what went wrong.
 export type Result<T = void> = { ok: true; data: T } | { ok: false; error: string };

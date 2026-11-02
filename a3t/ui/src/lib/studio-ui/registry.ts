@@ -10,6 +10,9 @@ import QueryView from './views/QueryView.svelte';
 import ChatView from './views/ChatView.svelte';
 import ToolsView from './views/ToolsView.svelte';
 import FireView from './views/FireView.svelte';
+import CanvasView from './views/CanvasView.svelte';
+import RuntimeView from './views/RuntimeView.svelte';
+import RunDocView from './views/RunDocView.svelte';
 import FlowAssistPanel from './panels/FlowAssistPanel.svelte';
 import RunsPanel from './panels/RunsPanel.svelte';
 import ProblemsPanel from './panels/ProblemsPanel.svelte';
@@ -26,6 +29,9 @@ export const VIEWS: Record<string, Component<any>> = {
   chat: ChatView,
   tools: ToolsView,
   fire: FireView,
+  canvas: CanvasView,
+  runtime: RuntimeView,
+  run: RunDocView,
 };
 
 export const PANELS: Record<string, Component<any>> = {

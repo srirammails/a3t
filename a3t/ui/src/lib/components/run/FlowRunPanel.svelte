@@ -9,8 +9,10 @@
   import { flows, runsApi, executions } from '$lib/services/api';
   import { flowDebug } from './debugState.svelte.ts';
 
-  let { ns, name, schema = null, steps = [], dialogOpen = $bindable(false), debugMode = $bindable(false) }:
-    { ns: string; name: string; schema?: any; steps?: string[]; dialogOpen?: boolean; debugMode?: boolean } = $props();
+  let { ns, name, schema = null, steps = [], dialogOpen = $bindable(false), debugMode = $bindable(false), onopen }:
+    { ns: string; name: string; schema?: any; steps?: string[]; dialogOpen?: boolean; debugMode?: boolean;
+      /// Open the selected run on its own (the Studio: a tab).
+      onopen?: (runId: string) => void } = $props();
 
   type Row = { run_id: string; phase: string; status?: string; created_at?: string; duration_us?: number | null; debug?: boolean; principal_id?: string | null };
 
@@ -192,6 +194,7 @@
   <div class="rp-detail">
     {#if message}<div class="rp-msg">{message}</div>{/if}
     {#if selected && !legacy}
+      {#if onopen}<button class="rp-link open-tab" onclick={() => onopen(selected!)} title="Open this run in its own tab">Open in a tab ↗</button>{/if}
       <RunView runId={selected} flowSteps={steps} {shared} onrerun={(id) => { selected = id; void loadRuns(); }} />
     {:else if selected}
       <div class="rp-empty">This server keeps no step journal yet; step views need the updated FlowR.</div>
@@ -284,6 +287,7 @@
   .dot.ok { background: var(--ok, #15803d); } .dot.err { background: var(--err, #b42318); } .dot.warn { background: var(--warn, #b45309); }
   .dot.live { background: var(--spec); animation: pulse 1s infinite; }
   @keyframes pulse { 50% { opacity: 0.4; } }
+  .open-tab { float: right; margin: 0 0 4px 8px; }
   .rp-detail { flex: 1; min-width: 0; overflow-y: auto; padding: 10px 14px; }
   .rp-empty { padding: 12px; color: var(--text-4); }
   .rp-msg { padding: 6px 10px; margin-bottom: 8px; border-radius: var(--r-sm); background: var(--err-bg, #fde8e8); color: var(--err, #b42318); }

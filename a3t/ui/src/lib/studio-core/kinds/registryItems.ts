@@ -97,16 +97,6 @@ export const templateKind: ItemKind = {
   remove: (it) => (it.id ? registry.removeTemplate(it.id) : Promise.resolve(fail('This template has no id'))),
 };
 
-export const canvasKind: ItemKind = {
-  id: 'canvas', label: 'Canvas', icon: '▦',
-  match: (it) => it.kind === 'canvas',
-  capabilities: ['edit', 'delete'],
-  views: configViews,
-  console: { section: 'canvas', title: 'Canvas' },
-  ...resourceConfig,
-  remove: (it) => registry.removeResource(it.project, it.name),
-};
-
 /// Any resource no more specific kind claims.
 export const resourceKind: ItemKind = {
   id: 'resource', label: 'Resource', icon: '◆',

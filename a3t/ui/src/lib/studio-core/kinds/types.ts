@@ -37,6 +37,8 @@ export interface ItemKind {
   dirty?(doc: Doc): boolean;
   /// Paths (`pathKey`) of values the platform showed masked in the loaded document.
   masked?(doc: Doc): Set<string>;
+  /// The tab's title, when the name alone does not say it (runs).
+  title?(doc: Doc): string;
   /// A count on a panel's tab (e.g. problems), or null.
   badge?(doc: Doc, panel: string): number | null;
 

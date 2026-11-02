@@ -1,7 +1,8 @@
 import type { Item } from '../items';
 import type { ItemKind } from './types';
 import { flowKind } from './flow';
-import { canvasKind, resourceKind, templateKind, triggerKind } from './registryItems';
+import { resourceKind, templateKind, triggerKind } from './registryItems';
+import { canvasKind, runKind, runtimeKind } from './operate';
 import { databaseKind } from './database';
 import { llmKind, mcpKind } from './act';
 
@@ -9,7 +10,7 @@ export type { ItemKind, Capability, PanelDef } from './types';
 export { languagesOf } from './database';
 
 /// First match wins: specific kinds before the ones they refine.
-export const KINDS: ItemKind[] = [flowKind, triggerKind, templateKind, canvasKind, databaseKind, llmKind, mcpKind, resourceKind];
+export const KINDS: ItemKind[] = [flowKind, triggerKind, templateKind, canvasKind, runKind, databaseKind, llmKind, mcpKind, runtimeKind, resourceKind];
 
 export function kindFor(item: Item): ItemKind {
   return KINDS.find((k) => k.match(item)) ?? resourceKind;

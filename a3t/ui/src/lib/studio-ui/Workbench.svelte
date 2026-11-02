@@ -33,7 +33,7 @@
 
   const tabs = $derived(workspace.state.docs.map((d) => {
     const k = workspace.kindOf(d);
-    return { id: d.address, title: d.ref.name, icon: k.icon, hint: `${k.label} ${d.ref.project}/${d.ref.name}`, dirty: workspace.isDirty(d) };
+    return { id: d.address, title: k.title?.(d) ?? d.ref.name, icon: k.icon, hint: `${k.label} ${d.ref.project}/${d.ref.name}`, dirty: workspace.isDirty(d) };
   }));
 
   const newDoc = (kindId: string) => workspace.create(kindId, workspace.host.scope.current() ?? workspace.host.scope.projects()[0] ?? 'a3t');

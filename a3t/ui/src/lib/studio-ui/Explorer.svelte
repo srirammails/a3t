@@ -6,7 +6,7 @@
   /// for an item's actions — which ones, and what they do, come from its kind.
   import { onMount, untrack } from 'svelte';
   import DeleteConfirm from '$lib/components/shared/DeleteConfirm.svelte';
-  import { address, can, kindFor, loadInventory, namesIn, type Inventory, type Item, type TreeNode, type Workspace } from '$lib/studio-core';
+  import { address, can, kindFor, loadInventory, namesIn, ITEM_MIME, type Inventory, type Item, type TreeNode, type Workspace } from '$lib/studio-core';
 
   let { workspace, pin }: {
     workspace: Workspace;
@@ -85,6 +85,15 @@
     else if (e.key === 'Delete' && kind.remove) { e.preventDefault(); delTarget = it; }
   }
   const newIn = (project: string, kindId: string) => workspace.create(kindId, project);
+
+  /// Items drag as their address and the item itself (a flow onto a canvas…).
+  function drag(e: DragEvent, it: Item) {
+    if (!e.dataTransfer) return;
+    const { data: _data, ...light } = it;
+    e.dataTransfer.setData(ITEM_MIME, JSON.stringify(light));
+    e.dataTransfer.setData('text/plain', address(it));
+    e.dataTransfer.effectAllowed = 'copyLink';
+  }
 
   // ── Rename / Duplicate: the kind does it; the open tab follows ──
   let naming = $state<{ mode: 'rename' | 'duplicate'; item: Item; value: string; error: string; busy: boolean } | null>(null);
@@ -170,11 +179,12 @@
         {@const it = n.item}
         {@const kind = kindFor(it)}
         <button class="row leaf" class:on={isActive(it)} style="padding-left: {10 + depth * 14}px" onclick={() => workspace.open(it)} title="{kind.label} {it.project}/{n.label}"
+          draggable="true" ondragstart={(e) => drag(e, it)}
           oncontextmenu={(e) => openMenu(e, { item: it })} onkeydown={(e) => rowKey(e, it)}>
           <span class="ic {it.kind}">{kind.icon}</span><span class="nm">{n.label}</span>
         </button>
       {:else}
-        {@const def = !!n.create || isPinned(n)}
+        {@const def = !!n.open || isPinned(n)}
         {@const isOpen = (open[n.key] ?? def) || !!filter}
         <div class="folder-row" style="padding-left: {4 + depth * 14}px" role="presentation" oncontextmenu={(e) => openMenu(e, { folder: { project, label: n.label, create: n.create } })}>
           <button class="row folder" onclick={() => toggle(n.key, def)}>
