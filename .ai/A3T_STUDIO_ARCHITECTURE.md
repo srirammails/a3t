@@ -48,8 +48,12 @@ when the user may; every Studio document offers **Open in Console**.
 
 ### 2.1 Who works on which kind (user's guidelines, 2 Nov 2026)
 
-Each kind is a persona's workspace; its views answer that persona's questions.
-Governance (approvals, audit) comes later.
+Each kind serves these people; its views must answer their questions.
+**No persona-specific UI for now** (user, 2 Nov): the views stay the shared ones —
+a template is edited with the Template YAML form (the agent template editor: Agent,
+LLM, Tools, Permissions, Memory, I/O, Test), as in the Templates pop-in. The table
+says what a view must cover, not a separate screen. Governance (approvals, audit)
+comes later.
 
 | Kind | Who | What they need to see and decide |
 |---|---|---|
