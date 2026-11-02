@@ -67,16 +67,18 @@
         highlightActiveLine(),
         highlightSelectionMatches(),
         keymap.of([
+          // First: the default keymap binds Mod-Enter to "insert blank line",
+          // and the first binding wins.
+          {
+            key: 'Mod-Enter',
+            run: () => { onexecute?.(); return true; },
+          },
           ...defaultKeymap,
           ...historyKeymap,
           ...foldKeymap,
           ...searchKeymap,
           ...completionKeymap,
           indentWithTab,
-          {
-            key: 'Mod-Enter',
-            run: () => { onexecute?.(); return true; },
-          },
         ]),
         sql({ dialect: dialects[dialect] ?? StandardSQL }),
         cmPlaceholder(placeholder),

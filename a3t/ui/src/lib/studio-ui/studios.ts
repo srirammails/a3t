@@ -10,6 +10,8 @@ export type StudioConfig = {
   /// Kinds "+ New" creates.
   create: string[];
   layout?: Partial<StudioLayout>;
+  /// A resource category the Explorer shows first, open (e.g. `database`).
+  pin?: string;
   /// The home's banner, shown with nothing open.
   home: {
     headline: string;
@@ -38,6 +40,25 @@ export const STUDIOS = {
       description: 'Open a flow from the Explorer or start a new one. Check it under Problems, deploy it, then run or debug it from Runs — all without leaving the editor.',
       accent: 'spec',
       docsPath: '/concepts/workflows/',
+    },
+  },
+  db: {
+    app: 'db',
+    homeKind: 'database',
+    create: [],
+    pin: 'database',
+    layout: {
+      left: { size: 280, minimized: false, active: 'explorer' },
+      right: { size: 380, minimized: false, active: 'form' },
+      bottom: { size: 320, minimized: false, active: 'results' },
+    },
+    home: {
+      headline: 'Query your data.',
+      highlight: 'data',
+      subtitle: 'SQL, Redis and AQL against the databases in your projects — answers as tables.',
+      description: 'Pick a database in the Explorer. Write a query and run it with Ctrl/⌘+Enter; runs are kept under History, and Save query keeps one by name. Config shows the database resource itself.',
+      accent: 'control',
+      docsPath: '/concepts/resources/',
     },
   },
 } satisfies Record<string, StudioConfig>;

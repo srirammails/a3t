@@ -1,7 +1,8 @@
 import type { Item, ItemRef, Result } from '../items';
+import type { QueryResult } from '../adapters/query';
 import type { Doc } from '../workspace';
 
-export type Capability = 'edit' | 'run' | 'debug' | 'create' | 'delete' | 'rename' | 'duplicate';
+export type Capability = 'edit' | 'run' | 'debug' | 'create' | 'delete' | 'rename' | 'duplicate' | 'query';
 
 /// A panel a kind shows in a studio region. `id` names a panel component in
 /// studio-ui's registry.
@@ -16,8 +17,10 @@ export interface ItemKind {
   icon: string;
   match(item: Item): boolean;
   capabilities: Capability[];
-  /// Ids of studio-ui components: the center view, and the region panels.
-  views: { center: string; right?: PanelDef[]; bottom?: PanelDef[] };
+  /// Ids of studio-ui components: the center view (or, with `modes`, the views a
+  /// document switches between — `doc.ui.mode`, the first by default), and the
+  /// region panels.
+  views: { center: string; modes?: PanelDef[]; right?: PanelDef[]; bottom?: PanelDef[] };
   /// The Console section where this kind is managed in full, if any.
   console?: { section: string; title: string };
 
@@ -34,6 +37,9 @@ export interface ItemKind {
   masked?(doc: Doc): Set<string>;
   /// A count on a panel's tab (e.g. problems), or null.
   badge?(doc: Doc, panel: string): number | null;
+
+  /// Run a statement on the item (databases), in one of its languages.
+  query?(doc: Doc, text: string, lang: string): Promise<Result<QueryResult>>;
 
   remove?(item: Item): Promise<Result>;
   rename?(item: Item, to: string): Promise<Result>;

@@ -19,7 +19,7 @@ function loaded(doc: Doc, text: string, data: any) {
 }
 
 /// A resource: its `config`, saved through the registry.
-const resourceConfig: Pick<ItemKind, 'load' | 'save' | 'dirty' | 'masked'> = {
+export const resourceConfig: Pick<ItemKind, 'load' | 'save' | 'dirty' | 'masked'> = {
   async load(doc) {
     const r = await config.getResource(doc.ref.project, doc.ref.name);
     if (!r.ok) { doc.error = r.error; return; }

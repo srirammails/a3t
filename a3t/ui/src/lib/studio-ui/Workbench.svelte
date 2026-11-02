@@ -10,7 +10,7 @@
   import type { Studio } from './layout.svelte.ts';
   import { kindById, type Workspace } from '$lib/studio-core';
 
-  let { studio, workspace, homeKind, create = [], home, lead }: {
+  let { studio, workspace, homeKind, create = [], home, lead, pin }: {
     studio: Studio;
     workspace: Workspace;
     /// The kind whose panels show while no document (or one without panels) is active.
@@ -21,6 +21,8 @@
     home?: Snippet;
     /// The host's controls at the start of the tab bar.
     lead?: Snippet;
+    /// A resource category the Explorer shows first, open (e.g. `database`).
+    pin?: string;
   } = $props();
 
   const active = $derived(workspace.active);
@@ -48,7 +50,7 @@
 </div>
 
 {#snippet leftPanel(_id: string)}
-  <Explorer {workspace} />
+  <Explorer {workspace} {pin} />
 {/snippet}
 
 {#snippet sidePanel(id: string)}
@@ -72,7 +74,7 @@
       {@render home?.()}
     {:else}
       {#key active.address}
-        {@const V = VIEWS[kind.views.center]}
+        {@const V = VIEWS[kind.views.modes ? (active.ui.mode ?? kind.views.modes[0].id) : kind.views.center]}
         {#if V}<V doc={active} {workspace} {studio} />{/if}
       {/key}
     {/if}

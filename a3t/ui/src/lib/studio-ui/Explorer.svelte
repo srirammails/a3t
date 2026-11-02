@@ -8,7 +8,11 @@
   import DeleteConfirm from '$lib/components/shared/DeleteConfirm.svelte';
   import { address, can, kindFor, loadInventory, namesIn, type Inventory, type Item, type TreeNode, type Workspace } from '$lib/studio-core';
 
-  let { workspace }: { workspace: Workspace } = $props();
+  let { workspace, pin }: {
+    workspace: Workspace;
+    /// A resource category shown first in each project, open (e.g. `database`).
+    pin?: string;
+  } = $props();
 
   let inventory = $state<Inventory>({ tree: [], errors: [] });
   let loading = $state(false);
@@ -47,7 +51,19 @@
     };
     return nodes.map(keep).filter(Boolean) as TreeNode[];
   }
-  const shown = $derived(visible(inventory.tree));
+  /// The pinned category's folder moves out of Resources to the top of its project.
+  function pinned(nodes: TreeNode[]): TreeNode[] {
+    if (!pin) return nodes;
+    return nodes.map((ns) => {
+      const resources = ns.children?.find((c) => c.key === `${ns.key}/resources`);
+      const folder = resources?.children?.find((c) => c.key === `${ns.key}/resources/${pin}`);
+      if (!resources || !folder) return ns;
+      const rest = { ...resources, children: resources.children!.filter((c) => c !== folder), count: (resources.count ?? 0) - (folder.count ?? 0) };
+      return { ...ns, children: [folder, ...ns.children!.map((c) => (c === resources ? rest : c))] };
+    });
+  }
+  const isPinned = (n: TreeNode) => !!pin && n.key.endsWith(`/resources/${pin}`);
+  const shown = $derived(visible(pinned(inventory.tree)));
   const single = $derived(shown.length === 1);
   const activeRef = $derived(workspace.active?.ref ?? null);
   const isActive = (it: Item) => !!activeRef && address(activeRef) === address(it);
@@ -158,7 +174,7 @@
           <span class="ic {it.kind}">{kind.icon}</span><span class="nm">{n.label}</span>
         </button>
       {:else}
-        {@const def = !!n.create}
+        {@const def = !!n.create || isPinned(n)}
         {@const isOpen = (open[n.key] ?? def) || !!filter}
         <div class="folder-row" style="padding-left: {4 + depth * 14}px" role="presentation" oncontextmenu={(e) => openMenu(e, { folder: { project, label: n.label, create: n.create } })}>
           <button class="row folder" onclick={() => toggle(n.key, def)}>

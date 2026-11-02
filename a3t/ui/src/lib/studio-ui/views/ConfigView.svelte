@@ -5,6 +5,7 @@
   /// Console page that manages them.
   import YamlEditor from '$lib/components/editor/YamlEditor.svelte';
   import ConfigForm from '../parts/ConfigForm.svelte';
+  import ModeSwitch from '../parts/ModeSwitch.svelte';
   import { fromText, toText, type Doc, type Workspace } from '$lib/studio-core';
 
   let { doc, workspace }: { doc: Doc; workspace: Workspace } = $props();
@@ -38,6 +39,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="cv" onkeydown={onkey}>
   <div class="head">
+    <ModeSwitch {doc} {workspace} />
     <span class="kind">{kind.label}{doc.type ? ` · ${doc.type}` : ''}</span>
     <span class="mono">{doc.ref.project}/{doc.ref.name}</span>
     {#if dirty}<span class="dirty">unsaved</span>{/if}
