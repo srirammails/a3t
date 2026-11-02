@@ -67,7 +67,7 @@ export class Workspace {
     if (!this.find(addr)) {
       const kind = kindFor(item);
       const { type, data, ...ref } = item;
-      this.state.docs.push({ address: addr, ref, kind: kind.id, type, data, loaded: !kind.load, ui: {} });
+      this.state.docs.push({ address: addr, ref, kind: kind.id, type, data, loaded: !kind.load, ui: kind.initialUi?.() ?? {} });
     }
     return this.select(addr)!;
   }
@@ -94,7 +94,7 @@ export class Workspace {
     this.created += 1;
     const { ref, text } = kind.create(project, this.created);
     const addr = `${address(ref)}#new-${this.created}`;
-    this.state.docs.push({ address: addr, ref, kind: kind.id, text, saved: '', loaded: true, isNew: true, ui: {} });
+    this.state.docs.push({ address: addr, ref, kind: kind.id, text, saved: '', loaded: true, isNew: true, ui: kind.initialUi?.() ?? {} });
     return this.select(addr);
   }
 

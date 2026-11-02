@@ -21,6 +21,8 @@ export interface ItemKind {
   /// The Console section where this kind is managed in full, if any.
   console?: { section: string; title: string };
 
+  /// A document's view state when it opens (`doc.ui`); views may bind to these.
+  initialUi?(): Record<string, unknown>;
   /// Fill an opened document from the platform (text, data).
   load?(doc: Doc): Promise<void>;
   /// A new, unsaved item in `project` (the n-th this session).

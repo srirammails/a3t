@@ -15,6 +15,9 @@ export const flowKind: ItemKind = {
     bottom: [{ id: 'runs', title: 'Runs' }, { id: 'problems', title: 'Problems' }],
   },
 
+  /// The run dialog of the Runs panel, opened by the view's Run / Debug.
+  initialUi: () => ({ runDialog: false, runDebug: false }),
+
   async load(doc) {
     const r = await flows.getYaml(doc.ref.project, doc.ref.name);
     doc.text = r.ok ? r.data : '';
