@@ -510,7 +510,7 @@ Each step ships on dash.dev and is checked there before the next.
 | 1b | Entry point (`<Studio>`, `mountStudio`), Studio home with recent items, project scope from the host, Console imports only the entry point | **done 2 Nov 2026** |
 | 2 | `config` adapter + ConfigForm; every non-flow item opens as a config form | JSON previews gone — **done 2 Nov 2026**: resources, canvases and triggers edit and save (Form or JSON, Ctrl/⌘+S); masked values stay as stored unless replaced; templates read-only until their own view (saving one changes its agents) |
 | 3 | `query` adapter + `database` kind; DB Console = Workbench pinned to Databases (history, saved queries kept) | DB Console in the Studio — **done 2 Nov 2026**: Query and Config views (`views.modes`), Results / History / Saved panels, ADB AQL or SQL; the previous console one release behind "Classic console"; its AI pane was a placeholder and is not carried over |
-| 4 | `chat`, `mcp`, `trigger` kinds | act on every resource |
+| 4 | `chat`, `mcp`, `trigger` kinds | act on every resource — **done 2 Nov 2026**: LLMs (Chat), MCP servers (Tools: list, form from the tool's input schema, call), triggers (Fire: webhook POST, CloudEvent of the trigger's `source` type, or start the workflow targets; Runs of the target below); each keeps a Config view |
 | 5 | `canvas`, `runtime`, `run` kinds; Deploy from the Studio | operate from the Studio |
 | 6 | `memory` kind + AQL view (needs ADB scopes) | real memory view |
 | 7 | Compose view + drag and drop | one deployable workflow |
@@ -525,8 +525,8 @@ Resolved (2 Nov 2026): two channels, Console and Studio; one Studio codebase for
 web and VS Code; the layer and kind architecture above.
 
 Open — defaults in brackets, used unless decided otherwise:
-1. LLM chat: single-turn until the flow takes `messages`? [yes; add `messages` in step 4]
-2. Firing a cron trigger: run its target flow with the payload; an event trigger: send a CloudEvent? [yes]
+1. LLM chat: ~~single-turn until the flow takes `messages`?~~ The Studio sends the conversation; `a3t-test-resource` passes it as `messages` in the repo (2 Nov) — live once that flow is redeployed.
+2. ~~Firing a cron trigger / an event trigger?~~ Done as proposed (step 4).
 3. Old DB Console: removed in step 3, or kept behind a link until the new one is tried? [kept one release]
 4. Read-only developers: Studio read-only (§2), or Console only? [Studio read-only]
 5. One web Studio with scopes, or separate Flow / DB / Memory studios on the web? [one Studio, scopes as Explorer views; the routes `/flow-editor`, `/db-console` open it with that scope]

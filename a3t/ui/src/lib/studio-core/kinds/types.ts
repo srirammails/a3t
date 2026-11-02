@@ -1,8 +1,9 @@
 import type { Item, ItemRef, Result } from '../items';
 import type { QueryResult } from '../adapters/query';
+import type { ChatMessage, Fired, Tool } from '../adapters/act';
 import type { Doc } from '../workspace';
 
-export type Capability = 'edit' | 'run' | 'debug' | 'create' | 'delete' | 'rename' | 'duplicate' | 'query';
+export type Capability = 'edit' | 'run' | 'debug' | 'create' | 'delete' | 'rename' | 'duplicate' | 'query' | 'chat' | 'tools' | 'fire';
 
 /// A panel a kind shows in a studio region. `id` names a panel component in
 /// studio-ui's registry.
@@ -40,6 +41,13 @@ export interface ItemKind {
 
   /// Run a statement on the item (databases), in one of its languages.
   query?(doc: Doc, text: string, lang: string): Promise<Result<QueryResult>>;
+  /// The LLM's answer to the conversation so far (LLMs).
+  chat?(doc: Doc, messages: ChatMessage[]): Promise<Result<string>>;
+  /// The tools an MCP server offers, and calling one (MCP servers).
+  tools?(doc: Doc): Promise<Result<Tool[]>>;
+  callTool?(doc: Doc, tool: string, args: unknown): Promise<Result<unknown>>;
+  /// Fire the item with a payload as its type would (triggers).
+  fire?(doc: Doc, payload: unknown): Promise<Result<Fired>>;
 
   remove?(item: Item): Promise<Result>;
   rename?(item: Item, to: string): Promise<Result>;

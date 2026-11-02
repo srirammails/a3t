@@ -6,6 +6,7 @@ export * from './items';
 export type { StudioHost } from './host';
 export { KINDS, kindFor, kindById, can, languagesOf, type ItemKind, type Capability, type PanelDef } from './kinds';
 export type { QueryResult } from './adapters/query';
+export type { ChatMessage, Tool, Fired } from './adapters/act';
 export { history, remember, saved, saveQuery, forget, type HistoryEntry, type SavedQuery } from './queries';
 export { Workspace, emptyWorkspace, type Doc, type WorkspaceState } from './workspace';
 export { maskedPaths, getAt, setAt, removeAt, pathKey, fromText, toText, type Path } from './config';

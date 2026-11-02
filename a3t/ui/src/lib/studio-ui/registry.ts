@@ -5,17 +5,24 @@ import type { Component } from 'svelte';
 import FlowView from './views/FlowView.svelte';
 import ConfigView from './views/ConfigView.svelte';
 import QueryView from './views/QueryView.svelte';
+import ChatView from './views/ChatView.svelte';
+import ToolsView from './views/ToolsView.svelte';
+import FireView from './views/FireView.svelte';
 import FlowAssistPanel from './panels/FlowAssistPanel.svelte';
 import RunsPanel from './panels/RunsPanel.svelte';
 import ProblemsPanel from './panels/ProblemsPanel.svelte';
 import ResultsPanel from './panels/ResultsPanel.svelte';
 import HistoryPanel from './panels/HistoryPanel.svelte';
 import SavedPanel from './panels/SavedPanel.svelte';
+import TargetRunsPanel from './panels/TargetRunsPanel.svelte';
 
 export const VIEWS: Record<string, Component<any>> = {
   flow: FlowView,
   config: ConfigView,
   query: QueryView,
+  chat: ChatView,
+  tools: ToolsView,
+  fire: FireView,
 };
 
 export const PANELS: Record<string, Component<any>> = {
@@ -26,4 +33,5 @@ export const PANELS: Record<string, Component<any>> = {
   results: ResultsPanel,
   history: HistoryPanel,
   saved: SavedPanel,
+  'target-runs': TargetRunsPanel,
 };

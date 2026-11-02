@@ -907,6 +907,12 @@ export async function fetchAgentHistory(sessionId: string): Promise<{ role: stri
 // The webhook is fire-and-forget — it returns a delivery ack with the run instance id
 // embedded in targets[0] ("workflow:ns/name (INSTANCE_ID)"). We extract it and poll
 // get_execution_status for the final output.
+/// Post a payload to a webhook trigger's path (`/webhook/<path>`); the answer
+/// lists what it started.
+export function fireWebhook(path: string, body: unknown) {
+  return request(`/webhook${path.startsWith('/') ? '' : '/'}${path}`, { method: 'POST', body: JSON.stringify(body ?? {}) });
+}
+
 export async function webhookChat(
   epPath: string,
   body: Record<string, any>,

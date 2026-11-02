@@ -3,6 +3,7 @@
 /// the registry and take over the types they handle.
 import * as registry from '../adapters/registry';
 import * as config from '../adapters/config';
+import * as act from '../adapters/act';
 import { fail, ok } from '../items';
 import { fromText, maskedPaths, toText } from '../config';
 import type { Doc } from '../workspace';
@@ -45,8 +46,16 @@ export const resourceConfig: Pick<ItemKind, 'load' | 'save' | 'dirty' | 'masked'
 export const triggerKind: ItemKind = {
   id: 'trigger', label: 'Trigger', icon: '⚡',
   match: (it) => it.kind === 'trigger',
-  capabilities: ['edit', 'delete'],
-  views: configViews,
+  capabilities: ['edit', 'delete', 'fire'],
+  /// Fire it, and watch its target flow's runs below; or edit its config.
+  views: {
+    center: 'fire',
+    modes: [{ id: 'fire', title: 'Fire' }, { id: 'config', title: 'Config' }],
+    bottom: [{ id: 'target-runs', title: 'Runs' }],
+  },
+  initialUi: () => ({ payload: '{\n  "message": "Hello from the Studio"\n}\n', firing: false, fired: null, error: '' }),
+  /// As saved (not as being edited): what the platform will fire.
+  fire: (doc, payload) => act.fire({ namespace: doc.data?.namespace ?? doc.ref.project, config: doc.data?.config, targets: doc.data?.targets ?? [] }, payload),
   console: { section: 'triggers', title: 'Triggers' },
   /// What is edited: everything but the id and the status the platform keeps.
   async load(doc) {
@@ -64,6 +73,7 @@ export const triggerKind: ItemKind = {
     const r = await config.putTrigger(doc.ref.id, { ...value, namespace: doc.data?.namespace ?? doc.ref.project });
     if (!r.ok) return r;
     doc.saved = doc.text;
+    doc.data = { ...doc.data, ...value };
     return ok({ ...doc.ref, name: String(value.name ?? doc.ref.name) });
   },
   dirty: textDirty,
