@@ -29,6 +29,8 @@ export const APP_ICONS: Record<string, string> = {
     terminal:  '<rect x="1" y="2" width="14" height="12" rx="1.5"/><path d="M4 6l3 2-3 2M8 10h4"/>',
     settings:  '<path d="M8 10.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"/><path d="M13 8a5 5 0 00-.1-1l1.5-1.2-1.5-2.6-1.8.7A5 5 0 009.9 3l-.3-1.9H6.4L6.1 3a5 5 0 00-1.2.7l-1.8-.7-1.5 2.6L3.1 7A5 5 0 003 8a5 5 0 00.1 1l-1.5 1.2 1.5 2.6 1.8-.7c.4.3.8.5 1.2.7l.3 1.9h3.2l.3-1.9c.4-.2.8-.4 1.2-.7l1.8.7 1.5-2.6L12.9 9c.1-.3.1-.6.1-1z"/>',
     shield:    '<path d="M8 1l5.5 2.2v4c0 3.5-2.3 6.4-5.5 7.6C4.8 13.6 2.5 10.7 2.5 7.2v-4L8 1z"/><path d="M5.8 8l1.6 1.6L10.4 6.5"/>',
+    // An editor window: title bar, then </> — the Studio.
+    studio:    '<rect x="1.5" y="2" width="13" height="12" rx="1.5"/><path d="M1.5 5h13"/><path d="M3.5 3.5h.01M5.2 3.5h.01" stroke-width="1.6" stroke-linecap="round"/><path d="M6.3 7.3L4.3 9.4l2 2.1M9.7 7.3l2 2.1-2 2.1" stroke-linecap="round" stroke-linejoin="round"/>',
     idcard:    '<rect x="1.5" y="3" width="13" height="10" rx="1.5"/><circle cx="5.5" cy="7.5" r="1.5"/><path d="M3.5 11c.3-1.2 1.1-1.8 2-1.8s1.7.6 2 1.8"/><path d="M9.5 6.5h3.5M9.5 9h3"/>',
 };
 

@@ -44,7 +44,7 @@ export const MENU_CONFIG: MenuGroup[] = [
       // One editor for every kind of item (flows, databases, LLMs, MCP servers,
       // triggers, canvases). The Query Console is the Studio pinned to
       // databases; /db-console still opens it for old links.
-      { type: 'flow-editor',      label: 'Studio',           tag: null, icon: 'flow',     roles: ALL_ROLES },
+      { type: 'flow-editor',      label: 'Studio',           tag: null, icon: 'studio',   roles: ALL_ROLES },
       { type: 'knowledge',        label: 'Knowledge',        tag: null, icon: 'kg', roles: ALL_ROLES },
     ],
   },
