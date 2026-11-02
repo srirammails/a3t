@@ -1,0 +1,47 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t-test
+  name: a3t-test-events-listen
+  version: 1.0.0
+  metadata:
+    description: >
+      Durable listen (L29). Waits for an a3t.test.ping event whose data.ref is
+      this run's ref, then returns what the event carried. While it waits the
+      run holds no worker (phase "waiting"). Wake it with
+      a3t-test-events-emit (same ref), the "Send event…" box in the run view,
+      or POST /events/a3t-test. Gives up after 10 minutes (caught).
+input:
+  schema:
+    type: object
+    properties:
+      ref:
+        type: string
+        description: Correlation reference; the emit must use the same one
+    required:
+      - ref
+do:
+- wait:
+    try:
+      do:
+      - ping:
+          listen:
+            to:
+              one:
+                with:
+                  type: a3t.test.ping
+                  data:
+                    ref: ${ .ref }
+          timeout:
+            after:
+              minutes: 10
+      - heard:
+          set:
+            heard: true
+            ref: ${ .[0].ref }
+            note: ${ .[0].note // null }
+      catch:
+        do:
+        - gave-up:
+            set:
+              heard: false
+              timed_out: true

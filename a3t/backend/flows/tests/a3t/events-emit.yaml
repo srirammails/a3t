@@ -1,0 +1,47 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t-test
+  name: a3t-test-events-emit
+  version: 1.0.0
+  metadata:
+    description: >
+      Emit (L29, L37, L38). Sends an a3t.test.ping event in a3t-test with the
+      given ref and note. Wakes a3t-test-events-listen runs waiting for that
+      ref, and starts a3t-test-events-receipt if the a3t.test.ping event
+      trigger exists. The event id is fixed per run step, so a retry after a
+      crash is not delivered twice. The step after it sends the same id again
+      to show that a repeat wakes and starts nothing.
+input:
+  schema:
+    type: object
+    properties:
+      ref:
+        type: string
+      note:
+        type: string
+    required:
+      - ref
+do:
+- ping:
+    emit:
+      event:
+        with:
+          id: ${ "a3t-test-ping-" + .ref }
+          type: a3t.test.ping
+          source: /a3t-test/emit
+          data:
+            ref: ${ .ref }
+            note: ${ .note // "hello" }
+- ping-again:
+    emit:
+      event:
+        with:
+          id: ${ "a3t-test-ping-" + .ref }
+          type: a3t.test.ping
+          source: /a3t-test/emit
+          data:
+            ref: ${ .ref }
+            note: repeat — must be dropped
+- done:
+    set:
+      sent: ${ "a3t-test-ping-" + .ref }

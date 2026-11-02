@@ -4,7 +4,7 @@
   /// debug run paused at a breakpoint, the controls to continue, step, or edit
   /// the next step's input. Reads the engine's run tools; polls while live.
   import { untrack } from 'svelte';
-  import { runsApi, type DebugCommand } from '$lib/services/api';
+  import { runsApi, answerApproval, type DebugCommand } from '$lib/services/api';
   import { nodeKey, type FlowDebug } from './debugState.svelte.ts';
 
   /// `shared`: the flow's state shared with the editor graph — this view
@@ -140,6 +140,16 @@
     sending = false;
     const n = r.data?.woke?.length ?? 0;
     notice = n ? `Event sent — woke ${n} run${n > 1 ? 's' : ''}.` : 'Event sent — no waiting run matched it.';
+    await load();
+  }
+
+  // ── Approvals: answer the question a run waits on ──
+  async function answer(requestId: string, allow: boolean) {
+    busy = true; message = ''; notice = '';
+    const ok = await answerApproval(requestId, allow, 'once');
+    busy = false;
+    if (!ok) { message = 'Could not answer — only the approver named in the request can.'; return; }
+    notice = allow ? 'Allowed once — the run resumes.' : 'Refused — the run resumes and is told.';
     await load();
   }
 
@@ -294,7 +304,9 @@
       {@const ear = (run.steps ?? []).find((s: any) => s.status === 'waiting' && s.listening)}
       {@const ask = (run.steps ?? []).find((s: any) => s.status === 'waiting' && s.asking)}
       {#if ask}
-        <div class="rv-note">⏳ Waiting for {ask.asking.approver ?? 'a person'} to approve <code>{ask.asking.tool}</code>{ask.asking.reason ? ` — ${ask.asking.reason}` : ''}. No worker is held; the answer (in the chat, or <code>POST /inputs/{ask.asking.request_id}</code>) resumes it on any worker{ask.asking.expires_at ? `; unanswered, it is refused at ${when(ask.asking.expires_at)}` : ''}.</div>
+        <div class="rv-note">⏳ Waiting for {ask.asking.approver ?? 'a person'} to approve <code>{ask.asking.tool}</code>{ask.asking.reason ? ` — ${ask.asking.reason}` : ''}. No worker is held; the answer (here, in the chat, or <code>POST /inputs/{ask.asking.request_id}</code>) resumes it on any worker{ask.asking.expires_at ? `; unanswered, it is refused at ${when(ask.asking.expires_at)}` : ''}.
+          <button class="lnk" disabled={busy} onclick={() => answer(ask.asking.request_id, true)}>Allow once</button>
+          <button class="lnk" disabled={busy} onclick={() => answer(ask.asking.request_id, false)}>Refuse</button></div>
       {:else if ear}
         <div class="rv-note" title={JSON.stringify(ear.listening.filters)}>⏳ Listening at {ear.step_key} for {ear.listening.mode === 'all' ? 'all of' : ear.listening.mode === 'any' ? 'any of' : ''} {(ear.listening.filters ?? []).map((f: any) => f.type).join(', ') || 'any event'} — no worker is held; a matching event (an <code>emit</code>, or <code>send_event</code>) wakes it on any worker.
           {#if run.can_steer && !sending}<button class="lnk" disabled={busy} onclick={() => openSend(ear.listening)}>Send event…</button>{/if}</div>

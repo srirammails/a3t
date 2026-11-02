@@ -1,0 +1,28 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t-test
+  name: a3t-test-events-listen-timeout
+  version: 1.0.0
+  metadata:
+    description: >
+      Listen timeout (L29). Listens for an event nobody sends, with a 20 s
+      timeout inside try/catch. The run lets go while waiting and is woken by
+      its timeout on any worker; expect output {timed_out: true} after ~20 s.
+do:
+- guard:
+    try:
+      do:
+      - never:
+          listen:
+            to:
+              any:
+              - with:
+                  type: a3t.test.never
+          timeout:
+            after:
+              seconds: 20
+      catch:
+        do:
+        - timed-out:
+            set:
+              timed_out: true

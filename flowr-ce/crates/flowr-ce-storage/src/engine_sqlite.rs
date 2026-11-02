@@ -315,6 +315,19 @@ impl SqliteStore {
         conn.pragma_update(None, "synchronous", "FULL").map_err(be)?;
         conn.pragma_update(None, "busy_timeout", 5000).map_err(be)?;
         conn.pragma_update(None, "foreign_keys", "ON").map_err(be)?;
+        // `waits` from a build before it had `kind` (never released, keyed by
+        // wait id alone): rebuilt in today's shape.
+        let old_waits: bool = conn
+            .query_row("SELECT count(*) FROM pragma_table_info('waits')", [], |r| r.get::<_, i64>(0))
+            .map_err(be)?
+            > 0
+            && conn
+                .query_row("SELECT count(*) FROM pragma_table_info('waits') WHERE name = 'kind'", [], |r| r.get::<_, i64>(0))
+                .map_err(be)?
+                == 0;
+        if old_waits {
+            conn.execute_batch("DROP TABLE waits").map_err(be)?;
+        }
         conn.execute_batch(SCHEMA).map_err(be)?;
         Ok(Self { conn: Arc::new(Mutex::new(conn)), subscribers: Mutex::new(HashMap::new()) })
     }

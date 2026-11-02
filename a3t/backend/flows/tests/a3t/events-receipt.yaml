@@ -1,0 +1,18 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t-test
+  name: a3t-test-events-receipt
+  version: 1.0.0
+  metadata:
+    description: >
+      Event trigger target (L37). Started by an event trigger in a3t-test for
+      type a3t.test.ping (create it once: create_trigger, type event, source
+      a3t.test.ping, target workflow a3t-test/a3t-test-events-receipt). Its
+      input is the CloudEvent; one run per event id however often it is sent.
+do:
+- receipt:
+    set:
+      event_id: ${ .id }
+      event_type: ${ .type }
+      ref: ${ .data.ref }
+      note: ${ .data.note // null }

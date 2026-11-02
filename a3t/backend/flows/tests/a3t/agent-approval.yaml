@@ -1,0 +1,40 @@
+document:
+  dsl: 1.0.3
+  namespace: a3t-test
+  name: a3t-test-agent-approval
+  version: 1.0.0
+  metadata:
+    description: >
+      Agent fine mode and a durable approval (L1, L33). An agent whose
+      enabled tools are empty is asked to list flows; for its owner (you) the
+      policy asks instead of refusing. The run then waits durably (phase
+      "waiting", no worker held): answer with Allow once / Refuse in the run
+      view (or the chat). Close the tab, or restart the console, before
+      answering — the run still resumes. Its journal shows each model and
+      tool call under /agent/fx/…
+input:
+  schema:
+    type: object
+    properties:
+      llm_resource:
+        type: string
+        description: LLM resource (default default/Austra)
+do:
+- agent:
+    call: a3t:agent
+    with:
+      message: >
+        Use the list_flows tool with namespace a3t-test and tell me how many
+        flows it returns. If the tool is refused, say so.
+      session_id: ${ "a3t-test-approval-" + $workflow.id }
+      config:
+        llm_resource: ${ .llm_resource // "default/Austra" }
+        mcp_servers:
+        - a3t/agent-flows
+        enabled_tools: []
+        owner: ${ $context._principal.user }
+        max_iterations: 4
+- result:
+    set:
+      answer: ${ .content }
+      tool_calls: ${ .tool_calls_made }
