@@ -118,6 +118,9 @@ async fn dispatch(store: &dyn EngineStore, op: &str, a: &Value) -> StoreResult<V
         "open_wait" => out(store.open_wait(arg(a, "run")?, arg(a, "epoch")?, &arg::<String>(a, "wait_id")?, arg(a, "correlation")?).await),
         "close_wait" => out(store.close_wait(arg(a, "run")?, arg(a, "epoch")?, &arg::<String>(a, "wait_id")?).await),
         "deliver_event" => out(store.deliver_event(&arg::<String>(a, "namespace")?, arg(a, "event")?).await),
+        "open_approval" => out(store.open_approval(arg(a, "run")?, arg(a, "epoch")?, &arg::<String>(a, "wait_id")?, arg(a, "request")?).await),
+        "approvals" => out(store.approvals().await),
+        "decide_approval" => out(store.decide_approval(&arg::<String>(a, "wait_id")?, arg(a, "decision")?, &arg::<String>(a, "by")?).await),
         "append" => out(store.append(arg(a, "run")?, arg(a, "epoch")?, &arg::<Vec<Record>>(a, "records")?).await),
         "read_from" => out(store.read_from(arg(a, "run")?, arg(a, "after_seq")?).await),
         "commit_step" => out(store.commit_step(arg(a, "run")?, arg(a, "epoch")?, arg(a, "commit")?).await),
@@ -342,6 +345,15 @@ impl RunStore for RemoteEngineStore {
     }
     async fn deliver_event(&self, namespace: &str, event: Value) -> StoreResult<Vec<RunId>> {
         self.op("deliver_event", json!({ "namespace": namespace, "event": event })).await
+    }
+    async fn open_approval(&self, run: RunId, epoch: Epoch, wait_id: &str, request: Value) -> StoreResult<()> {
+        self.op("open_approval", json!({ "run": run, "epoch": epoch, "wait_id": wait_id, "request": request })).await
+    }
+    async fn approvals(&self) -> StoreResult<Vec<(RunId, String, Value)>> {
+        self.op("approvals", json!({})).await
+    }
+    async fn decide_approval(&self, wait_id: &str, decision: Value, by: &str) -> StoreResult<bool> {
+        self.op("decide_approval", json!({ "wait_id": wait_id, "decision": decision, "by": by })).await
     }
 }
 

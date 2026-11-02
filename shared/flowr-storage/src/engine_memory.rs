@@ -45,6 +45,8 @@ struct Inner {
 }
 
 struct WaitRow {
+    /// `event` (a `listen`) or `approval`.
+    kind: &'static str,
     wait_id: String,
     run: RunId,
     namespace: String,
@@ -491,8 +493,59 @@ impl RunStore for MemoryStore {
         }
         let namespace = inner.runs[&run].namespace.clone();
         inner.push(run, epoch, &[Record::WaitForEvents { wait_id: wait_id.to_string(), correlation: correlation.clone() }], Utc::now());
-        inner.waits.push(WaitRow { wait_id: wait_id.to_string(), run, namespace, correlation, received: Vec::new() });
+        inner.waits.push(WaitRow { kind: "event", wait_id: wait_id.to_string(), run, namespace, correlation, received: Vec::new() });
         Ok(())
+    }
+
+    async fn open_approval(&self, run: RunId, epoch: Epoch, wait_id: &str, request: Value) -> StoreResult<()> {
+        let mut inner = self.lock();
+        inner.check_epoch(run, epoch)?;
+        if inner.waits.iter().any(|w| w.run == run && w.wait_id == wait_id) {
+            return Ok(());
+        }
+        let namespace = inner.runs[&run].namespace.clone();
+        inner.push(run, epoch, &[Record::ApprovalRequested { wait_id: wait_id.to_string(), request: request.clone() }], Utc::now());
+        inner.waits.push(WaitRow { kind: "approval", wait_id: wait_id.to_string(), run, namespace, correlation: request, received: Vec::new() });
+        Ok(())
+    }
+
+    async fn approvals(&self) -> StoreResult<Vec<(RunId, String, Value)>> {
+        let inner = self.lock();
+        Ok(inner
+            .waits
+            .iter()
+            .filter(|w| w.kind == "approval" && inner.runs.get(&w.run).is_some_and(|r| !r.phase.is_terminal()))
+            .map(|w| (w.run, w.wait_id.clone(), w.correlation.clone()))
+            .collect())
+    }
+
+    async fn decide_approval(&self, wait_id: &str, decision: Value, by: &str) -> StoreResult<bool> {
+        let now = Utc::now();
+        let (run, pool) = {
+            let mut inner = self.lock();
+            let Some(i) = inner.waits.iter().position(|w| w.kind == "approval" && w.wait_id == wait_id) else {
+                return Ok(false);
+            };
+            let run = inner.waits[i].run;
+            let Some((phase, epoch, ns, flow)) = inner.runs.get(&run).map(|r| (r.phase, r.epoch, r.namespace.clone(), r.flow.clone())) else {
+                inner.waits.remove(i);
+                return Ok(false);
+            };
+            inner.waits.remove(i);
+            if phase.is_terminal() {
+                return Ok(false);
+            }
+            inner.push(run, epoch, &[Record::ApprovalDecided { wait_id: wait_id.to_string(), decision, by: by.to_string() }], now);
+            if !inner.owned_now(run, now) {
+                inner.runs.get_mut(&run).unwrap().phase = RunPhase::Pending;
+            }
+            let pool = pool_for(&ns, &flow);
+            inner.enqueue(NewTask { pool: pool.clone(), ..NewTask::resume(run, &ns, Some(wait_wake_key(run, wait_id)), now) });
+            (run, pool)
+        };
+        self.notify(&tasks_topic(&pool), json!({ "resume": run }));
+        self.notify(&run_topic(run), json!({ "approval": true }));
+        Ok(true)
     }
 
     async fn close_wait(&self, run: RunId, epoch: Epoch, wait_id: &str) -> StoreResult<bool> {
@@ -511,7 +564,7 @@ impl RunStore for MemoryStore {
             let mut inner = self.lock();
             let mut i = 0;
             while i < inner.waits.len() {
-                if inner.waits[i].namespace != namespace {
+                if inner.waits[i].namespace != namespace || inner.waits[i].kind != "event" {
                     i += 1;
                     continue;
                 }

@@ -267,17 +267,19 @@ impl WorkflowExecutor {
                     };
                     let started = std::time::Instant::now();
                     // `timeout.after` on the task: an ordinary, catchable timeout error.
+                    // Effects inside the task (an agent's model and tool calls)
+                    // are recorded under its path; none when the run has no journal.
+                    let body = crate::effects::scoped(
+                        self.step_hook.clone(),
+                        &task_path,
+                        self.run_task_body(named_task, task_idx, &current, task_input.clone(), ctx, &task_path),
+                    );
                     let res = match named_task.timeout.as_ref().and_then(|t| t.duration()) {
-                        Some(limit) => match tokio::time::timeout(
-                            limit,
-                            self.run_task_body(named_task, task_idx, &current, task_input.clone(), ctx, &task_path),
-                        )
-                        .await
-                        {
+                        Some(limit) => match tokio::time::timeout(limit, body).await {
                             Ok(r) => r,
                             Err(_) => Err(RuntimeError::Timeout(format!("task '{}' took longer than {}s", named_task.name, limit.as_secs()))),
                         },
-                        None => self.run_task_body(named_task, task_idx, &current, task_input.clone(), ctx, &task_path).await,
+                        None => body.await,
                     };
                     let us = started.elapsed().as_micros() as u64;
                     if let Some(h) = &self.step_hook {

@@ -428,25 +428,50 @@ async fn agent_metrics_handler(
 
 // --- Human input handlers ---
 
+/// Approvals runs are waiting for in the engine store (durable, L1), in the
+/// shape of an `InputRequest`.
+async fn durable_approvals(storage: &dyn StorageBackend) -> Vec<Value> {
+    let Some(engine) = storage.engine() else { return Vec::new() };
+    engine
+        .approvals()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(run, id, mut req)| {
+            req["id"] = json!(id);
+            req["channel"] = json!("chat");
+            req["status"] = json!("pending");
+            req["run_id"] = json!(run);
+            req
+        })
+        .collect()
+}
+
 /// List all pending input requests
-async fn list_inputs_handler() -> impl IntoResponse {
-    let pending = flowr_ce_agents::input_manager().list_pending().await;
+async fn list_inputs_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut pending: Vec<Value> = flowr_ce_agents::input_manager().list_pending().await.into_iter().map(|r| json!(r)).collect();
+    pending.extend(durable_approvals(state.storage.as_ref()).await);
     let count = pending.len();
     Json(json!({ "inputs": pending, "count": count }))
 }
 
 /// Get a specific pending input request
 async fn get_input_handler(
+    State(state): State<Arc<AppState>>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    match flowr_ce_agents::input_manager().get_pending(&request_id).await {
-        Some(req) => (StatusCode::OK, Json(json!(req))),
+    if let Some(req) = flowr_ce_agents::input_manager().get_pending(&request_id).await {
+        return (StatusCode::OK, Json(json!(req)));
+    }
+    match durable_approvals(state.storage.as_ref()).await.into_iter().find(|r| r["id"] == request_id) {
+        Some(req) => (StatusCode::OK, Json(req)),
         None => (StatusCode::NOT_FOUND, Json(json!({"error": format!("Input request '{}' not found or expired", request_id)}))),
     }
 }
 
 /// Submit a response to a pending input request (resumes the workflow)
 async fn submit_input_handler(
+    State(state): State<Arc<AppState>>,
     axum::extract::Path(request_id): axum::extract::Path<String>,
     principal: Option<Extension<Principal>>,
     Json(body): Json<Value>,
@@ -458,6 +483,27 @@ async fn submit_input_handler(
     // principal entitled to answer it; anyone else is told it does not exist,
     // so ids cannot be probed.
     let pending = flowr_ce_agents::input_manager().get_pending(&request_id).await;
+    // A durable approval: only its approver may answer; the answer is
+    // journaled and wakes the run, wherever it runs.
+    if pending.is_none() {
+        if let Some(req) = durable_approvals(state.storage.as_ref()).await.into_iter().find(|r| r["id"] == request_id) {
+            let expected = req.pointer("/context/approver").and_then(|v| v.as_str());
+            let caller = principal.as_ref().map(|Extension(p)| p.id().to_string());
+            if expected.is_none() || expected != caller.as_deref() {
+                warn!(request_id = %request_id, "rejected approval answer from a principal that is not the approver");
+                return (StatusCode::NOT_FOUND, Json(json!({"error": "input request not found"}))).into_response();
+            }
+            let engine = state.storage.engine().expect("listed by the engine");
+            return match engine.decide_approval(&request_id, body, caller.as_deref().unwrap_or_default()).await {
+                Ok(true) => {
+                    info!(request_id = %request_id, "approval answered; the run resumes");
+                    Json(json!({"submitted": true, "request_id": request_id})).into_response()
+                }
+                Ok(false) => (StatusCode::NOT_FOUND, Json(json!({"error": "input request not found"}))).into_response(),
+                Err(e) => Json(json!({"error": e.to_string(), "request_id": request_id})).into_response(),
+            };
+        }
+    }
     if let Some(req) = &pending {
         if req.request_type == "authz" {
             let expected = req

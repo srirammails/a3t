@@ -19,6 +19,7 @@ pub mod context;
 pub mod error;
 pub mod executor;
 pub mod handlers;
+pub mod effects;
 
 pub use traits::{RuntimeProvider, TaskHandler, TaskResult, FlowDirective, StepHook, StepOutcome, StepReplay};
 pub use registry::RuntimeRegistry;

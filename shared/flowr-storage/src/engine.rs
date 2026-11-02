@@ -342,6 +342,16 @@ pub trait RunStore: Send + Sync {
     /// is closed, and its run gets `EventReceived` and a `ResumeRun` task, in
     /// one transaction. Returns the runs woken.
     async fn deliver_event(&self, namespace: &str, event: Value) -> StoreResult<Vec<RunId>>;
+    /// A run asks a person (an approval, §5.9): journal `ApprovalRequested` and
+    /// open the wait, keyed by `wait_id` (the request id, unique), atomically.
+    /// Opening it again is a no-op.
+    async fn open_approval(&self, run: RunId, epoch: Epoch, wait_id: &str, request: Value) -> StoreResult<()>;
+    /// Open approvals, oldest first: (run, request id, request).
+    async fn approvals(&self) -> StoreResult<Vec<(RunId, String, Value)>>;
+    /// Answer an open approval: journal `ApprovalDecided`, close it and enqueue
+    /// `ResumeRun`, in one transaction. False if it is not open (answered,
+    /// expired, or its run ended).
+    async fn decide_approval(&self, wait_id: &str, decision: Value, by: &str) -> StoreResult<bool>;
 }
 
 // ── Event waits (`listen`) ──

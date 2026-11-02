@@ -18,6 +18,14 @@
 //!   event (from `emit` or `send_event`) wakes it on any worker, and the step
 //!   outputs the events received. A `timeout` on the step closes the wait and
 //!   fails the step (catchable) if nothing came in time.
+//! - **Agents** (`call:a3t:agent`, fine mode, spec §5.12) record each model
+//!   call and tool call as an effect under `<step>/fx/…`. A resumed agent
+//!   replays recorded ones and continues from the first unrecorded call; an
+//!   agent step that was interrupted runs again (it is never in doubt as a
+//!   whole), and a tool call that started but never finished is reported to
+//!   the model as in doubt instead of being repeated.
+//! - **Approvals** an agent asks for are durable waits: the question is
+//!   recorded, the run lets go, and the answer (or its expiry) wakes it.
 //! - **Debug runs** pause at breakpoints (before / after / on error, with an
 //!   optional condition on the step input and a hit count) and on stepping
 //!   commands; a pause is durable — the run lets go until a command arrives.
@@ -43,6 +51,7 @@ use serde_json::{json, Value};
 use flowr_storage::engine::*;
 use swf_parser::{CallTarget, NamedTask, Task};
 use swf_runtime::error::{Result, RuntimeError};
+use swf_runtime::effects::{Answer, EffectKind, EffectReplay};
 use swf_runtime::{StepHook, StepOutcome, StepReplay};
 
 /// Pure records are flushed at the latest after this many, or this long — so
@@ -63,8 +72,9 @@ pub(crate) enum Halt {
     Paused,
     /// A durable timer: wake at this time.
     Timer(DateTime<Utc>),
-    /// Waiting for events; wake at the step's timeout, if it has one.
-    Listen(Option<DateTime<Utc>>),
+    /// Waiting for events or for a person's answer; wake at the wait's
+    /// timeout, if it has one.
+    Wait(Option<DateTime<Utc>>),
     /// The run belongs to another worker now, or the journal could not be written.
     Lost,
     /// Crash test: act as a dead process.
@@ -107,6 +117,11 @@ pub(crate) struct JournalHook {
     /// Event waits opened (when), and the events delivered to them, by wait id.
     waits: Mutex<HashMap<String, DateTime<Utc>>>,
     events: Mutex<HashMap<String, Value>>,
+    /// The journal sequence of each step's last `StepStarted`.
+    started_seq: Mutex<HashMap<String, u64>>,
+    /// Questions put to a person, by key: (request id, expiry, journal seq).
+    asked: Mutex<HashMap<String, (String, DateTime<Utc>, u64)>>,
+    answers: Mutex<HashMap<String, swf_runtime::effects::Answer>>,
     pending: Mutex<Vec<Record>>,
     pending_since: Mutex<Option<std::time::Instant>>,
     /// The context after the last recorded step.
@@ -267,6 +282,12 @@ fn kill_points(namespace: &str, name: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// An agent step (`call: a3t:agent`): its model and tool calls are journaled
+/// one by one.
+fn is_agent(task: &NamedTask) -> bool {
+    matches!(&task.task, Task::Call(c) if matches!(&c.target, CallTarget::Function(f) if f == "a3t:agent"))
+}
+
 /// What a `listen` step waits for, as the store matches it: `{mode, filters}`,
 /// each filter the attributes an event must carry. Runtime expressions in
 /// filter values (`${ .orderId }`) are evaluated against the step input.
@@ -330,6 +351,9 @@ impl JournalHook {
         let mut timers = HashMap::new();
         let mut waits = HashMap::new();
         let mut events = HashMap::new();
+        let mut started_seq = HashMap::new();
+        let mut asked: HashMap<String, (String, DateTime<Utc>, u64)> = HashMap::new();
+        let mut answers = HashMap::new();
         let mut last_context = json!({});
         let mut pinned = None;
         let mut paused: Option<(String, String)> = None;
@@ -340,6 +364,7 @@ impl JournalHook {
             match e.record {
                 Record::RunStarted { version, .. } if !version.is_empty() => pinned = Some(version),
                 Record::StepStarted { step_key, attempt, .. } => {
+                    started_seq.insert(step_key.clone(), e.seq);
                     attempts.insert(step_key.clone(), attempt);
                     prior.entry(step_key).or_insert(Prior::Started { attempt });
                 }
@@ -362,6 +387,27 @@ impl JournalHook {
                 }
                 Record::EventReceived { wait_id, events: got } => {
                     events.insert(wait_id, got);
+                }
+                Record::ApprovalRequested { wait_id, request } => {
+                    if let Some(k) = request.get("step_key").and_then(|k| k.as_str()) {
+                        let expires = request
+                            .get("expires_at")
+                            .and_then(|t| t.as_str())
+                            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+                            .map(|t| t.with_timezone(&Utc))
+                            .unwrap_or(DateTime::<Utc>::MAX_UTC);
+                        asked.insert(k.to_string(), (wait_id, expires, e.seq));
+                    }
+                }
+                Record::ApprovalDecided { wait_id, decision, by } => {
+                    if let Some(k) = asked.iter().find(|(_, (id, _, _))| *id == wait_id).map(|(k, _)| k.clone()) {
+                        let answer = if decision.get("expired").and_then(|v| v.as_bool()) == Some(true) {
+                            swf_runtime::effects::Answer::Expired { request_id: wait_id }
+                        } else {
+                            swf_runtime::effects::Answer::Given { request_id: wait_id, decision, by }
+                        };
+                        answers.insert(k, answer);
+                    }
                 }
                 Record::Paused { step_key, when, .. } => {
                     paused = Some((step_key, when));
@@ -390,6 +436,9 @@ impl JournalHook {
             timers: Mutex::new(timers),
             waits: Mutex::new(waits),
             events: Mutex::new(events),
+            started_seq: Mutex::new(started_seq),
+            asked: Mutex::new(asked),
+            answers: Mutex::new(answers),
             pending: Mutex::new(Vec::new()),
             pending_since: Mutex::new(None),
             last_context: Mutex::new(last_context),
@@ -572,7 +621,7 @@ impl JournalHook {
                     self.commit(vec![rec]).await?;
                     return Ok(StepReplay::Failed { error });
                 }
-                Err(self.stop(Halt::Listen(deadline)))
+                Err(self.stop(Halt::Wait(deadline)))
             }
             None => {
                 let context = self.last_context.lock().unwrap().clone();
@@ -585,7 +634,7 @@ impl JournalHook {
                     return Err(self.stop(Halt::Lost));
                 }
                 self.waits.lock().unwrap().insert(wait_id, now);
-                Err(self.stop(Halt::Listen(limit.map(|l| now + l))))
+                Err(self.stop(Halt::Wait(limit.map(|l| now + l))))
             }
         }
     }
@@ -634,7 +683,10 @@ impl StepHook for JournalHook {
             Some(Prior::Started { attempt }) => {
                 let policy = task.metadata.as_ref().and_then(|m| m.pointer("/a3t/inDoubt")).and_then(|v| v.as_str()).unwrap_or("fault");
                 let rerun = matches!(class, StepClass::Pure | StepClass::Read)
-                    || (class == StepClass::Idempotent && policy == "retry");
+                    || (class == StepClass::Idempotent && policy == "retry")
+                    // An agent records its own calls (fine mode): running it
+                    // again replays them and repeats none.
+                    || is_agent(task);
                 if !rerun {
                     let error = format!(
                         "in-doubt side effect: step {key} started but did not record a result before the run was interrupted; \
@@ -776,6 +828,98 @@ impl StepHook for JournalHook {
 
     fn idempotency_key(&self, path: &str) -> Option<String> {
         Some(format!("{}{}", self.run, self.key(path)))
+    }
+
+    async fn effect_replay(&self, path: &str, name: &str) -> Result<EffectReplay> {
+        self.check_stopped()?;
+        let fx = format!("{}/fx/{name}", self.key(path));
+        let prior = self.prior.lock().unwrap().remove(&fx);
+        Ok(match prior {
+            Some(Prior::Completed { output, .. }) => EffectReplay::Done(match output.get("err") {
+                Some(e) => Err(e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string())),
+                None => Ok(output.get("ok").cloned().unwrap_or(Value::Null)),
+            }),
+            Some(Prior::Failed { error }) => EffectReplay::Done(Err(error)),
+            Some(Prior::Started { attempt }) => {
+                self.attempts.lock().unwrap().insert(fx.clone(), attempt + 1);
+                // Stopped at a question inside it (before the call itself)?
+                // Then it never ran: run it now.
+                let started = self.started_seq.lock().unwrap().get(&fx).copied().unwrap_or(0);
+                let inside = format!("{fx}/");
+                let asked_after = self.asked.lock().unwrap().iter().any(|(k, (_, _, seq))| k.starts_with(&inside) && *seq > started);
+                if asked_after { EffectReplay::Run } else { EffectReplay::InDoubt }
+            }
+            None => EffectReplay::Run,
+        })
+    }
+
+    async fn effect_started(&self, path: &str, name: &str) -> Result<()> {
+        let fx = format!("{}/fx/{name}", self.key(path));
+        let attempt = *self.attempts.lock().unwrap().get(&fx).unwrap_or(&0);
+        let rec = Record::StepStarted { idem_key: format!("{}{fx}", self.run), input_hash: String::new(), step_key: fx.clone(), attempt };
+        self.commit(vec![rec]).await?;
+        self.kill("after_step_started", &fx)
+    }
+
+    async fn effect_done(&self, path: &str, name: &str, kind: EffectKind, result: &std::result::Result<Value, String>, duration_us: u64) -> Result<()> {
+        // A failed model call is not kept: running the step again calls it again.
+        if kind == EffectKind::Read && result.is_err() {
+            return Ok(());
+        }
+        let fx = format!("{}/fx/{name}", self.key(path));
+        let attempt = *self.attempts.lock().unwrap().get(&fx).unwrap_or(&0);
+        let output = match result {
+            Ok(v) => json!({ "ok": v }),
+            Err(e) => json!({ "err": e }),
+        };
+        let class = if kind == EffectKind::Read { StepClass::Read } else { StepClass::Effect };
+        let rec = Record::StepCompleted { step_key: fx.clone(), attempt, output, context: Value::Null, class, duration_us, directive: String::new(), input: Value::Null, at: Some(Utc::now()) };
+        self.commit(vec![rec]).await?;
+        self.kill("after_completed", &fx)
+    }
+
+    fn asked(&self, path: &str, name: &str) -> bool {
+        let k = format!("{}/fx/{name}", self.key(path));
+        self.asked.lock().unwrap().contains_key(&k) || self.answers.lock().unwrap().contains_key(&k)
+    }
+
+    async fn ask(&self, path: &str, name: &str, request: &Value, expires_at: DateTime<Utc>) -> Result<Answer> {
+        self.check_stopped()?;
+        let k = format!("{}/fx/{name}", self.key(path));
+        let answered = self.answers.lock().unwrap().remove(&k);
+        if let Some(a) = answered {
+            return Ok(a);
+        }
+        let open = self.asked.lock().unwrap().get(&k).cloned();
+        if let Some((request_id, expires, _)) = open {
+            if expires > Utc::now() {
+                return Err(self.stop(Halt::Wait(Some(expires))));
+            }
+            // Expired unanswered: close it, unless an answer just came in.
+            self.commit(vec![]).await?;
+            match self.engine.close_wait(self.run, self.epoch, &request_id).await {
+                Ok(true) => {
+                    let rec = Record::ApprovalDecided { wait_id: request_id.clone(), decision: json!({ "expired": true }), by: "timeout".into() };
+                    self.commit(vec![rec]).await?;
+                    return Ok(Answer::Expired { request_id });
+                }
+                // Answered meanwhile, or the run moved on: run again from the journal.
+                _ => return Err(self.stop(Halt::Lost)),
+            }
+        }
+        let Some(request_id) = request.get("request_id").and_then(|v| v.as_str()).map(str::to_string) else {
+            return Err(RuntimeError::Internal("a question needs a request_id".into()));
+        };
+        let mut req = request.clone();
+        req["step_key"] = json!(k);
+        req["expires_at"] = json!(expires_at.to_rfc3339());
+        self.commit(vec![]).await?;
+        if let Err(e) = self.engine.open_approval(self.run, self.epoch, &request_id, req).await {
+            tracing::warn!(run = %self.run, error = %e, "could not record the approval request; stopping the run here");
+            return Err(self.stop(Halt::Lost));
+        }
+        self.asked.lock().unwrap().insert(k, (request_id, expires_at, u64::MAX));
+        Err(self.stop(Halt::Wait(Some(expires_at))))
     }
 }
 

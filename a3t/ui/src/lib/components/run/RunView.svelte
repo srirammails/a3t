@@ -13,7 +13,7 @@
     { runId: string; flowSteps?: string[]; onrerun?: (id: string) => void; shared?: FlowDebug | null } = $props();
 
   type Step = { step_key: string; status: string; class?: string; duration_us?: number; attempts?: number; edited?: boolean;
-                started_at?: string; completed_at?: string; seq?: number; error?: any; fire_at?: string; listening?: any };
+                started_at?: string; completed_at?: string; seq?: number; error?: any; fire_at?: string; listening?: any; asking?: any };
   type Entry = { seq: number; at: string; epoch: number; record: any };
 
   let run = $state<any>(null);
@@ -178,7 +178,7 @@
     let pausedAt: number | null = null, pausedWhy = '';
     let resumeAt: number | null = null, resumeEpoch = 0;
     let epoch = 0;
-    const listening = new Map<string, number>();
+    const listening = new Map<string, number>(), asking = new Map<string, number>();
     for (const e of entries) {
       const at = happened(e), r = e.record ?? {};
       if (e.epoch > epoch) {
@@ -197,6 +197,11 @@
         resumeAt = at; resumeEpoch = e.epoch;
       }
       if (r.kind === 'wait_for_events') listening.set(r.wait_id, at);
+      if (r.kind === 'approval_requested') asking.set(r.wait_id, at);
+      if (r.kind === 'approval_decided' && asking.has(r.wait_id)) {
+        life.push({ from: asking.get(r.wait_id)!, to: at, kind: 'paused', title: `Waiting for approval — answered by ${r.by}` });
+        asking.delete(r.wait_id);
+      }
       if (r.kind === 'event_received' && listening.has(r.wait_id)) {
         life.push({ from: listening.get(r.wait_id)!, to: at, kind: 'timer', title: `${r.wait_id} listened until its event came` });
         listening.delete(r.wait_id);
@@ -204,6 +209,7 @@
       if (r.kind === 'timer_set' && r.fire_at) life.push({ from: at, to: Math.min(ms(r.fire_at), end), kind: 'timer', title: `Timer ${r.wait_id} until ${new Date(r.fire_at).toLocaleTimeString()}` });
     }
     for (const [k, from] of listening) life.push({ from, to: end, kind: 'timer', title: `${k} listening for events` });
+    for (const [, from] of asking) life.push({ from, to: end, kind: 'paused', title: 'Waiting for approval' });
     if (pausedAt !== null) life.push({ from: pausedAt, to: end, kind: 'paused', title: pausedWhy });
     if (resumeAt !== null) queue.push({ from: resumeAt, to: end, kind: 'requeued', title: 'Resumed — waiting for a worker to pick it up again' });
     const total = Math.max(end - created, 1);
@@ -284,7 +290,10 @@
     {/if}
     {#if run.phase === 'waiting'}
       {@const ear = (run.steps ?? []).find((s: any) => s.status === 'waiting' && s.listening)}
-      {#if ear}
+      {@const ask = (run.steps ?? []).find((s: any) => s.status === 'waiting' && s.asking)}
+      {#if ask}
+        <div class="rv-note">⏳ Waiting for {ask.asking.approver ?? 'a person'} to approve <code>{ask.asking.tool}</code>{ask.asking.reason ? ` — ${ask.asking.reason}` : ''}. No worker is held; the answer (in the chat, or <code>POST /inputs/{ask.asking.request_id}</code>) resumes it on any worker{ask.asking.expires_at ? `; unanswered, it is refused at ${when(ask.asking.expires_at)}` : ''}.</div>
+      {:else if ear}
         <div class="rv-note" title={JSON.stringify(ear.listening.filters)}>⏳ Listening at {ear.step_key} for {ear.listening.mode === 'all' ? 'all of' : ear.listening.mode === 'any' ? 'any of' : ''} {(ear.listening.filters ?? []).map((f: any) => f.type).join(', ') || 'any event'} — no worker is held; a matching event (an <code>emit</code>, or <code>send_event</code>) wakes it on any worker.
           {#if run.can_steer && !sending}<button class="lnk" disabled={busy} onclick={() => openSend(ear.listening)}>Send event…</button>{/if}</div>
         {#if sending}

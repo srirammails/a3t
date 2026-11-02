@@ -296,6 +296,27 @@ fn steps_of(entries: &[JournalEntry]) -> (Vec<Value>, Option<Value>) {
                 m.entry("started_at").or_insert(json!(e.at));
                 steps.insert(wait_id.clone(), m);
             }
+            Record::ApprovalRequested { wait_id, request } => {
+                let k = request.get("step_key").and_then(|k| k.as_str()).unwrap_or(wait_id).to_string();
+                let mut m = entry(&mut steps, &k, &mut order);
+                m.insert("status".into(), json!("waiting"));
+                m.insert("asking".into(), json!({
+                    "request_id": wait_id,
+                    "tool": request.pointer("/context/tool"),
+                    "approver": request.pointer("/context/approver"),
+                    "reason": request.get("message"),
+                    "expires_at": request.get("expires_at"),
+                }));
+                m.entry("started_at").or_insert(json!(e.at));
+                steps.insert(k, m);
+            }
+            Record::ApprovalDecided { wait_id, decision, by } => {
+                if let Some(m) = steps.values_mut().find(|m| m.get("asking").and_then(|a| a.get("request_id")).and_then(|v| v.as_str()) == Some(wait_id)) {
+                    m.insert("status".into(), json!("completed"));
+                    m.insert("answered".into(), json!({ "decision": decision, "by": by, "at": e.at }));
+                    m.insert("completed_at".into(), json!(e.at));
+                }
+            }
             Record::DebugEdit { step_key, .. } => {
                 let mut m = entry(&mut steps, step_key, &mut order);
                 m.insert("edited".into(), json!(true));

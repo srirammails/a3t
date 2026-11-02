@@ -41,6 +41,7 @@ where
     outbox_drains_in_order(&make().await).await;
     purge_removes_only_old_finished_runs(&make().await).await;
     event_waits_wake_matching_runs_once(&make().await).await;
+    approvals_are_answered_once(&make().await).await;
 }
 
 fn new_run(ns: &str, flow: &str) -> NewRun {
@@ -433,4 +434,41 @@ async fn event_waits_wake_matching_runs_once<S: EngineStore>(s: &S) {
     s.release(id, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
     s.request(id, RunRequest::Cancel { by: "u1".into(), reason: "no".into() }).await.unwrap();
     assert!(s.deliver_event("p", ev("t", 1)).await.unwrap().is_empty());
+}
+
+async fn approvals_are_answered_once<S: EngineStore>(s: &S) {
+    let id = start(s, new_run("p", "agent")).await;
+    let (lease, _, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    let req = json!({ "tool": "deploy", "approver": "u1", "step_key": "/chat/fx/tool/t1/fx/ask" });
+    s.open_approval(id, epoch, "r1", req.clone()).await.unwrap();
+    s.open_approval(id, epoch, "r1", req.clone()).await.unwrap();
+    assert!(matches!(s.open_approval(id, epoch + 1, "r2", req.clone()).await, Err(StoreError::Fenced(_))));
+    s.release(id, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
+
+    // Listed for the approver; not an event wait.
+    let open = s.approvals().await.unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!((open[0].0, open[0].1.as_str(), &open[0].2), (id, "r1", &req));
+    assert!(s.deliver_event("p", json!({ "type": "anything" })).await.unwrap().is_empty(), "events never answer approvals");
+
+    // Answered once: journaled, resumed, closed.
+    assert!(!s.decide_approval("nope", json!({ "allow": true }), "u1").await.unwrap());
+    assert!(s.decide_approval("r1", json!({ "allow": true, "scope": "once" }), "u1").await.unwrap());
+    assert!(!s.decide_approval("r1", json!({ "allow": false }), "u1").await.unwrap(), "answered once");
+    assert!(s.approvals().await.unwrap().is_empty());
+    let j = s.read_from(id, 0).await.unwrap();
+    assert!(matches!(&j[0].record, Record::ApprovalRequested { wait_id, .. } if wait_id == "r1"));
+    assert!(matches!(&j[1].record, Record::ApprovalDecided { wait_id, by, decision } if wait_id == "r1" && by == "u1" && decision["allow"] == true));
+    assert_eq!(s.get(id).await.unwrap().unwrap().phase, RunPhase::Pending);
+    let (_, task, _) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    assert_eq!(task.kind, TaskKind::ResumeRun);
+
+    // A cancelled run's approval is gone.
+    let id = start(s, new_run("p", "agent2")).await;
+    let (lease, _, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    s.open_approval(id, epoch, "r3", req).await.unwrap();
+    s.release(id, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
+    s.request(id, RunRequest::Cancel { by: "u1".into(), reason: "no".into() }).await.unwrap();
+    assert!(s.approvals().await.unwrap().is_empty());
+    assert!(!s.decide_approval("r3", json!({ "allow": true }), "u1").await.unwrap());
 }

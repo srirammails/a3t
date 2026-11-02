@@ -686,18 +686,23 @@ impl TaskHandler for AgentHandler {
                 ctx.context = state.to_context_value(&config);
                 fire_before(self, ctx, "call_llm", "call:llm").await;
 
-                // Call LLM
-                let llm_result = call_llm(
-                    &http_client,
-                    &storage,
-                    llm_resource,
-                    &state.system_prompt,
-                    &state.messages,
-                    &all_tools,
-                    config.config.max_tokens,
-                    config.config.temperature,
-                    Some(config.session_id.as_str()),
-                ).await.map_err(|e| RuntimeError::Communication(format!("LLM call failed: {}", e)))?;
+                // Call LLM — recorded (fine mode), so a resumed turn replays it.
+                let (llm_result, _) = swf_runtime::effects::effect(
+                    &format!("model/{}", state.iteration),
+                    swf_runtime::effects::EffectKind::Read,
+                    || call_llm(
+                        &http_client,
+                        &storage,
+                        llm_resource,
+                        &state.system_prompt,
+                        &state.messages,
+                        &all_tools,
+                        config.config.max_tokens,
+                        config.config.temperature,
+                        Some(config.session_id.as_str()),
+                    ),
+                ).await?;
+                let llm_result = llm_result.map_err(|e| RuntimeError::Communication(format!("LLM call failed: {}", e)))?;
 
                 state.iteration += 1;
 
@@ -730,36 +735,47 @@ impl TaskHandler for AgentHandler {
                     // Fire on_tool_call extension
                     fire_before(self, ctx, "dispatch_tools", "call:mcp").await;
 
-                    for tc in tool_calls {
+                    for (call_no, tc) in tool_calls.iter().enumerate() {
                         let tool_name = tc.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
                         let tool_input = tc.get("input").cloned().unwrap_or(json!({}));
                         let tool_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("tool");
 
-                        info!(tool = %tool_name, "dispatching tool call");
-                        // Faithful tool part for the UI stream: the SDK protocol
-                        // needs the call id and its input, not just a name.
-                        crate::token_stream::publish(&config.session_id, "tool_input",
-                            json!({"toolCallId": tool_id, "toolName": tool_name, "input": tool_input}).to_string());
+                        // Recorded (fine mode): a resumed turn replays it, and a
+                        // call that started but never finished is not repeated.
+                        let (tool_result, replayed) = swf_runtime::effects::effect(
+                            &format!("tool/{}.{call_no}", state.iteration),
+                            swf_runtime::effects::EffectKind::Effect,
+                            || async {
+                                info!(tool = %tool_name, "dispatching tool call");
+                                // Faithful tool part for the UI stream: the SDK protocol
+                                // needs the call id and its input, not just a name. Not
+                                // again when the call resumes after an approval.
+                                if !swf_runtime::effects::asked("ask") {
+                                    crate::token_stream::publish(&config.session_id, "tool_input",
+                                        json!({"toolCallId": tool_id, "toolName": tool_name, "input": tool_input}).to_string());
+                                }
 
-                        // Check if tool maps to a workflow
-                        let tool_result = if let Some(flow_ref) = config.config.tool_flows.get(tool_name) {
-                            // Execute as nested workflow
-                            execute_tool_flow(&storage, &flow_ref.namespace, &flow_ref.name, tool_input.clone(), ctx).await
-                        } else {
-                            // Execute via MCP, on the server that advertised this tool
-                            // (else the first server, as before, for tools the LLM names
-                            // without discovery having listed them).
-                            let mcp_resource = tool_server.get(tool_name).map(|s| s.as_str())
-                                .or_else(|| config.config.mcp_servers.first().map(|s| s.as_str()))
-                                .unwrap_or("agent-flows");
-                            // E2 #3: build the agent's template ceiling from its
-                            // config — exposedTools = the tools it declares, enabledTools
-                            // = the instance-enabled subset. Threaded to site A so the
-                            // hook gates this call as the agent (§6.5). Merges over any
-                            // flow-level metadata.a3t already on the context.
-                            let ceiling_attrs = build_ceiling_attributes(&config.config, &ctx.template_meta);
-                            call_mcp_tool(&http_client, &storage, &agent_principal, &config.session_id, mcp_resource, tool_name, &tool_input, ceiling_attrs).await
-                        };
+                                // Check if tool maps to a workflow
+                                if let Some(flow_ref) = config.config.tool_flows.get(tool_name) {
+                                    // Execute as nested workflow
+                                    execute_tool_flow(&storage, &flow_ref.namespace, &flow_ref.name, tool_input.clone(), ctx).await
+                                } else {
+                                    // Execute via MCP, on the server that advertised this tool
+                                    // (else the first server, as before, for tools the LLM names
+                                    // without discovery having listed them).
+                                    let mcp_resource = tool_server.get(tool_name).map(|s| s.as_str())
+                                        .or_else(|| config.config.mcp_servers.first().map(|s| s.as_str()))
+                                        .unwrap_or("agent-flows");
+                                    // E2 #3: build the agent's template ceiling from its
+                                    // config — exposedTools = the tools it declares, enabledTools
+                                    // = the instance-enabled subset. Threaded to site A so the
+                                    // hook gates this call as the agent (§6.5). Merges over any
+                                    // flow-level metadata.a3t already on the context.
+                                    let ceiling_attrs = build_ceiling_attributes(&config.config, &ctx.template_meta);
+                                    call_mcp_tool(&http_client, &storage, &agent_principal, &config.session_id, mcp_resource, tool_name, &tool_input, ceiling_attrs).await
+                                }
+                            },
+                        ).await?;
 
                         let tool_ok = tool_result.is_ok();
                         // Text for widgets: a tool returning a JSON *string* (get_flow
@@ -779,15 +795,18 @@ impl TaskHandler for AgentHandler {
                             }
                         };
 
-                        crate::token_stream::publish(&config.session_id, "tool_output",
-                            json!({"toolCallId": tool_id, "output": result_str}).to_string());
+                        // Already streamed when it first ran.
+                        if !replayed {
+                            crate::token_stream::publish(&config.session_id, "tool_output",
+                                json!({"toolCallId": tool_id, "output": result_str}).to_string());
+                        }
 
                         // Generative UI: a tool that returns an editable artifact also
                         // emits a typed data part, so the client can render a widget
                         // instead of a wall of YAML. The channel is generic — `name`
                         // becomes the `data-<name>` frame — so new widget types need
                         // no change to the stream adapter.
-                        if tool_ok {
+                        if tool_ok && !replayed {
                             // Table-driven so a new artifact type is one row, not
                             // another match arm. Lists carry their rows; details
                             // carry the text/JSON the pane will render.
@@ -1025,7 +1044,7 @@ impl TaskHandler for AgentHandler {
             // Same resolution as the reasoning loop above (that binding is scoped
             // to the loop's block, which has already closed here).
             let llm_resource = config.config.llm_resource.as_deref().unwrap_or("default-llm");
-            match call_llm(
+            let (forced, _) = swf_runtime::effects::effect("model/final", swf_runtime::effects::EffectKind::Read, || call_llm(
                 &http_client,
                 &storage,
                 llm_resource,
@@ -1035,7 +1054,8 @@ impl TaskHandler for AgentHandler {
                 config.config.max_tokens,
                 config.config.temperature,
                 Some(config.session_id.as_str()),
-            ).await {
+            )).await?;
+            match forced {
                 Ok(res) => {
                     let content = res.get("content").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
                     if !content.is_empty() {

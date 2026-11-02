@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 CREATE TABLE IF NOT EXISTS waits (
   run_id      TEXT NOT NULL,
   wait_id     TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'event',
   namespace   TEXT NOT NULL,
   correlation TEXT NOT NULL,
   received    TEXT NOT NULL DEFAULT '[]',
@@ -111,6 +112,7 @@ CREATE TABLE IF NOT EXISTS waits (
   PRIMARY KEY (run_id, wait_id)
 );
 CREATE INDEX IF NOT EXISTS waits_ns ON waits(namespace, created_at);
+CREATE INDEX IF NOT EXISTS waits_id ON waits(wait_id);
 
 CREATE TABLE IF NOT EXISTS outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL
@@ -789,7 +791,7 @@ impl RunStore for SqliteStore {
                 let now = nanos(now_t);
                 let open: Vec<(String, String, String, String)> = {
                     let mut st = tx
-                        .prepare("SELECT wait_id, run_id, correlation, received FROM waits WHERE namespace = ?1 ORDER BY created_at")
+                        .prepare("SELECT wait_id, run_id, correlation, received FROM waits WHERE namespace = ?1 AND kind = 'event' ORDER BY created_at")
                         .map_err(be)?;
                     let rows = st.query_map([&namespace], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).map_err(be)?;
                     rows.collect::<Result<_, _>>().map_err(be)?
@@ -832,6 +834,76 @@ impl RunStore for SqliteStore {
             self.notify(&run_topic(*run), json!({ "event": true }));
         }
         Ok(woke.into_iter().map(|(r, _)| r).collect())
+    }
+
+    async fn open_approval(&self, run: RunId, epoch: Epoch, wait_id: &str, request: Value) -> StoreResult<()> {
+        let wait_id = wait_id.to_string();
+        self.write(move |tx| {
+            check_epoch(tx, run, epoch)?;
+            let now = nanos(Utc::now());
+            let n = tx
+                .execute(
+                    "INSERT OR IGNORE INTO waits(wait_id, run_id, kind, namespace, correlation, created_at) \
+                     SELECT ?1, run_id, 'approval', namespace, ?3, ?4 FROM runs WHERE run_id = ?2",
+                    params![wait_id, run.to_string(), js(&request), now],
+                )
+                .map_err(be)?;
+            if n > 0 {
+                push(tx, run, epoch, &[Record::ApprovalRequested { wait_id, request }], now)?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    async fn approvals(&self) -> StoreResult<Vec<(RunId, String, Value)>> {
+        self.with(|c| {
+            let mut st = c
+                .prepare(
+                    "SELECT w.run_id, w.wait_id, w.correlation FROM waits w JOIN runs r ON r.run_id = w.run_id \
+                     WHERE w.kind = 'approval' AND r.phase NOT IN ('completed','faulted','cancelled') ORDER BY w.created_at",
+                )
+                .map_err(be)?;
+            let rows = st
+                .query_map([], |r| Ok((uuid(&r.get::<_, String>(0)?)?, r.get::<_, String>(1)?, unjs(&r.get::<_, String>(2)?))))
+                .map_err(be)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(be)
+        })
+        .await
+    }
+
+    async fn decide_approval(&self, wait_id: &str, decision: Value, by: &str) -> StoreResult<bool> {
+        let (wait_id, by) = (wait_id.to_string(), by.to_string());
+        let woke: Option<(RunId, String)> = self
+            .write(move |tx| {
+                let now_t = Utc::now();
+                let now = nanos(now_t);
+                let rid: Option<String> = tx
+                    .query_row("SELECT run_id FROM waits WHERE wait_id = ?1 AND kind = 'approval'", [&wait_id], |r| r.get(0))
+                    .optional()
+                    .map_err(be)?;
+                let Some(rid) = rid else { return Ok(None) };
+                tx.execute("DELETE FROM waits WHERE run_id = ?1 AND wait_id = ?2", params![rid, wait_id]).map_err(be)?;
+                let run = uuid(&rid).map_err(be)?;
+                let row = match get_run(tx, run)? {
+                    Some(r) if !r.phase.is_terminal() => r,
+                    _ => return Ok(None),
+                };
+                push(tx, run, row.epoch, &[Record::ApprovalDecided { wait_id: wait_id.clone(), decision, by }], now)?;
+                let owner_until: Option<i64> = tx
+                    .query_row("SELECT owner_lease_until FROM runs WHERE run_id = ?1", [&rid], |r| r.get(0))
+                    .map_err(be)?;
+                if !(row.owner.is_some() && owner_until.is_some_and(|t| t >= now)) {
+                    tx.execute("UPDATE runs SET phase = ?2 WHERE run_id = ?1", params![rid, tag(&RunPhase::Pending)]).map_err(be)?;
+                }
+                enqueue_tx(tx, &NewTask::resume_for(&row, Some(wait_wake_key(run, &wait_id)), now_t))?;
+                Ok(Some((run, pool_for(&row.namespace, &row.flow))))
+            })
+            .await?;
+        let Some((run, pool)) = woke else { return Ok(false) };
+        self.notify(&tasks_topic(&pool), json!({ "resume": run }));
+        self.notify(&run_topic(run), json!({ "approval": true }));
+        Ok(true)
     }
 
     async fn orphaned(&self) -> StoreResult<Vec<RunRow>> {

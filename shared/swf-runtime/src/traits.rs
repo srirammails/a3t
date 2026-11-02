@@ -174,6 +174,47 @@ pub trait StepHook: Send + Sync {
     fn idempotency_key(&self, _key: &str) -> Option<String> {
         None
     }
+
+    // ── Effects inside a step (fine mode, `crate::effects`) ──
+
+    /// What the journal has for effect `name` inside step `key`.
+    async fn effect_replay(&self, _key: &str, _name: &str) -> crate::error::Result<crate::effects::EffectReplay> {
+        Ok(crate::effects::EffectReplay::Run)
+    }
+
+    /// Record, durably, that effect `name` is about to run.
+    async fn effect_started(&self, _key: &str, _name: &str) -> crate::error::Result<()> {
+        Ok(())
+    }
+
+    /// Record what effect `name` returned.
+    async fn effect_done(
+        &self,
+        _key: &str,
+        _name: &str,
+        _kind: crate::effects::EffectKind,
+        _result: &std::result::Result<Value, String>,
+        _duration_us: u64,
+    ) -> crate::error::Result<()> {
+        Ok(())
+    }
+
+    /// Whether question `name` inside step `key` was already put.
+    fn asked(&self, _key: &str, _name: &str) -> bool {
+        false
+    }
+
+    /// Put a question to a person and wait durably: the answer once given (or
+    /// expired); until then the run stops here (`RuntimeError::Halted`).
+    async fn ask(
+        &self,
+        key: &str,
+        _name: &str,
+        _request: &Value,
+        _expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<crate::effects::Answer> {
+        Err(crate::error::RuntimeError::task_failed(key, "this run cannot wait for an answer"))
+    }
 }
 
 impl FlowDirective {
