@@ -23,11 +23,24 @@ do:
       set: { ok: true, charged: "${ .charged }" }
 "#;
 
+const HEAR: &str = r#"
+document: { dsl: '1.0.3', namespace: rt, name: hear, version: '1.0.0' }
+do:
+  - ping:
+      listen:
+        to:
+          one:
+            with: { type: rt.ping }
+  - got:
+      set: { said: "${ .[0].say }" }
+"#;
+
 async fn world() -> (Arc<dyn StorageBackend>, tempfile::TempDir) {
     INIT.call_once(|| std::env::set_var("FLOWR_RUN_LEASE_MS", "600"));
     let dir = tempfile::tempdir().unwrap();
     let s = flowr_ce::init_storage_with(dir.path().to_str().unwrap(), true).await.unwrap();
     s.workflows().register(WorkflowRecord::from_yaml(FLOW).unwrap()).await.unwrap();
+    s.workflows().register(WorkflowRecord::from_yaml(HEAR).unwrap()).await.unwrap();
     flowr_ce::spawn_worker(s.clone());
     (s, dir)
 }
@@ -113,4 +126,21 @@ async fn edits_only_where_paused_and_cancel() {
     call(s.as_ref(), "cancel_run", json!({ "run_id": id, "reason": "enough" })).await;
     let c = until(s.as_ref(), &id, "cancelled").await;
     assert_eq!(c["error"], "enough");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn send_event_wakes_a_listening_run() {
+    let (s, _d) = world().await;
+    let id = call(s.as_ref(), "start_run", json!({ "namespace": "rt", "name": "hear" })).await["run_id"].as_str().unwrap().to_string();
+    let waiting = until(s.as_ref(), &id, "waiting").await;
+    let step = waiting["steps"].as_array().unwrap().iter().find(|x| x["step_key"] == "/ping").unwrap().clone();
+    assert_eq!(step["status"], "waiting");
+    assert_eq!(step["listening"]["filters"][0]["type"], "rt.ping");
+
+    let sent = call(s.as_ref(), "send_event", json!({ "namespace": "rt", "event": { "type": "rt.other" } })).await;
+    assert_eq!(sent["woke"], json!([]));
+    let sent = call(s.as_ref(), "send_event", json!({ "namespace": "rt", "event": { "type": "rt.ping", "data": { "say": "hi" } } })).await;
+    assert_eq!(sent["woke"], json!([id]));
+    let done = until(s.as_ref(), &id, "completed").await;
+    assert_eq!(done["output"]["said"], "hi");
 }

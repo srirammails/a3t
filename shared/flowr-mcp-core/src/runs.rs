@@ -5,7 +5,8 @@
 //! Access: reading a run needs what `get_execution_status` needs (Read on its
 //! project; a platform flow's runs only to whoever started them). Starting a
 //! run needs Run; a debug run, a command, an edit, breakpoints, cancel and
-//! re-run need Write. Values are masked on the way out.
+//! re-run need Write. Sending an event needs Run on its project (it can wake
+//! that project's runs). Values are masked on the way out.
 
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -73,6 +74,14 @@ pub fn tools() -> Vec<Tool> {
             input_schema: json!({ "type": "object", "properties": { "run_id": run_id, "reason": { "type": "string" } }, "required": ["run_id"] }),
         },
         Tool {
+            name: "send_event".into(),
+            description: "Send a CloudEvent into a project: every run whose `listen` step it completes is woken. Give at least `type`; `source`, `subject`, `data` and extensions are matched by the listeners' filters.".into(),
+            input_schema: json!({ "type": "object", "properties": {
+                "namespace": { "type": "string", "description": "Project the event is sent in" },
+                "event": { "type": "object", "description": "CloudEvent attributes: {type, source?, subject?, data?, …}" }
+            }, "required": ["namespace", "event"] }),
+        },
+        Tool {
             name: "rerun_run".into(),
             description: "Start a new run like this one — from the start, or from a journal point (steps up to it replay, later ones run again).".into(),
             input_schema: json!({ "type": "object", "properties": {
@@ -95,6 +104,7 @@ pub async fn call(storage: &dyn StorageBackend, principal: &Principal, name: &st
         "edit_step_input" => edit_step_input(storage, principal, args).await,
         "cancel_run" => cancel_run(storage, principal, args).await,
         "rerun_run" => rerun_run(storage, principal, args).await,
+        "send_event" => send_event(storage, principal, args).await,
         _ => return None,
     };
     Some(result.unwrap_or_else(CallToolResult::error))
@@ -279,6 +289,13 @@ fn steps_of(entries: &[JournalEntry]) -> (Vec<Value>, Option<Value>) {
                 m.entry("started_at").or_insert(json!(e.at));
                 steps.insert(wait_id.clone(), m);
             }
+            Record::WaitForEvents { wait_id, correlation } => {
+                let mut m = entry(&mut steps, wait_id, &mut order);
+                m.insert("status".into(), json!("waiting"));
+                m.insert("listening".into(), correlation.clone());
+                m.entry("started_at").or_insert(json!(e.at));
+                steps.insert(wait_id.clone(), m);
+            }
             Record::DebugEdit { step_key, .. } => {
                 let mut m = entry(&mut steps, step_key, &mut order);
                 m.insert("edited".into(), json!(true));
@@ -415,6 +432,23 @@ async fn cancel_run(storage: &dyn StorageBackend, principal: &Principal, args: &
     let reason = s(args, "reason").unwrap_or("cancelled").to_string();
     e.request(r.run_id, RunRequest::Cancel { by: who(principal), reason }).await.map_err(|e| e.to_string())?;
     Ok(CallToolResult::json(json!({ "ok": true })))
+}
+
+async fn send_event(storage: &dyn StorageBackend, principal: &Principal, args: &Value) -> R {
+    let e = engine(storage)?;
+    let ns = s(args, "namespace").ok_or("namespace is required")?;
+    let given = args.get("event").filter(|v| v.is_object()).ok_or("event must be an object")?;
+    if given.get("type").and_then(|t| t.as_str()).is_none_or(str::is_empty) {
+        return Err("event.type is required".into());
+    }
+    let g = namespace_guard();
+    let allowed = !g.enforcing() || matches!(principal, Principal::Service { .. }) || g.access(principal, ns).await >= NsAccess::Run;
+    if !allowed {
+        return Err(format!("Forbidden: this needs run access to project '{ns}'."));
+    }
+    let event = cloud_event(given, &format!("/a3t/{}", who(principal)));
+    let woke = e.deliver_event(ns, event.clone()).await.map_err(|e| e.to_string())?;
+    Ok(CallToolResult::json(json!({ "id": event["id"], "woke": woke })))
 }
 
 async fn rerun_run(storage: &dyn StorageBackend, principal: &Principal, args: &Value) -> R {

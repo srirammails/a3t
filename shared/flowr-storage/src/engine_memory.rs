@@ -40,6 +40,16 @@ struct Inner {
     checkpoints: HashMap<RunId, Vec<(u64, Vec<u8>, DateTime<Utc>)>>,
     outbox: Vec<OutboxRow>,
     outbox_id: u64,
+    /// Open event waits, oldest first.
+    waits: Vec<WaitRow>,
+}
+
+struct WaitRow {
+    wait_id: String,
+    run: RunId,
+    namespace: String,
+    correlation: Value,
+    received: Vec<Value>,
 }
 
 #[derive(Default)]
@@ -375,6 +385,7 @@ impl RunStore for MemoryStore {
                         row.owner = None;
                         inner.push(run, epoch, &[Record::RunCancelled { reason }], now);
                         inner.remove_run_tasks(run);
+                        inner.waits.retain(|w| w.run != run);
                     }
                 }
                 RunRequest::Suspend { .. } => {
@@ -468,7 +479,73 @@ impl RunStore for MemoryStore {
             inner.owner_until.remove(id);
         }
         inner.run_dedupe.retain(|_, (r, _)| !gone.contains(r));
+        inner.waits.retain(|w| !gone.contains(&w.run));
         Ok(gone.len())
+    }
+
+    async fn open_wait(&self, run: RunId, epoch: Epoch, wait_id: &str, correlation: Value) -> StoreResult<()> {
+        let mut inner = self.lock();
+        inner.check_epoch(run, epoch)?;
+        if inner.waits.iter().any(|w| w.run == run && w.wait_id == wait_id) {
+            return Ok(());
+        }
+        let namespace = inner.runs[&run].namespace.clone();
+        inner.push(run, epoch, &[Record::WaitForEvents { wait_id: wait_id.to_string(), correlation: correlation.clone() }], Utc::now());
+        inner.waits.push(WaitRow { wait_id: wait_id.to_string(), run, namespace, correlation, received: Vec::new() });
+        Ok(())
+    }
+
+    async fn close_wait(&self, run: RunId, epoch: Epoch, wait_id: &str) -> StoreResult<bool> {
+        let mut inner = self.lock();
+        inner.check_epoch(run, epoch)?;
+        let before = inner.waits.len();
+        inner.waits.retain(|w| !(w.run == run && w.wait_id == wait_id));
+        Ok(inner.waits.len() < before)
+    }
+
+    async fn deliver_event(&self, namespace: &str, event: Value) -> StoreResult<Vec<RunId>> {
+        let now = Utc::now();
+        let mut woke = Vec::new();
+        let mut pools = Vec::new();
+        {
+            let mut inner = self.lock();
+            let mut i = 0;
+            while i < inner.waits.len() {
+                if inner.waits[i].namespace != namespace {
+                    i += 1;
+                    continue;
+                }
+                let run = inner.waits[i].run;
+                let Some((phase, epoch, flow)) = inner.runs.get(&run).map(|r| (r.phase, r.epoch, r.flow.clone())) else {
+                    inner.waits.remove(i);
+                    continue;
+                };
+                if phase.is_terminal() {
+                    inner.waits.remove(i);
+                    continue;
+                }
+                let w = &mut inner.waits[i];
+                let (_, done) = offer_event(&w.correlation, &mut w.received, &event);
+                if !done {
+                    i += 1;
+                    continue;
+                }
+                let w = inner.waits.remove(i);
+                inner.push(run, epoch, &[Record::EventReceived { wait_id: w.wait_id.clone(), events: received_events(&w.received) }], now);
+                if !inner.owned_now(run, now) {
+                    inner.runs.get_mut(&run).unwrap().phase = RunPhase::Pending;
+                }
+                let pool = pool_for(namespace, &flow);
+                inner.enqueue(NewTask { pool: pool.clone(), ..NewTask::resume(run, namespace, Some(wait_wake_key(run, &w.wait_id)), now) });
+                woke.push(run);
+                pools.push(pool);
+            }
+        }
+        for (run, pool) in woke.iter().zip(pools) {
+            self.notify(&tasks_topic(&pool), json!({ "resume": run }));
+            self.notify(&run_topic(*run), json!({ "event": true }));
+        }
+        Ok(woke)
     }
 
     async fn orphaned(&self) -> StoreResult<Vec<RunRow>> {

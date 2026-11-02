@@ -404,6 +404,8 @@ export const runsApi = {
   cancel: (runId: string, reason?: string) => mcpCall('cancel_run', { run_id: runId, ...(reason ? { reason } : {}) }),
   rerun: (runId: string, opts: { from_seq?: number; input?: any; debug?: boolean; breakpoints?: Breakpoint[] } = {}) =>
     mcpCall('rerun_run', { run_id: runId, ...opts }),
+  /// A CloudEvent into a project: wakes the runs whose `listen` it completes.
+  sendEvent: (namespace: string, event: any) => mcpCall('send_event', { namespace, event }),
 };
 export type Breakpoint = { step_key: string; when?: 'before' | 'after' | 'on_error'; condition?: string; hit?: number; enabled?: boolean };
 export type DebugCommand = 'continue' | 'step_over' | 'step_into' | 'step_out' | 'run_to' | 'stop';

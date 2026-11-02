@@ -332,6 +332,76 @@ pub trait RunStore: Send + Sync {
     async fn orphaned(&self) -> StoreResult<Vec<RunRow>>;
     /// Remove finished runs (and their journals) completed before `before`.
     async fn purge_finished(&self, before: DateTime<Utc>) -> StoreResult<usize>;
+    /// A `listen` step starts waiting (§5.9): journal `WaitForEvents` and open
+    /// the wait (`wait_id` is the step key, unique within the run), atomically. From now on, events delivered in the run's
+    /// namespace are offered to it. Opening it again is a no-op.
+    async fn open_wait(&self, run: RunId, epoch: Epoch, wait_id: &str, correlation: Value) -> StoreResult<()>;
+    /// Stop a wait (its step timed out); false if it was no longer open.
+    async fn close_wait(&self, run: RunId, epoch: Epoch, wait_id: &str) -> StoreResult<bool>;
+    /// Offer an event to the open waits in `namespace`. Each wait it completes
+    /// is closed, and its run gets `EventReceived` and a `ResumeRun` task, in
+    /// one transaction. Returns the runs woken.
+    async fn deliver_event(&self, namespace: &str, event: Value) -> StoreResult<Vec<RunId>>;
+}
+
+// ── Event waits (`listen`) ──
+
+/// Whether `event` carries every attribute of `filter`; an object value (such
+/// as `data`) matches as a subset.
+pub fn event_matches(filter: &Value, event: &Value) -> bool {
+    match (filter, event) {
+        (Value::Object(f), Value::Object(e)) => f.iter().all(|(k, v)| e.get(k).is_some_and(|x| event_matches(v, x))),
+        (f, e) => f == e,
+    }
+}
+
+/// Offer `event` to a wait. Its `correlation` is `{mode: one|any|all,
+/// filters: [..]}`; `received` holds one slot per filter, null until an
+/// event fills it. Returns (taken, complete).
+pub fn offer_event(correlation: &Value, received: &mut Vec<Value>, event: &Value) -> (bool, bool) {
+    let filters = correlation.get("filters").and_then(Value::as_array).cloned().unwrap_or_default();
+    if filters.is_empty() {
+        // `any: []` — any event.
+        *received = vec![event.clone()];
+        return (true, true);
+    }
+    received.resize(filters.len(), Value::Null);
+    let Some(i) = (0..filters.len()).find(|&i| received[i].is_null() && event_matches(&filters[i], event)) else {
+        return (false, false);
+    };
+    received[i] = event.clone();
+    let all = correlation.get("mode").and_then(Value::as_str) == Some("all");
+    (true, !all || received.iter().all(|r| !r.is_null()))
+}
+
+/// The events a completed wait received, in filter order.
+pub fn received_events(received: &[Value]) -> Value {
+    Value::Array(received.iter().filter(|r| !r.is_null()).cloned().collect())
+}
+
+/// A CloudEvent from the attributes given (`type`, `source`, `data`,
+/// `subject`, extensions…): `specversion`, `id` and `time` filled in when
+/// missing, `source` defaulting to `default_source`.
+pub fn cloud_event(with: &Value, default_source: &str) -> Value {
+    let mut ev = serde_json::Map::new();
+    ev.insert("specversion".into(), Value::from("1.0"));
+    ev.insert("id".into(), Value::from(Uuid::now_v7().to_string()));
+    ev.insert("source".into(), Value::from(default_source));
+    ev.insert("time".into(), Value::from(Utc::now().to_rfc3339()));
+    if let Some(m) = with.as_object() {
+        for (k, v) in m.iter().filter(|(_, v)| !v.is_null()) {
+            ev.insert(k.clone(), v.clone());
+        }
+    }
+    if ev.contains_key("data") && !ev.contains_key("datacontenttype") {
+        ev.insert("datacontenttype".into(), Value::from("application/json"));
+    }
+    Value::Object(ev)
+}
+
+/// The wake-up task's dedupe key for a wait.
+pub fn wait_wake_key(run: RunId, wait_id: &str) -> String {
+    format!("{run}:event:{wait_id}")
 }
 
 // ── Journal ──

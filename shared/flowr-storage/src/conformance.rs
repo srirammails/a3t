@@ -40,6 +40,7 @@ where
     orphaned_runs_after_owner_lease_expiry(&make().await).await;
     outbox_drains_in_order(&make().await).await;
     purge_removes_only_old_finished_runs(&make().await).await;
+    event_waits_wake_matching_runs_once(&make().await).await;
 }
 
 fn new_run(ns: &str, flow: &str) -> NewRun {
@@ -359,4 +360,77 @@ async fn purge_removes_only_old_finished_runs<S: EngineStore>(s: &S) {
     assert!(s.get(done).await.unwrap().is_none());
     assert!(s.read_from(done, 0).await.unwrap().is_empty(), "its journal goes too");
     assert!(s.get(open).await.unwrap().is_some(), "unfinished runs stay");
+}
+
+fn kinds<'a>(entries: &'a [JournalEntry]) -> Vec<&'a str> {
+    entries
+        .iter()
+        .map(|e| match &e.record {
+            Record::WaitForEvents { .. } => "wait",
+            Record::EventReceived { .. } => "event",
+            _ => "other",
+        })
+        .collect()
+}
+
+async fn event_waits_wake_matching_runs_once<S: EngineStore>(s: &S) {
+    let ev = |t: &str, order: u32| json!({ "specversion": "1.0", "id": Uuid::now_v7(), "type": t, "source": "/shop", "data": { "order": order, "note": "x" } });
+    let one = json!({ "mode": "one", "filters": [{ "type": "paid", "data": { "order": 7 } }] });
+
+    // A wait opens with its journal record, once.
+    let id = start(s, new_run("p", "f")).await;
+    let (lease, _, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    s.open_wait(id, epoch, "w1", one.clone()).await.unwrap();
+    s.open_wait(id, epoch, "w1", one.clone()).await.unwrap();
+    assert_eq!(kinds(&s.read_from(id, 0).await.unwrap()), ["wait"]);
+    assert!(matches!(s.open_wait(id, epoch + 1, "w2", one.clone()).await, Err(StoreError::Fenced(_))), "fenced");
+    s.release(id, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
+
+    // Non-matching events (other namespace, type, data) leave it waiting.
+    assert!(s.deliver_event("q", ev("paid", 7)).await.unwrap().is_empty(), "other namespace");
+    assert!(s.deliver_event("p", ev("shipped", 7)).await.unwrap().is_empty(), "other type");
+    assert!(s.deliver_event("p", ev("paid", 8)).await.unwrap().is_empty(), "other data");
+    assert_eq!(s.pending(DEFAULT_POOL).await.unwrap(), 0);
+
+    // A match wakes it: EventReceived journaled, a resume task, phase pending.
+    assert_eq!(s.deliver_event("p", ev("paid", 7)).await.unwrap(), vec![id]);
+    let journal = s.read_from(id, 0).await.unwrap();
+    assert_eq!(kinds(&journal), ["wait", "event"]);
+    let Record::EventReceived { wait_id, events } = &journal[1].record else { unreachable!() };
+    assert_eq!(wait_id, "w1");
+    assert_eq!(events[0]["data"]["order"], 7);
+    assert_eq!(s.get(id).await.unwrap().unwrap().phase, RunPhase::Pending);
+    assert_eq!(s.pending(DEFAULT_POOL).await.unwrap(), 1);
+    // The wait is closed: a second event does nothing.
+    assert!(s.deliver_event("p", ev("paid", 7)).await.unwrap().is_empty(), "woken once");
+    let (lease, task, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    assert_eq!(task.kind, TaskKind::ResumeRun);
+    s.release(id, epoch, RunPhase::Completed, RunOutcome::default(), &lease).await.unwrap();
+
+    // `all`: completes when every filter has an event, in filter order.
+    let all = json!({ "mode": "all", "filters": [{ "type": "a" }, { "type": "b" }] });
+    let id = start(s, new_run("p", "g")).await;
+    let (lease, _, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    s.open_wait(id, epoch, "w3", all).await.unwrap();
+    // Delivered while the run is still owned: it is woken after its release.
+    assert!(s.deliver_event("p", ev("b", 1)).await.unwrap().is_empty(), "half of all");
+    assert_eq!(s.deliver_event("p", ev("a", 2)).await.unwrap(), vec![id]);
+    assert_eq!(s.get(id).await.unwrap().unwrap().phase, RunPhase::Running, "still owned");
+    let journal = s.read_from(id, 0).await.unwrap();
+    let Record::EventReceived { events, .. } = &journal[1].record else { unreachable!() };
+    assert_eq!((events[0]["type"].as_str(), events[1]["type"].as_str()), (Some("a"), Some("b")));
+    s.release(id, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
+    let claimed = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap();
+    assert_eq!(claimed.len(), 1, "its wake-up runs once it is released");
+
+    // A closed wait (timed out) and a cancelled run's wait take no events.
+    let id = start(s, new_run("p", "h")).await;
+    let (lease, _, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    s.open_wait(id, epoch, "w4", json!({ "mode": "any", "filters": [{ "type": "t" }] })).await.unwrap();
+    assert!(s.close_wait(id, epoch, "w4").await.unwrap());
+    assert!(!s.close_wait(id, epoch, "w4").await.unwrap());
+    s.open_wait(id, epoch, "w5", json!({ "mode": "any", "filters": [{ "type": "t" }] })).await.unwrap();
+    s.release(id, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
+    s.request(id, RunRequest::Cancel { by: "u1".into(), reason: "no".into() }).await.unwrap();
+    assert!(s.deliver_event("p", ev("t", 1)).await.unwrap().is_empty());
 }

@@ -14,6 +14,10 @@
 //!   flow's `try`/`catch` can handle.
 //! - **Waits** longer than `FLOWR_INLINE_WAIT_MAX_MS` (5 s) are durable timers:
 //!   the run lets go and is woken when the timer fires, on any worker.
+//! - **`listen`** opens a wait in the store and the run lets go; a matching
+//!   event (from `emit` or `send_event`) wakes it on any worker, and the step
+//!   outputs the events received. A `timeout` on the step closes the wait and
+//!   fails the step (catchable) if nothing came in time.
 //! - **Debug runs** pause at breakpoints (before / after / on error, with an
 //!   optional condition on the step input and a hit count) and on stepping
 //!   commands; a pause is durable — the run lets go until a command arrives.
@@ -59,6 +63,8 @@ pub(crate) enum Halt {
     Paused,
     /// A durable timer: wake at this time.
     Timer(DateTime<Utc>),
+    /// Waiting for events; wake at the step's timeout, if it has one.
+    Listen(Option<DateTime<Utc>>),
     /// The run belongs to another worker now, or the journal could not be written.
     Lost,
     /// Crash test: act as a dead process.
@@ -98,6 +104,9 @@ pub(crate) struct JournalHook {
     attempts: Mutex<HashMap<String, u32>>,
     /// Durable timers already set, by step key.
     timers: Mutex<HashMap<String, DateTime<Utc>>>,
+    /// Event waits opened (when), and the events delivered to them, by wait id.
+    waits: Mutex<HashMap<String, DateTime<Utc>>>,
+    events: Mutex<HashMap<String, Value>>,
     pending: Mutex<Vec<Record>>,
     pending_since: Mutex<Option<std::time::Instant>>,
     /// The context after the last recorded step.
@@ -258,6 +267,45 @@ fn kill_points(namespace: &str, name: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// What a `listen` step waits for, as the store matches it: `{mode, filters}`,
+/// each filter the attributes an event must carry. Runtime expressions in
+/// filter values (`${ .orderId }`) are evaluated against the step input.
+fn correlation_of(listen: &swf_parser::ListenTask, input: &Value, context: &Value) -> std::result::Result<Value, String> {
+    let to = &listen.to;
+    let (mode, filters) = if let Some(one) = &to.one {
+        ("one", vec![one.clone()])
+    } else if let Some(all) = &to.all {
+        ("all", all.clone())
+    } else if let Some(any) = &to.any {
+        ("any", any.clone())
+    } else {
+        return Err("listen needs `to.one`, `to.all` or `to.any`".into());
+    };
+    let engine = flowr_core::ExpressionEngine::new();
+    let scope = flowr_core::Scope::builder().context(context.clone()).build();
+    let filters = filters
+        .into_iter()
+        .map(|f| {
+            let with = serde_json::to_value(&f.with).map_err(|e| e.to_string())?;
+            resolved(&engine, &scope, &with, input)
+        })
+        .collect::<std::result::Result<Vec<_>, String>>()?;
+    Ok(json!({ "mode": mode, "filters": filters }))
+}
+
+fn resolved(engine: &flowr_core::ExpressionEngine, scope: &flowr_core::Scope, v: &Value, input: &Value) -> std::result::Result<Value, String> {
+    Ok(match v {
+        Value::String(s) if s.trim_start().starts_with("${") && s.trim_end().ends_with('}') => {
+            engine.eval(input, s, scope).map_err(|e| format!("listen filter `{s}`: {e}"))?
+        }
+        Value::Object(m) => Value::Object(
+            m.iter().filter(|(_, x)| !x.is_null()).map(|(k, x)| Ok((k.clone(), resolved(engine, scope, x, input)?))).collect::<std::result::Result<_, String>>()?,
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(|x| resolved(engine, scope, x, input)).collect::<std::result::Result<_, _>>()?),
+        other => other.clone(),
+    })
+}
+
 /// A step input as journaled for people: values over 64 KiB are replaced by
 /// their size (replay never reads inputs).
 fn shown(input: &Value) -> Value {
@@ -280,6 +328,8 @@ impl JournalHook {
         let mut prior = HashMap::new();
         let mut attempts = HashMap::new();
         let mut timers = HashMap::new();
+        let mut waits = HashMap::new();
+        let mut events = HashMap::new();
         let mut last_context = json!({});
         let mut pinned = None;
         let mut paused: Option<(String, String)> = None;
@@ -307,6 +357,12 @@ impl JournalHook {
                 Record::TimerSet { wait_id, fire_at } => {
                     timers.insert(wait_id, fire_at);
                 }
+                Record::WaitForEvents { wait_id, .. } => {
+                    waits.insert(wait_id, e.at);
+                }
+                Record::EventReceived { wait_id, events: got } => {
+                    events.insert(wait_id, got);
+                }
                 Record::Paused { step_key, when, .. } => {
                     paused = Some((step_key, when));
                     edits.clear();
@@ -332,6 +388,8 @@ impl JournalHook {
             prior: Mutex::new(prior),
             attempts: Mutex::new(attempts),
             timers: Mutex::new(timers),
+            waits: Mutex::new(waits),
+            events: Mutex::new(events),
             pending: Mutex::new(Vec::new()),
             pending_since: Mutex::new(None),
             last_context: Mutex::new(last_context),
@@ -472,6 +530,66 @@ impl JournalHook {
         }
     }
 
+    /// A `listen` step: open its wait and let go, or finish with the events
+    /// delivered — or with a timeout once its `timeout` has passed.
+    async fn listen(&self, key: &str, task: &NamedTask, listen: &swf_parser::ListenTask, input: &Value) -> Result<StepReplay> {
+        let wait_id = key.to_string();
+        let now = Utc::now();
+        let opened = self.waits.lock().unwrap().get(&wait_id).copied();
+        let waited = |since: Option<DateTime<Utc>>| since.map_or(0, |t| (now - t).num_microseconds().unwrap_or(0).max(0) as u64);
+        let delivered = self.events.lock().unwrap().remove(&wait_id);
+        if let Some(events) = delivered {
+            let envelope = listen.read.as_deref() == Some("envelope");
+            let output = match events {
+                Value::Array(list) if !envelope => Value::Array(list.into_iter().map(|e| e.get("data").cloned().unwrap_or(Value::Null)).collect()),
+                other => other,
+            };
+            let rec = Record::StepCompleted {
+                step_key: key.to_string(),
+                attempt: 0,
+                output: output.clone(),
+                context: Value::Null,
+                class: StepClass::Read,
+                duration_us: waited(opened),
+                directive: "continue".into(),
+                input: shown(input),
+                at: Some(now),
+            };
+            self.commit(vec![rec]).await?;
+            return Ok(StepReplay::Completed { output, context: None, directive: "continue".into() });
+        }
+        let limit = task.timeout.as_ref().and_then(|t| t.duration()).map(|d| chrono::Duration::from_std(d).unwrap_or(chrono::Duration::MAX));
+        match opened {
+            Some(at) => {
+                let deadline = limit.map(|l| at + l);
+                if deadline.is_some_and(|d| d <= now) {
+                    self.commit(vec![]).await?;
+                    if self.engine.close_wait(self.run, self.epoch, &wait_id).await.is_err() {
+                        return Err(self.stop(Halt::Lost));
+                    }
+                    let error = format!("timeout: task '{}' got no matching event within {}s", task.name, limit.unwrap_or_default().num_seconds());
+                    let rec = Record::StepFailed { step_key: key.to_string(), attempt: 0, error: Value::String(error.clone()), retryable: false, duration_us: waited(opened), input: shown(input), at: Some(now) };
+                    self.commit(vec![rec]).await?;
+                    return Ok(StepReplay::Failed { error });
+                }
+                Err(self.stop(Halt::Listen(deadline)))
+            }
+            None => {
+                let context = self.last_context.lock().unwrap().clone();
+                let correlation = correlation_of(listen, input, &context)
+                    .map_err(|e| RuntimeError::task_failed(&task.name, e))?;
+                self.commit(vec![]).await?;
+                self.kill("before_step_started", key)?;
+                if let Err(e) = self.engine.open_wait(self.run, self.epoch, &wait_id, correlation).await {
+                    tracing::warn!(run = %self.run, error = %e, "could not open the event wait; stopping the run here");
+                    return Err(self.stop(Halt::Lost));
+                }
+                self.waits.lock().unwrap().insert(wait_id, now);
+                Err(self.stop(Halt::Listen(limit.map(|l| now + l))))
+            }
+        }
+    }
+
     /// A debug run: pause before `key`?
     fn pause_before(&self, key: &str, input: &Value) -> Option<String> {
         if self.resuming_from(key, "before") {
@@ -580,6 +698,10 @@ impl StepHook for JournalHook {
                     return Err(self.stop(Halt::Timer(fire_at)));
                 }
             }
+        }
+
+        if let Task::Listen(listen) = &task.task {
+            return self.listen(&key, task, listen, input).await;
         }
 
         if class != StepClass::Pure {

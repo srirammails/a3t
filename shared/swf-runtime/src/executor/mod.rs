@@ -574,8 +574,16 @@ impl WorkflowExecutor {
                 self.dispatch_to_handler(handler_name, &resolved_task, input, ctx).await
             }
 
-            Task::Emit(_) => {
-                self.dispatch_to_handler("emit", named_task, input, ctx).await
+            Task::Emit(emit) => {
+                // The event's attributes may hold runtime expressions.
+                let with = serde_json::to_value(&emit.event.with).map_err(|e| RuntimeError::Internal(e.to_string()))?;
+                let with = self.eval_value_recursive(&with, &input, &ctx.context)?;
+                let mut resolved_task = named_task.clone();
+                if let Task::Emit(ref mut e) = resolved_task.task {
+                    e.event.with = serde_json::from_value(with)
+                        .map_err(|err| RuntimeError::task_failed(&named_task.name, format!("emit: {err}")))?;
+                }
+                self.dispatch_to_handler("emit", &resolved_task, input, ctx).await
             }
 
             Task::Listen(_) => {

@@ -101,6 +101,17 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   PRIMARY KEY (run_id, seq)
 );
 
+CREATE TABLE IF NOT EXISTS waits (
+  run_id      TEXT NOT NULL,
+  wait_id     TEXT NOT NULL,
+  namespace   TEXT NOT NULL,
+  correlation TEXT NOT NULL,
+  received    TEXT NOT NULL DEFAULT '[]',
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (run_id, wait_id)
+);
+CREATE INDEX IF NOT EXISTS waits_ns ON waits(namespace, created_at);
+
 CREATE TABLE IF NOT EXISTS outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL
 );
@@ -607,6 +618,7 @@ impl RunStore for SqliteStore {
                             )
                             .map_err(be)?;
                             drop_tasks(tx)?;
+                            tx.execute("DELETE FROM waits WHERE run_id = ?1", [&rid]).map_err(be)?;
                         }
                     }
                     RunRequest::Suspend { .. } => {
@@ -732,10 +744,94 @@ impl RunStore for SqliteStore {
             tx.execute(&format!("DELETE FROM journal WHERE run_id IN (SELECT run_id FROM runs WHERE {done})"), [cut]).map_err(be)?;
             tx.execute(&format!("DELETE FROM checkpoints WHERE run_id IN (SELECT run_id FROM runs WHERE {done})"), [cut]).map_err(be)?;
             tx.execute(&format!("DELETE FROM tasks WHERE run_id IN (SELECT run_id FROM runs WHERE {done})"), [cut]).map_err(be)?;
+            tx.execute(&format!("DELETE FROM waits WHERE run_id IN (SELECT run_id FROM runs WHERE {done})"), [cut]).map_err(be)?;
             let n = tx.execute(&format!("DELETE FROM runs WHERE {done}"), [cut]).map_err(be)?;
             Ok(n)
         })
         .await
+    }
+
+    async fn open_wait(&self, run: RunId, epoch: Epoch, wait_id: &str, correlation: Value) -> StoreResult<()> {
+        let wait_id = wait_id.to_string();
+        self.write(move |tx| {
+            check_epoch(tx, run, epoch)?;
+            let now = nanos(Utc::now());
+            let n = tx
+                .execute(
+                    "INSERT OR IGNORE INTO waits(wait_id, run_id, namespace, correlation, created_at) \
+                     SELECT ?1, run_id, namespace, ?3, ?4 FROM runs WHERE run_id = ?2",
+                    params![wait_id, run.to_string(), js(&correlation), now],
+                )
+                .map_err(be)?;
+            if n > 0 {
+                push(tx, run, epoch, &[Record::WaitForEvents { wait_id, correlation }], now)?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    async fn close_wait(&self, run: RunId, epoch: Epoch, wait_id: &str) -> StoreResult<bool> {
+        let wait_id = wait_id.to_string();
+        self.write(move |tx| {
+            check_epoch(tx, run, epoch)?;
+            let n = tx.execute("DELETE FROM waits WHERE wait_id = ?1 AND run_id = ?2", params![wait_id, run.to_string()]).map_err(be)?;
+            Ok(n > 0)
+        })
+        .await
+    }
+
+    async fn deliver_event(&self, namespace: &str, event: Value) -> StoreResult<Vec<RunId>> {
+        let namespace = namespace.to_string();
+        let woke: Vec<(RunId, String)> = self
+            .write(move |tx| {
+                let now_t = Utc::now();
+                let now = nanos(now_t);
+                let open: Vec<(String, String, String, String)> = {
+                    let mut st = tx
+                        .prepare("SELECT wait_id, run_id, correlation, received FROM waits WHERE namespace = ?1 ORDER BY created_at")
+                        .map_err(be)?;
+                    let rows = st.query_map([&namespace], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).map_err(be)?;
+                    rows.collect::<Result<_, _>>().map_err(be)?
+                };
+                let mut woke = Vec::new();
+                for (wait_id, rid, correlation, received) in open {
+                    let run = uuid(&rid).map_err(be)?;
+                    let row = match get_run(tx, run)? {
+                        Some(r) if !r.phase.is_terminal() => r,
+                        _ => {
+                            tx.execute("DELETE FROM waits WHERE run_id = ?1 AND wait_id = ?2", params![rid, wait_id]).map_err(be)?;
+                            continue;
+                        }
+                    };
+                    let mut got: Vec<Value> = serde_json::from_str(&received).unwrap_or_default();
+                    let (taken, done) = offer_event(&unjs(&correlation), &mut got, &event);
+                    if !taken {
+                        continue;
+                    }
+                    if !done {
+                        tx.execute("UPDATE waits SET received = ?3 WHERE run_id = ?1 AND wait_id = ?2", params![rid, wait_id, js(&Value::Array(got))]).map_err(be)?;
+                        continue;
+                    }
+                    tx.execute("DELETE FROM waits WHERE run_id = ?1 AND wait_id = ?2", params![rid, wait_id]).map_err(be)?;
+                    push(tx, run, row.epoch, &[Record::EventReceived { wait_id: wait_id.clone(), events: received_events(&got) }], now)?;
+                    let owner_until: Option<i64> = tx
+                        .query_row("SELECT owner_lease_until FROM runs WHERE run_id = ?1", [&rid], |r| r.get(0))
+                        .map_err(be)?;
+                    if !(row.owner.is_some() && owner_until.is_some_and(|t| t >= now)) {
+                        tx.execute("UPDATE runs SET phase = ?2 WHERE run_id = ?1", params![rid, tag(&RunPhase::Pending)]).map_err(be)?;
+                    }
+                    enqueue_tx(tx, &NewTask::resume_for(&row, Some(wait_wake_key(run, &wait_id)), now_t))?;
+                    woke.push((run, pool_for(&row.namespace, &row.flow)));
+                }
+                Ok(woke)
+            })
+            .await?;
+        for (run, pool) in &woke {
+            self.notify(&tasks_topic(pool), json!({ "resume": run }));
+            self.notify(&run_topic(*run), json!({ "event": true }));
+        }
+        Ok(woke.into_iter().map(|(r, _)| r).collect())
     }
 
     async fn orphaned(&self) -> StoreResult<Vec<RunRow>> {

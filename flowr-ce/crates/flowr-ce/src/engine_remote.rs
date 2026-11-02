@@ -115,6 +115,9 @@ async fn dispatch(store: &dyn EngineStore, op: &str, a: &Value) -> StoreResult<V
         "list" => out(store.list(arg(a, "q")?).await),
         "orphaned" => out(store.orphaned().await),
         "purge_finished" => out(store.purge_finished(arg(a, "before")?).await),
+        "open_wait" => out(store.open_wait(arg(a, "run")?, arg(a, "epoch")?, &arg::<String>(a, "wait_id")?, arg(a, "correlation")?).await),
+        "close_wait" => out(store.close_wait(arg(a, "run")?, arg(a, "epoch")?, &arg::<String>(a, "wait_id")?).await),
+        "deliver_event" => out(store.deliver_event(&arg::<String>(a, "namespace")?, arg(a, "event")?).await),
         "append" => out(store.append(arg(a, "run")?, arg(a, "epoch")?, &arg::<Vec<Record>>(a, "records")?).await),
         "read_from" => out(store.read_from(arg(a, "run")?, arg(a, "after_seq")?).await),
         "commit_step" => out(store.commit_step(arg(a, "run")?, arg(a, "epoch")?, arg(a, "commit")?).await),
@@ -330,6 +333,15 @@ impl RunStore for RemoteEngineStore {
     }
     async fn purge_finished(&self, before: DateTime<Utc>) -> StoreResult<usize> {
         self.op("purge_finished", json!({ "before": before })).await
+    }
+    async fn open_wait(&self, run: RunId, epoch: Epoch, wait_id: &str, correlation: Value) -> StoreResult<()> {
+        self.op("open_wait", json!({ "run": run, "epoch": epoch, "wait_id": wait_id, "correlation": correlation })).await
+    }
+    async fn close_wait(&self, run: RunId, epoch: Epoch, wait_id: &str) -> StoreResult<bool> {
+        self.op("close_wait", json!({ "run": run, "epoch": epoch, "wait_id": wait_id })).await
+    }
+    async fn deliver_event(&self, namespace: &str, event: Value) -> StoreResult<Vec<RunId>> {
+        self.op("deliver_event", json!({ "namespace": namespace, "event": event })).await
     }
 }
 

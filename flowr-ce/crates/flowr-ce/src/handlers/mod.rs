@@ -8,6 +8,7 @@
 //! - call:registry — moving a namespace (the A3T project flows)
 //! - call:state:get/set/delete — state store operations
 //! - run:script — inline script execution (Lua, JS, Python)
+//! - emit / listen — CloudEvents between runs
 
 pub mod agent_memory;
 pub mod call_adb;
@@ -15,6 +16,7 @@ pub mod call_agent;
 pub mod call_lancedb;
 pub mod call_llm;
 pub mod call_rotate;
+pub mod events;
 pub mod call_registry;
 pub mod call_mcp;
 pub mod run_script;
@@ -41,4 +43,6 @@ pub fn register_clawdflow_handlers(executor: &mut WorkflowExecutor) {
     executor.register_handler(Arc::new(call_rotate::RotateHandler));
     executor.register_handler(Arc::new(call_registry::RegistryHandler));
     executor.register_handler(Arc::new(call_agent::AgentHandler));
+    executor.register_handler(Arc::new(events::EmitHandler));
+    executor.register_handler(Arc::new(events::ListenHandler));
 }

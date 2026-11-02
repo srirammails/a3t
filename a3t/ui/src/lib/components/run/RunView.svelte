@@ -13,7 +13,7 @@
     { runId: string; flowSteps?: string[]; onrerun?: (id: string) => void; shared?: FlowDebug | null } = $props();
 
   type Step = { step_key: string; status: string; class?: string; duration_us?: number; attempts?: number; edited?: boolean;
-                started_at?: string; completed_at?: string; seq?: number; error?: any; fire_at?: string };
+                started_at?: string; completed_at?: string; seq?: number; error?: any; fire_at?: string; listening?: any };
   type Entry = { seq: number; at: string; epoch: number; record: any };
 
   let run = $state<any>(null);
@@ -120,6 +120,27 @@
     message = `Input for ${paused.step_key} replaced — Continue or Step to run it.`;
     await load();
   }
+  // ── Events: wake a listening run from here ──
+  let eventText = $state('');
+  let sending = $state(false);
+  function openSend(listening: any) {
+    const f = { ...(listening?.filters?.[0] ?? { type: 'my.event' }) };
+    eventText = JSON.stringify({ ...f, data: f.data ?? {} }, null, 2);
+    sending = true;
+  }
+  async function sendEvent() {
+    let event: any;
+    try { event = JSON.parse(eventText); } catch (e) { message = `Not valid JSON: ${(e as Error).message}`; return; }
+    busy = true;
+    const r = await runsApi.sendEvent(run.namespace, event);
+    busy = false;
+    if (!r.ok) { message = r.error ?? 'Send failed'; return; }
+    sending = false;
+    const n = r.data?.woke?.length ?? 0;
+    message = n ? `Event sent — woke ${n} run${n > 1 ? 's' : ''}.` : 'Event sent — no waiting run matched it.';
+    await load();
+  }
+
   async function cancel() {
     busy = true;
     const r = await runsApi.cancel(runId, 'cancelled from the console');
@@ -157,6 +178,7 @@
     let pausedAt: number | null = null, pausedWhy = '';
     let resumeAt: number | null = null, resumeEpoch = 0;
     let epoch = 0;
+    const listening = new Map<string, number>();
     for (const e of entries) {
       const at = happened(e), r = e.record ?? {};
       if (e.epoch > epoch) {
@@ -174,8 +196,14 @@
         pausedAt = null;
         resumeAt = at; resumeEpoch = e.epoch;
       }
+      if (r.kind === 'wait_for_events') listening.set(r.wait_id, at);
+      if (r.kind === 'event_received' && listening.has(r.wait_id)) {
+        life.push({ from: listening.get(r.wait_id)!, to: at, kind: 'timer', title: `${r.wait_id} listened until its event came` });
+        listening.delete(r.wait_id);
+      }
       if (r.kind === 'timer_set' && r.fire_at) life.push({ from: at, to: Math.min(ms(r.fire_at), end), kind: 'timer', title: `Timer ${r.wait_id} until ${new Date(r.fire_at).toLocaleTimeString()}` });
     }
+    for (const [k, from] of listening) life.push({ from, to: end, kind: 'timer', title: `${k} listening for events` });
     if (pausedAt !== null) life.push({ from: pausedAt, to: end, kind: 'paused', title: pausedWhy });
     if (resumeAt !== null) queue.push({ from: resumeAt, to: end, kind: 'requeued', title: 'Resumed — waiting for a worker to pick it up again' });
     const total = Math.max(end - created, 1);
@@ -254,7 +282,25 @@
         {/if}
       </div>
     {/if}
-    {#if run.phase === 'waiting'}<div class="rv-note">⏳ Waiting on a timer — no worker is held; it wakes on time, on any worker.</div>{/if}
+    {#if run.phase === 'waiting'}
+      {@const ear = (run.steps ?? []).find((s: any) => s.status === 'waiting' && s.listening)}
+      {#if ear}
+        <div class="rv-note" title={JSON.stringify(ear.listening.filters)}>⏳ Listening at {ear.step_key} for {ear.listening.mode === 'all' ? 'all of' : ear.listening.mode === 'any' ? 'any of' : ''} {(ear.listening.filters ?? []).map((f: any) => f.type).join(', ') || 'any event'} — no worker is held; a matching event (an <code>emit</code>, or <code>send_event</code>) wakes it on any worker.
+          {#if run.can_steer && !sending}<button class="lnk" disabled={busy} onclick={() => openSend(ear.listening)}>Send event…</button>{/if}</div>
+        {#if sending}
+          <div class="rv-edit">
+            <span class="rv-note">CloudEvent sent in project {run.namespace} (<code>type</code> required; <code>id</code>, <code>time</code>, <code>source</code> are filled in):</span>
+            <textarea rows="8" bind:value={eventText}></textarea>
+            <div class="rv-row">
+              <button class="btn sm" onclick={() => (sending = false)}>Cancel</button>
+              <button class="btn spec sm" disabled={busy} onclick={sendEvent}>Send</button>
+            </div>
+          </div>
+        {/if}
+      {:else}
+        <div class="rv-note">⏳ Waiting on a timer — no worker is held; it wakes on time, on any worker.</div>
+      {/if}
+    {/if}
     {#if message}<div class="rv-msg">{message}</div>{/if}
     {#if run.error}<div class="rv-msg">{run.error}</div>{/if}
 

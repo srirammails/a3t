@@ -325,6 +325,20 @@ async fn run_claimed(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineSto
             release(RunPhase::Waiting, RunOutcome::default()).await;
             return;
         }
+        Some(Halt::Listen(timeout_at)) => {
+            // Woken by a matching event (the store enqueues that), or at the
+            // step's timeout or the run's deadline, whichever comes first.
+            if let Some(wake_at) = [timeout_at, deadline].into_iter().flatten().min() {
+                let wake = NewTask::resume_for(&row, Some(format!("{run_id}:listen:{}", wake_at.timestamp_millis())), wake_at);
+                if let Err(e) = engine.enqueue(wake).await {
+                    error!(%run_id, error = %e, "could not schedule the listen timeout; the run stays owned until its lease runs out and is retried");
+                    return;
+                }
+            }
+            info!(%run_id, ?timeout_at, "run waiting for events");
+            release(RunPhase::Waiting, RunOutcome::default()).await;
+            return;
+        }
         None => {}
     }
 
