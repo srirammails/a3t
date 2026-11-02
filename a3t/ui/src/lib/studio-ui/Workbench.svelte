@@ -10,6 +10,7 @@
   import DocTabs from './DocTabs.svelte';
   import ContextMenu, { type MenuItem } from './parts/ContextMenu.svelte';
   import { VIEWS, PANELS } from './registry';
+  import CompareView from './views/CompareView.svelte';
   import type { RegionId, Studio } from './layout.svelte.ts';
   import { kindById, type PanelDef, type Workspace } from '$lib/studio-core';
 
@@ -97,6 +98,13 @@
     else if (el.closest('.center-body')) items.push(...(centerPanel ? panelItems(centerPanel.id) : docItems()));
     if (items.length) menu = { x: e.clientX, y: e.clientY, items };
   }
+
+  /// A part without the layout asks for a panel (Sync ▾ → Versions).
+  $effect(() => {
+    const r = active?.ui.reveal as { region: RegionId; panel: string } | undefined;
+    if (!r || !active) return;
+    untrack(() => { active!.ui.reveal = undefined; studio.reveal(r.region, r.panel); });
+  });
 
   function docItems(): MenuItem[] {
     const d = active;
@@ -205,8 +213,13 @@
       {@render home?.()}
     {:else}
       {#key active.address}
-        {@const V = VIEWS[active.ui.view === 'code' && kind.views.code ? kind.views.code : kind.views.center]}
-        {#if V}<V doc={active} {workspace} {studio} />{/if}
+        {#if active.ui.compare}
+          <!-- The split view (Sync / Merge / compare versions), in the item's own tab. -->
+          <CompareView doc={active} {workspace} />
+        {:else}
+          {@const V = VIEWS[active.ui.view === 'code' && kind.views.code ? kind.views.code : kind.views.center]}
+          {#if V}<V doc={active} {workspace} {studio} />{/if}
+        {/if}
       {/key}
     {/if}
   </div>

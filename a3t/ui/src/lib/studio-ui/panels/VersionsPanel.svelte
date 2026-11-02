@@ -2,8 +2,11 @@
   /// The versions the registry keeps of the open item (bottom region, beside
   /// Runs): which is active — what runs without a pin — which one the editor
   /// holds, and for each: load it into the editor, or make it the active one.
-  /// A new version comes from Sync → Push as a new version.
-  import { sortVersions, type Doc, type Workspace } from '$lib/studio-core';
+  /// Tick any two (the editor counts as one) and Compare shows them side by side.
+  /// Push as a new version bumps `document.version` and keeps the old one.
+  import { bumpVersion, sortVersions, type Doc, type Workspace } from '$lib/studio-core';
+  import { untrack } from 'svelte';
+  import { compareVersions, push } from '../sync';
 
   let { doc, workspace }: { doc: Doc | null; workspace: Workspace } = $props();
 
@@ -27,8 +30,10 @@
     list = sortVersions(r.data.versions);
     active = r.data.active;
   }
-  // Again whenever another item is shown, or this one is pushed.
-  $effect(() => { void doc?.address; void doc?.saved; if (can) void refresh(); });
+  // Again whenever another item is shown, or this one is pushed — and only
+  // then: the fetch runs untracked, since the API client updates shared state
+  // (the loading bar) that would otherwise re-run this effect, forever.
+  $effect(() => { void doc?.address; void doc?.saved; if (can) untrack(() => void refresh()); });
 
   async function load(v: string) {
     if (!doc || !kind?.loadVersion) return;
@@ -40,6 +45,30 @@
     doc.text = r.data;
     note = `Version ${v} is in the editor — Save keeps it as a draft, Sync pushes it.`;
   }
+  // ── Compare any two ──
+  let picked = $state<string[]>([]);
+  $effect(() => { void doc?.address; untrack(() => (picked = [])); });
+  function tick(v: string) {
+    picked = picked.includes(v) ? picked.filter((x) => x !== v) : [...picked, v].slice(-2);
+  }
+  async function compare() {
+    if (!doc || picked.length !== 2) return;
+    // Older on the left… unless the editor is one of them: it goes left.
+    const [a, b] = picked.includes('editor') ? ['editor', picked.find((x) => x !== 'editor')!] : sortVersions(picked).reverse();
+    await compareVersions(doc, workspace, a, b);
+  }
+
+  // ── Push as a new version ──
+  async function pushNew(part: 'patch' | 'minor' | 'major') {
+    if (!doc || !kind?.withVersion) return;
+    const next = bumpVersion(editing, part);
+    if (list.includes(next)) { error = `${next} is already in the registry.`; return; }
+    if (!(await workspace.host.confirm(`Push ${doc.ref.name} as version ${next}? ${editing ? `${editing} stays in the registry; ` : ''}${next} becomes the active one.`))) return;
+    doc.text = kind.withVersion(doc.text ?? '', next);
+    await push(doc, workspace, { ask: false });
+    await refresh();
+  }
+
   async function activate(v: string) {
     if (!doc || !kind?.activate) return;
     if (!(await workspace.host.confirm(`Make ${v} the active version of ${doc.ref.name}? Runs without a pinned version use it from now on.`))) return;
@@ -66,17 +95,32 @@
       <span class="grow"></span>
       {#if note}<span class="ok">{note}</span>{/if}
       {#if error}<span class="err">{error}</span>{/if}
+      {#if kind?.withVersion}
+        <span class="nv" title="Push what is in the editor under a new version; the current one stays">Push as
+          {#each ['patch', 'minor', 'major'] as const as part}
+            <button class="vb" disabled={!!doc.ui.saving} onclick={() => pushNew(part)} title="{part}: {editing || '?'} → {bumpVersion(editing, part)}">{bumpVersion(editing, part)}</button>
+          {/each}
+        </span>
+      {/if}
+      <button class="btn ghost sm" disabled={picked.length !== 2} onclick={compare} title="Tick two rows (the editor counts as one)">⇆ Compare{picked.length ? ` (${picked.length}/2)` : ''}</button>
       <button class="lnk" onclick={refresh} disabled={loading}>{loading ? 'Loading…' : '↻ Refresh'}</button>
     </div>
     <table>
-      <thead><tr><th>Version</th><th></th><th></th></tr></thead>
+      <thead><tr><th class="ck"></th><th>Version</th><th></th><th></th></tr></thead>
       <tbody>
+        <tr class="ed-row">
+          <td class="ck"><input type="checkbox" checked={picked.includes('editor')} onchange={() => tick('editor')} aria-label="Pick the editor's text" /></td>
+          <td class="mono">{editing || '—'}</td>
+          <td><span class="pill ed">in the editor</span>{#if editing !== pushedVersion || workspace.isUnpushed(doc)}<span class="dim small"> not in the registry as edited</span>{/if}</td>
+          <td></td>
+        </tr>
         {#each list as v (v)}
           <tr class:act={v === active}>
+            <td class="ck"><input type="checkbox" checked={picked.includes(v)} onchange={() => tick(v)} aria-label="Pick {v}" /></td>
             <td class="mono">{v}</td>
             <td>
               {#if v === active}<span class="pill on" title="What runs without a pinned version">active</span>{/if}
-              {#if v === editing}<span class="pill ed" title="The version in the editor">in editor</span>{/if}
+              {#if v === pushedVersion}<span class="pill ed" title="The version the editor started from">editor’s base</span>{/if}
             </td>
             <td class="acts">
               <button class="lnk" disabled={!!busy} onclick={() => load(v)} title="Put this version's text in the editor">{busy === `load:${v}` ? 'Loading…' : 'Load'}</button>
@@ -84,7 +128,7 @@
             </td>
           </tr>
         {:else}
-          {#if !loading && !error}<tr><td colspan="3" class="dim">No versions listed.</td></tr>{/if}
+          {#if !loading && !error}<tr><td colspan="4" class="dim">No versions listed.</td></tr>{/if}
         {/each}
       </tbody>
     </table>
@@ -107,6 +151,13 @@
   .pill { font-size: 10.5px; padding: 1px 7px; border-radius: 10px; margin-right: 4px; }
   .pill.on { background: var(--runtime, #1a7158); color: #fff; }
   .pill.ed { background: var(--spec-bg); color: var(--spec-ink, var(--spec)); }
+  .ck { width: 26px; padding-right: 0; }
+  .ck input { width: auto; margin: 0; }
+  .ed-row td { background: var(--bg-subtle); }
+  .small { font-size: 11px; }
+  .nv { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-3); }
+  .vb { font: 11px var(--font-mono); padding: 2px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-surface); color: var(--spec); cursor: pointer; }
+  .vb:hover:not(:disabled) { border-color: var(--spec); background: var(--spec-bg); }
   .acts { text-align: right; white-space: nowrap; }
   .lnk { border: 0; background: none; color: var(--spec); cursor: pointer; font-size: 12px; padding: 0 0 0 10px; }
   .lnk:disabled { opacity: 0.5; cursor: default; }
