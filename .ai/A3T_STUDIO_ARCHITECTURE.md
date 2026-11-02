@@ -342,7 +342,16 @@ Views are registered by id and receive `{ doc, workspace, host }`:
 - *Triggers* open a **designer** (adopted from the Triggers page): identity,
   channel, the target flows as a graph (drop flows from its list or the Explorer),
   and a Test area that fires it; runs below.
-- Agents and templates are read-only in the Studio until their editors move in.
+- **Agents and agent templates** (2 Nov, AGENT_TEMPLATE_SPEC §2): a template is a
+  workflow; each field of its agent step's `config` has a visibility —
+  `required` (the template's value is a placeholder for testing; every agent sets
+  its own), `optional` (a default agents may override), `locked` (final, shown
+  read-only), `hidden` (final, not shown) — kept in the template's own metadata,
+  `document.metadata.a3t.fields`; no marker = `optional`. The template opens as
+  its workflow (graph / code, saved with a confirm when agents use it) with Form,
+  **Agent fields** (set visibilities) and AI; an agent opens as its template's
+  workflow with its values, and its **Form** is generated from the template.
+  Model: `studio-core/agent/model.ts`.
 
 ### 6.3 Shared parts
 
@@ -528,6 +537,7 @@ token and makes every backend call (webviews never hold credentials). Saving an
 | User-owned dev runtime registration | §9 | runtimes come from the platform only |
 | Run unsaved flow text on a dev runtime | §9 | runs use the deployed flow |
 | Multi-turn LLM chat (`messages`) | Chat view | `a3t-test-resource` sends one `prompt` |
+| Enforce template field visibility on save (reject an agent value for a locked or hidden field) | Agents | only the Studio enforces it today (`a3t-agents-update` stores what it is given) |
 | Queries on LanceDB resources | Query view | `query_resource` answers "does not support 'lancedb' resources yet" |
 | Memory scopes and tiers per agent/flow | §10 | Memory page is mock |
 | Rename for flows / resources | Explorer | copy + delete (runs stay under the old name) |
