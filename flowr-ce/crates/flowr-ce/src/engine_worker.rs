@@ -63,6 +63,21 @@ pub(crate) fn worker_pools() -> Vec<String> {
 /// `system`) always run on the console: they read and write the platform
 /// store, which only the console holds.
 pub(crate) fn route(namespace: &str, flow: &str) -> String {
+    let pool = shared_route(namespace, flow);
+    // A process that keeps its own store and serves no gateway (a canvas
+    // sandbox or a CE install) is the only worker on it: its runs go to a pool
+    // it claims, or nobody would ever run them.
+    let alone = !crate::engine_remote_enabled() && std::env::var("FLOWR_ENGINE_TOKEN").map_or(true, |t| t.is_empty());
+    if alone {
+        let mine = worker_pools();
+        if !mine.is_empty() && !mine.contains(&pool) {
+            return mine[0].clone();
+        }
+    }
+    pool
+}
+
+fn shared_route(namespace: &str, flow: &str) -> String {
     if is_platform(namespace) {
         return DEFAULT_POOL.to_string();
     }

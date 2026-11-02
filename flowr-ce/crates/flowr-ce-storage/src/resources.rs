@@ -47,7 +47,7 @@ impl LanceResourceStore {
             let batch = RecordBatch::new_empty(schema.clone());
             let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
 
-            conn.create_table(TYPES_TABLE, Box::new(batches))
+            conn.create_table(TYPES_TABLE, Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>)
                 .execute()
                 .await
                 .map_err(|e| {
@@ -69,7 +69,7 @@ impl LanceResourceStore {
             let batch = RecordBatch::new_empty(schema.clone());
             let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
 
-            conn.create_table(RESOURCES_TABLE, Box::new(batches))
+            conn.create_table(RESOURCES_TABLE, Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>)
                 .execute()
                 .await
                 .map_err(|e| {
@@ -111,7 +111,7 @@ impl ResourceStore for LanceResourceStore {
 
         let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
         table
-            .add(Box::new(batches))
+            .add(Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>)
             .execute()
             .await
             .map_err(|e| FlowError::Storage(format!("Failed to add resource type: {}", e)))?;
@@ -232,7 +232,7 @@ impl ResourceStore for LanceResourceStore {
 
         let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
         table
-            .add(Box::new(batches))
+            .add(Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>)
             .execute()
             .await
             .map_err(|e| FlowError::Storage(format!("Failed to add resource: {}", e)))?;

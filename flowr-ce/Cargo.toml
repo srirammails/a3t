@@ -63,10 +63,10 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 dirs = "6.0"
 
 # LanceDB storage
-lancedb = "0.26"
-arrow = { version = "57", default-features = false }
-arrow-schema = "57"
-arrow-array = "57"
+lancedb = "0.41.0"
+arrow = { version = "58.4.1", default-features = false }
+arrow-schema = "58.4.1"
+arrow-array = "58.4.1"
 
 # In-memory channels for queue/events
 tokio-stream = { version = "0.1", features = ["sync"] }

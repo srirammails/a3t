@@ -53,7 +53,7 @@ impl LanceSettingsStore {
         let batch = RecordBatch::new_empty(schema.clone());
         let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
 
-        conn.create_table(TABLE_NAME, Box::new(batches))
+        conn.create_table(TABLE_NAME, Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>)
             .execute()
             .await
             .map_err(|e| FlowError::Storage(format!("Failed to create settings table: {}", e)))?;
@@ -149,7 +149,7 @@ impl LanceSettingsStore {
 
         let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
         table
-            .add(Box::new(batches))
+            .add(Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>)
             .execute()
             .await
             .map_err(|e| FlowError::Storage(format!("Failed to save setting: {}", e)))?;

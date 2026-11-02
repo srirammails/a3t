@@ -249,7 +249,7 @@ impl PlatformDb for LanceDbPlatform {
         let t = self.db().await?.open_table(table).execute().await.map_err(|e| format!("open table '{table}' error: {e}"))?;
         let mut q = t.query();
         if let Some(f) = filter {
-            q = q.only_if(f);
+            q = q.only_if(flowr_storage::filter::compat(f));
         }
         q.limit(limit)
             .execute()
@@ -269,9 +269,9 @@ impl PlatformDb for LanceDbPlatform {
         let batch = records_to_batch(records, &schema);
         let batches = arrow_array::RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
         match db.open_table(table).execute().await {
-            Ok(t) => t.add(Box::new(batches)).execute().await.map(|_| ()).map_err(|e| format!("insert error: {e}"))?,
+            Ok(t) => t.add(Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>).execute().await.map(|_| ()).map_err(|e| format!("insert error: {e}"))?,
             // Create the table from the first record's fields.
-            Err(_) => db.create_table(table, Box::new(batches)).execute().await.map(|_| ()).map_err(|e| format!("create table error: {e}"))?,
+            Err(_) => db.create_table(table, Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>).execute().await.map(|_| ()).map_err(|e| format!("create table error: {e}"))?,
         }
         Ok(records.len())
     }
@@ -289,7 +289,7 @@ impl PlatformDb for LanceDbPlatform {
         };
         let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
         let batches = arrow_array::RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
-        db.create_table(table, Box::new(batches)).execute().await.map_err(|e| format!("create_table error: {e}"))?;
+        db.create_table(table, Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>).execute().await.map_err(|e| format!("create_table error: {e}"))?;
         info!(table = %table, "created LanceDB table");
         Ok(json!({"created": true, "table": table}))
     }
@@ -297,7 +297,7 @@ impl PlatformDb for LanceDbPlatform {
     async fn update(&self, table: &str, filter: &str, values: &Map<String, Value>) -> Result<(), String> {
         let t = self.db().await?.open_table(table).execute().await.map_err(|e| format!("open table error: {e}"))?;
         let columns: Vec<(String, String)> = values.iter().map(|(k, v)| (k.clone(), sql_literal(v))).collect();
-        let mut op = t.update().only_if(filter);
+        let mut op = t.update().only_if(flowr_storage::filter::compat(filter));
         for (col, val) in &columns {
             op = op.column(col, val.as_str());
         }
@@ -306,7 +306,7 @@ impl PlatformDb for LanceDbPlatform {
 
     async fn delete(&self, table: &str, filter: &str) -> Result<(), String> {
         let t = self.db().await?.open_table(table).execute().await.map_err(|e| format!("open table error: {e}"))?;
-        t.delete(filter).await.map(|_| ()).map_err(|e| format!("delete error: {e}"))
+        t.delete(&flowr_storage::filter::compat(filter)).await.map(|_| ()).map_err(|e| format!("delete error: {e}"))
     }
 
     async fn replace_table(&self, table: &str, columns: &[String], rows: &[Value]) -> Result<(), String> {
@@ -316,7 +316,7 @@ impl PlatformDb for LanceDbPlatform {
         let batches = arrow_array::RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
         self.db()
             .await?
-            .create_table(table, Box::new(batches))
+            .create_table(table, Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>)
             .mode(lancedb::database::CreateTableMode::Overwrite)
             .execute()
             .await
@@ -346,7 +346,8 @@ impl PlatformDb for AdbPlatform {
     }
 
     async fn query(&self, table: &str, filter: Option<&str>, limit: usize) -> Result<Vec<RecordBatch>, String> {
-        crate::handlers::call_adb::flight_get(&self.ep, table, filter, limit).await
+        let filter = filter.map(flowr_storage::filter::compat);
+        crate::handlers::call_adb::flight_get(&self.ep, table, filter.as_deref(), limit).await
     }
 
     async fn insert(&self, table: &str, records: &[Value]) -> Result<usize, String> {
@@ -370,13 +371,13 @@ impl PlatformDb for AdbPlatform {
     }
 
     async fn update(&self, table: &str, filter: &str, values: &Map<String, Value>) -> Result<(), String> {
-        crate::handlers::call_adb::flight_action(&self.ep, "update", &json!({ "table": table, "filter": filter, "values": values }))
+        crate::handlers::call_adb::flight_action(&self.ep, "update", &json!({ "table": table, "filter": flowr_storage::filter::compat(filter), "values": values }))
             .await
             .map(|_| ())
     }
 
     async fn delete(&self, table: &str, filter: &str) -> Result<(), String> {
-        crate::handlers::call_adb::flight_action(&self.ep, "delete", &json!({ "table": table, "filter": filter }))
+        crate::handlers::call_adb::flight_action(&self.ep, "delete", &json!({ "table": table, "filter": flowr_storage::filter::compat(filter) }))
             .await
             .map(|_| ())
     }

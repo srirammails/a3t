@@ -37,9 +37,9 @@ jsonwebtoken = "9"
 argon2 = "0.5"
 
 # LanceDB (for reading A3T users table) — use same versions as clawdflow
-lancedb = "0.26"
-arrow-array = "57"
-arrow-schema = "57"
+lancedb = "0.41.0"
+arrow-array = "58.4.1"
+arrow-schema = "58.4.1"
 futures = "0.3"
 
 # Async trait

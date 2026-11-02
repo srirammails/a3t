@@ -911,7 +911,7 @@ async fn recreate_table(
 ) -> Result<()> {
     let _ = db.drop_table(name, &[]).await; // ignore "not found"
     let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
-    db.create_table(name, Box::new(batches))
+    db.create_table(name, Box::new(batches) as Box<dyn arrow_array::RecordBatchReader + Send>)
         .execute()
         .await
         .map_err(|e| RuntimeError::Communication(format!("create table {}: {}", name, e)))?;

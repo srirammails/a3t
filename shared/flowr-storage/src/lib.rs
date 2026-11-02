@@ -17,6 +17,7 @@
 
 pub mod engine;
 pub mod engine_memory;
+pub mod filter;
 #[cfg(any(test, feature = "conformance"))]
 pub mod conformance;
 
