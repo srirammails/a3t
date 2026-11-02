@@ -5,7 +5,7 @@
 /// `$state` object, so views update as it changes; other hosts (the VS Code
 /// extension) pass a plain object and `subscribe`.
 import { address, sameRef, type Item, type ItemRef } from './items';
-import { kindById, kindFor, type ItemKind } from './kinds';
+import { KINDS, kindById, kindFor, type ItemKind } from './kinds';
 import type { StudioHost } from './host';
 
 export type Doc = {
@@ -199,7 +199,8 @@ export class Workspace {
     const legacy: Record<string, string> = {};
     for (const d of v.docs) {
       const ref: ItemRef | null = d.ref ?? (d.ns && d.kind && d.name ? { project: d.ns, kind: d.kind, name: d.name, ...(d.data?.id ? { id: d.data.id } : {}) } : null);
-      if (!ref) continue;
+      // Tabs of sorts the Studio no longer opens (run tabs, before 2 Nov) are dropped.
+      if (!ref || !KINDS.some((k) => k.match({ ...ref, type: d.type }))) continue;
       const doc = this.open({ ...ref, type: d.type, data: d.data });
       if (d.id) legacy[d.id] = doc.address;
     }

@@ -13,7 +13,6 @@ import ToolsView from './views/ToolsView.svelte';
 import TriggerView from './views/TriggerView.svelte';
 import CanvasView from './views/CanvasView.svelte';
 import RuntimeView from './views/RuntimeView.svelte';
-import RunDocView from './views/RunDocView.svelte';
 import FlowAssistPanel from './panels/FlowAssistPanel.svelte';
 import RunsPanel from './panels/RunsPanel.svelte';
 import ProblemsPanel from './panels/ProblemsPanel.svelte';
@@ -32,7 +31,6 @@ export const VIEWS: Record<string, Component<any>> = {
   trigger: TriggerView,
   canvas: CanvasView,
   runtime: RuntimeView,
-  run: RunDocView,
 };
 
 export const PANELS: Record<string, Component<any>> = {

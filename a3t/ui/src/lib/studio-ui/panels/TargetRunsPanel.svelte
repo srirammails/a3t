@@ -2,9 +2,9 @@
   /// The runs of the flow a trigger starts (bottom region) — the same Runs panel
   /// as a flow's, for its first workflow target.
   import FlowRunPanel from '$lib/components/run/FlowRunPanel.svelte';
-  import type { Doc, Workspace } from '$lib/studio-core';
+  import type { Doc } from '$lib/studio-core';
 
-  let { doc, workspace }: { doc: Doc | null; workspace: Workspace } = $props();
+  let { doc }: { doc: Doc | null } = $props();
   const target = $derived(((doc?.data?.targets ?? []) as any[]).find((x) => x.type === 'workflow' && x.name) ?? null);
   const ns = $derived(target?.namespace ?? doc?.data?.namespace ?? doc?.ref.project ?? '');
 </script>
@@ -16,8 +16,7 @@
 {:else}
   <!-- Keyed on the last fire too, so the runs it started load. -->
   {#key `${ns}/${target.name}/${doc.ui.fired?.at ?? ''}`}
-    <FlowRunPanel {ns} name={target.name} schema={null} steps={[]}
-      onopen={(id) => workspace.open({ project: ns, kind: 'run', name: id, data: { flow: `${ns}/${target.name}` } })} />
+    <FlowRunPanel {ns} name={target.name} schema={null} steps={[]} />
   {/key}
 {/if}
 

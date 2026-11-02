@@ -1,5 +1,5 @@
-/// Operating flows: canvases (attach a flow, placement, deploy), runtimes (what
-/// runs where) and runs (one run's steps, timeline and checkpoints).
+/// Operating flows: canvases (attach a flow, placement, deploy) and runtimes
+/// (what runs where). Runs show in the Runs panels.
 import * as ops from '../adapters/ops';
 import { removeResource } from '../adapters/registry';
 import { fail, ok } from '../items';
@@ -50,13 +50,4 @@ export const runtimeKind: ItemKind = {
   console: { section: 'runtime', title: 'Runtimes' },
   ...resourceConfig,
   remove: (it) => removeResource(it.project, it.name),
-};
-
-/// One run, opened from a Runs panel (`name` is the run id; `data.flow` its flow).
-export const runKind: ItemKind = {
-  id: 'run', label: 'Run', icon: '▶',
-  match: (it) => it.kind === 'run',
-  capabilities: [],
-  views: { center: 'run', right: [], bottom: [] },
-  title: (doc) => `${doc.data?.flow ? doc.data.flow.split('/').pop() + ' · ' : 'run '}${doc.ref.name.slice(-6)}`,
 };

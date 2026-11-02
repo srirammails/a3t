@@ -51,7 +51,7 @@
   const tabs = $derived([
     ...workspace.state.docs.map((d) => {
       const k = workspace.kindOf(d);
-      return { id: d.address, title: k.title?.(d) ?? d.ref.name, icon: k.icon, hint: `${k.label} ${d.ref.project}/${d.ref.name}`, dirty: workspace.isDirty(d) };
+      return { id: d.address, title: d.ref.name, icon: k.icon, hint: `${k.label} ${d.ref.project}/${d.ref.name}`, dirty: workspace.isDirty(d) };
     }),
     ...centered.map((p) => ({ id: `panel:${p.id}`, title: p.title, icon: '▤', hint: `${p.title} panel — close to send it back` })),
   ]);
