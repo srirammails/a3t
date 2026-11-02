@@ -878,6 +878,21 @@ impl EngineCore {
         Some(self.journal.get(&run).map(|e| e.iter().filter(|x| x.seq > after_seq).cloned().collect()).unwrap_or_default())
     }
 
+    /// Load state another store held (an import, ADB `adb import-flowr-engine`):
+    /// each change is applied and emitted as given, so the host makes it
+    /// durable like any operation's. Refused (nothing emitted) if this core
+    /// already holds runs: importing twice would repeat their journals.
+    pub fn restore(&mut self, changes: Vec<Change>, first: bool) -> StoreResult<usize> {
+        if first && !self.runs.is_empty() {
+            return Err(StoreError::Conflict(format!("this engine space already holds {} runs: import into an empty one", self.runs.len())));
+        }
+        let n = changes.len();
+        for c in changes {
+            self.emit(c);
+        }
+        Ok(n)
+    }
+
     /// Let a run's journal leave memory (its history is the host's to keep).
     pub fn evict_journal(&mut self, run: RunId) {
         if self.runs.contains_key(&run) && !self.evicted.contains(&run) {
