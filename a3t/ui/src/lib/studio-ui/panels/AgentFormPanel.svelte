@@ -4,7 +4,7 @@
   /// until overridden), locked ones (read-only), hidden ones (not shown); then
   /// its name, mode, status and where it is served.
   import SaveBar from '../parts/SaveBar.svelte';
-  import { agentModel, fromText, toText, type Doc, type Visibility, type Workspace } from '$lib/studio-core';
+  import { agentModel, fromText, listTemplates, toText, type Doc, type Visibility, type Workspace } from '$lib/studio-core';
 
   let { doc, workspace }: { doc: Doc | null; workspace: Workspace } = $props();
 
@@ -17,6 +17,19 @@
     return list;
   });
   const need = $derived(agentModel.missing(spec, settings));
+
+  // A new agent starts by picking its template.
+  let templates = $state<any[]>([]);
+  $effect(() => {
+    if (doc?.isNew && !templates.length) void listTemplates().then((r) => { if (r.ok) templates = r.data; });
+  });
+  function pickTemplate(id: string) {
+    if (!doc) return;
+    const t = templates.find((x) => x.id === id) ?? null;
+    doc.data = { ...(doc.data ?? {}), template: t, agent: null };
+    const next = { ...$state.snapshot(value), template_id: id, serving: { ...(value.serving ?? {}), target: t ? agentModel.chatFlowFor(t.spec_yaml) : '' } };
+    doc.text = toText(next);
+  }
 
   function edit(path: string[], v: unknown) {
     if (!doc) return;
@@ -45,9 +58,18 @@
   <div class="err">{doc.error}</div>
 {:else}
   <div class="af">
-    <div class="head"><span class="title">Agent</span><span class="grow"></span><SaveBar {doc} {workspace} valid={!need.length} /></div>
+    <div class="head"><span class="title">{doc.isNew ? 'New agent' : 'Agent'}</span><span class="grow"></span><SaveBar {doc} {workspace} valid={!need.length} /></div>
     <div class="body">
       {#key doc.address}
+        {#if doc.isNew}
+          <section>
+            <h4>Template</h4>
+            <select value={value.template_id ?? ''} onchange={(e) => pickTemplate(e.currentTarget.value)}>
+              <option value="">Pick the template it is built from…</option>
+              {#each templates as t (t.id)}<option value={t.id}>{t.name} v{t.version} · {t.id}{t.source ? ` (${t.source})` : ''}</option>{/each}
+            </select>
+          </section>
+        {/if}
         <section>
           <h4>Identity</h4>
           <label><span>Name</span><input value={value.name ?? ''} oninput={(e) => edit(['name'], e.currentTarget.value)} /></label>
@@ -59,6 +81,7 @@
           <datalist id="agent-statuses"><option value="draft"></option><option value="active"></option><option value="paused"></option></datalist>
         </section>
 
+        {#if doc.data?.template}
         <section>
           <h4>Settings <span class="from">from template {doc.data?.template?.name ?? '?'}</span></h4>
           {#if need.length}<div class="err">Required: {need.join(', ')}</div>{/if}
@@ -88,6 +111,7 @@
             </div>
           {/each}
         </section>
+        {/if}
 
         <section>
           <h4>Serving</h4>
@@ -110,7 +134,7 @@
   .from { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-4); }
   label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-2); text-transform: none; letter-spacing: 0; font-weight: 500; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  input:not([type='checkbox']), textarea { padding: 6px 9px; font-size: 12.5px; font-family: var(--font-mono); }
+  input:not([type='checkbox']), textarea, select { padding: 6px 9px; font-size: 12.5px; font-family: var(--font-mono); }
   textarea { resize: vertical; }
   .field { border: 1px solid var(--border); border-radius: var(--r-sm); padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
   .field.required { border-color: var(--warn, #b45309); }

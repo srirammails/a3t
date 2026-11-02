@@ -16,6 +16,7 @@ import AgentView from './views/AgentView.svelte';
 import AgentFormPanel from './panels/AgentFormPanel.svelte';
 import TemplateFieldsPanel from './panels/TemplateFieldsPanel.svelte';
 import TemplateAgentsPanel from './panels/TemplateAgentsPanel.svelte';
+import AgentRunsPanel from './panels/AgentRunsPanel.svelte';
 import RuntimeView from './views/RuntimeView.svelte';
 import FlowAssistPanel from './panels/FlowAssistPanel.svelte';
 import RunsPanel from './panels/RunsPanel.svelte';
@@ -45,6 +46,8 @@ export const PANELS: Record<string, Component<any>> = {
   'agent-form': AgentFormPanel,
   'template-fields': TemplateFieldsPanel,
   'template-agents': TemplateAgentsPanel,
+  'agent-test': ChatView,
+  'agent-runs': AgentRunsPanel,
   runs: RunsPanel,
   problems: ProblemsPanel,
   results: ResultsPanel,

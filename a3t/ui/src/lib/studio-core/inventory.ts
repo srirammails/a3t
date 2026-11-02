@@ -79,7 +79,7 @@ export async function loadInventory(projects: string[]): Promise<Inventory> {
         folder('templates', 'Agent templates', templates.filter((t: any) => nsOfSpec(t.spec_yaml) === ns)
           .map((t: any) => ({ project: ns, kind: 'template', name: t.name, id: t.id, data: t }))),
         folder('agents', 'Agents', agents.filter((a: any) => (a.namespace ?? 'a3t') === ns)
-          .map((a: any) => ({ project: ns, kind: 'agent', name: a.name ?? a.id, id: a.id, data: a }))),
+          .map((a: any) => ({ project: ns, kind: 'agent', name: a.name ?? a.id, id: a.id, data: a })), { create: { kind: 'agent' } }),
         {
           key: `${ns}/resources`, label: 'Resources', open: true,
           count: workflows.count! + resourceFolders.reduce((n, f) => n + (f.count ?? 0), 0),

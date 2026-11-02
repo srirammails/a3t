@@ -57,11 +57,13 @@ export function withVisibility(specYaml: string, key: string, v: Visibility): st
   return d.toString();
 }
 
-/// The fields of a template, in its config's order, then the engine's.
+/// The fields of a template: its config's, in order, then the rest of the
+/// engine's settings (the engine reads them all, whatever the config lists —
+/// and a config worked out at run time lists none).
 export function templateFields(specYaml: string): { key: string; visibility: Visibility; value: unknown }[] {
   const cfg = templateConfig(specYaml);
   const vis = visibilities(specYaml);
-  const keys = [...new Set([...Object.keys(cfg), ...ENGINE_FIELDS.filter((k) => k in vis)])];
+  const keys = [...new Set([...Object.keys(cfg), ...ENGINE_FIELDS])];
   return keys.map((key) => ({ key, visibility: vis[key] ?? 'optional', value: cfg[key] }));
 }
 
@@ -110,6 +112,16 @@ export function toRecord(agent: any, specYaml: string, own: Record<string, unkno
   if (serving.target !== undefined) vars.target = serving.target;
   if (serving.ep_path !== undefined) vars.ep_path = serving.ep_path;
   return { resource_bindings: JSON.stringify(rb), variables: JSON.stringify(vars) };
+}
+
+/// The chat flow an agent of this template is served by: the native engine's
+/// wrapper for engine templates, the SWF wrapper otherwise (never the
+/// template itself, which is not deployed as a flow).
+export function chatFlowFor(specYaml: string): string {
+  let name = '';
+  try { name = YAML.parse(specYaml)?.document?.name ?? ''; } catch { /* keep '' */ }
+  if (name === 'agent-engine' || /a3t:agent/.test(specYaml)) return 'a3t/a3t-chat-engine';
+  return 'a3t/a3t-chat-agent';
 }
 
 /// Required fields the agent has not set.

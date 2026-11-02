@@ -370,7 +370,11 @@ Views are registered by id and receive `{ doc, workspace, host }`:
   its workflow (graph / code, saved with a confirm when agents use it) with Form,
   **Agent fields** (set visibilities) and AI; an agent opens as its template's
   workflow with its values, and its **Form** is generated from the template.
-  Model: `studio-core/agent/model.ts`.
+  Model: `studio-core/agent/model.ts`. Agents are created (+ on Agents: pick the
+  template in the Form; Save creates it and its chat endpoint) and deleted in the
+  Studio, and tested there: **Test** (chat through its endpoint) and **Runs** (its
+  chat flow's runs — debug, timeline, checkpoints; shared by the agents that flow
+  serves until runs can be filtered by agent).
 
 ### 6.3 Shared parts
 

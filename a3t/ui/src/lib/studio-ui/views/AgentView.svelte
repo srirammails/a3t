@@ -21,7 +21,7 @@
   });
 
   $effect(() => {
-    if (!doc.loaded) void workspace.load(doc);
+    if (!doc.loaded && !doc.isNew) void workspace.load(doc);
   });
   function openTemplate() {
     if (template) workspace.open({ project: doc.ref.project, kind: 'template', name: template.name, id: template.id });
@@ -42,6 +42,8 @@
     <div class="note">Loading {doc.ref.name}…</div>
   {:else if doc.error}
     <div class="err">Could not load {doc.ref.name}: {doc.error}</div>
+  {:else if !template && doc.isNew}
+    <div class="note">Pick its template in the Form panel; its workflow shows here, with the agent's values.</div>
   {:else if !template}
     <div class="err">Its template ({doc.data?.agent?.template_id}) is not listed — the agent cannot be shown against it.</div>
   {:else}

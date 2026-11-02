@@ -108,15 +108,16 @@ export class Workspace {
     return true;
   }
 
-  /// A new, unsaved item of `kindId` (and resource `type`) in `project`. It opens
-  /// as code where its kind has a code view, so it can be named and filled in.
+  /// A new, unsaved item of `kindId` (and resource `type`) in `project`. Kinds
+  /// named in their own view (flows, triggers, agents) open there; others as
+  /// code, where they are named and filled in.
   create(kindId: string, project: string, type?: string): Doc | null {
     const kind = kindById(kindId);
     if (!kind.create) return null;
     this.created += 1;
     const made = kind.create(project, this.created, type);
     const addr = `${address(made.ref)}#new-${this.created}`;
-    const ui = { ...(kind.initialUi?.() ?? {}), view: kind.views.code ? 'code' : null };
+    const ui = { ...(kind.initialUi?.() ?? {}), view: kind.views.code && !kind.nameInText ? 'code' : null };
     this.state.docs.push({ address: addr, ref: made.ref, kind: kind.id, type: made.type, text: made.text, saved: '', loaded: true, isNew: true, ui });
     return this.select(addr);
   }
