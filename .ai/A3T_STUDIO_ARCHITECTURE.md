@@ -1,0 +1,464 @@
+# A3T Studio — architecture (2 Nov 2026)
+
+**Audience:** engineers and Claude Code working on the A3T UI and its VS Code extension.
+**Status:** direction agreed 2 Nov 2026; open decisions in §15.
+**Builds on:** `A3T_CANVAS_SPEC.md` (flow / runtime / canvas, connections §1a),
+`FLOWR_CONSOLE_RUN_DEBUG_UI_SPEC.md` (run, debug, monitor, checkpoints; §14 is the
+first Studio shell), `A3T_EDITOR_SPEC.md` (template/agent authoring; its rule
+"the editor never hard-codes a resource type" applies here too),
+`A3T_DASH_PROJECTS_ENVIRONMENTS.md` (projects and scope).
+
+---
+
+## 1. Why
+
+The UI started as a set of section pages (Flows, Resources, Triggers, DB Console,
+Runtime, Memory…), each with its own way to open, edit and test things. The value
+is in giving developers an **editor**: one place where they see their flows and
+resources, build and run, and watch what happens. Everything a developer does
+fits in one studio. People who do not build things still need to see the
+inventory and understand it, without an editor in the way.
+
+So A3T has two UI **channels** over the same platform:
+
+| Channel | For | Shape |
+|---|---|---|
+| **Console** | Everyone: business users, SRE, AppSec, and developers without write access | Section pages: banners, inventory lists, details, status. Read and light actions (pin, approve, pause). No editors. |
+| **Studio** | Developers with write access to a project | An IDE: explorer, tabbed documents, panels. Author, compose, deploy, run, debug, query, attach. |
+
+The Studio ships in two **hosts**: the web dash (`dash.a3t.io`, a section of the
+Console) and a **VS Code extension**. Both run the same code (§4).
+
+---
+
+## 2. Who uses what
+
+| Persona | Console | Studio |
+|---|---|---|
+| Business / non-developer | Inventory, chat, run history, dashboards | — |
+| Developer, read-only on a project | Inventory of that project, runs, logs | Opens read-only (same views, no edit or deploy) |
+| Developer, write | Inventory | Full Studio for that project |
+| SRE | Runtimes, deployments, health | Canvas and runtime documents; attach to runs |
+| AppSec | Policies, audit, approvals | Read-only |
+
+Permissions come from the platform (roles + Cedar in EE). The Studio never decides
+access itself: it asks the backend what the user may do with an item (§5.4) and
+greys out what they may not. Every Console detail page offers **Open in Studio**
+when the user may; every Studio document offers **Open in Console**.
+
+---
+
+## 3. What a developer does in the Studio
+
+**Author**
+- See all flows and resources of the projects in scope in one Explorer.
+- Create and edit flows: graph, code (YAML), form. Problems as they type.
+- **AI**: ask the AI panel to generate or change a flow, or to draft a resource;
+  the AI proposes, the user applies (diff), nothing deploys on its own.
+- Create a resource (LLM, DB, MCP, secret, …) from a dynamic config form.
+
+**Compose**
+- Drag flows and resources from the Explorer onto a flow's **Compose** view and
+  connect them into **one deployable workflow**. A dropped flow becomes a
+  *sub-flow* (in-process, bundled) or a *flow resource* (a running instance, bound
+  by I/O); a dropped resource becomes a resource binding — exactly the three
+  connection kinds of the Canvas spec §1a. The result is flow YAML; there is no
+  separate composition format.
+
+**Deploy**
+- Open a **Canvas**, attach a flow, set placement (runtime labels, isolation),
+  lifecycle and health, **Deploy**. See which runtime it landed in.
+
+**Operate**
+- See runtimes, what is deployed on each, and their state.
+- See a flow's runs: steps, **timeline**, journal, **checkpoints**; re-run, re-run
+  in debug, re-run from a checkpoint (as specified in the run/debug spec).
+
+**Develop against a live runtime**
+- **Connect a dev runtime** (their own: local FlowR CE, a codespace, or a dev pool
+  in the cluster) and make it the target for Run and Debug.
+- **Attach** to a running flow on it: live steps, **logs**, checkpoints,
+  breakpoints when it is a debug run.
+
+**Use resources directly**
+- **Database**: write a query in the resource's language (SQL, Redis, AQL), see
+  results; history and saved queries.
+- **LLM**: chat with it.
+- **MCP server**: list its tools, call one with arguments.
+- **Trigger**: fire it with a payload; see the run it starts.
+
+**Memory**
+- Write **AQL** and see an agent's or flow's memory by tier — **working →
+  episodic → semantic → procedural**, and the graph — as ADB holds it.
+
+---
+
+## 4. Layers
+
+```
+ Hosts         Web: SvelteKit dash (Console + Studio)      VS Code extension (+ webviews)
+               ─────────────────────── StudioHost interface ───────────────────────
+ UI            studio-ui     Svelte 5 components: Workbench, Explorer, views, parts
+ Model         studio-core   plain TypeScript: items, kinds, workspace, inventory,
+                             capabilities, adapters, live streams
+ Transport     a3t-client    REST + MCP + SSE, auth via a token provider
+ Platform      FlowR CE/EE (MCP tools, /registry, /ops, runs + journal), ADB (AQL)
+```
+
+**Rules (enforced by lint, §12):**
+1. Dependencies point **down** only. `studio-core` imports nothing from Svelte, the
+   DOM, SvelteKit or VS Code. `studio-ui` makes no network calls; it calls core.
+2. **Kind knowledge lives in one place**: a kind module in `studio-core/kinds/`
+   (and its views in `studio-ui/views/`). No `if (kind === …)` anywhere else.
+3. **Host differences live in one place**: an implementation of `StudioHost`.
+4. One way to do each thing: the adapters in `studio-core/adapters/` are the only
+   code that queries a database, chats with an LLM, fires a trigger, etc. Console
+   pages use them too.
+
+`studio-core` is plain TS (no runes) so the VS Code extension host (Node) can use
+it for native views. It exposes state as small observable stores
+(`subscribe(fn) → unsubscribe`, Svelte-store compatible); `studio-ui` reads them
+with `$store`, the extension subscribes directly.
+
+---
+
+## 5. studio-core
+
+### 5.1 Items and addresses
+
+Everything the Studio shows is an **item** with one address, used as the route in
+the web, the URI in VS Code, the tab id and the drag payload:
+
+```
+a3t://<project>/<kind>/<name>[#<fragment>]
+  a3t://acme-support/flow/triage
+  a3t://acme-support/resource/orders-db
+  a3t://acme-support/trigger/intake            (id-keyed kinds resolve name → id)
+  a3t://acme-support/run/019a…                 (runs, deployments: by id)
+  a3t://acme-support/memory/agent:triage       (a memory scope)
+```
+
+```ts
+type ItemRef = { project: string; kind: string; name: string; id?: string };
+type Item = ItemRef & { type?: string; data?: unknown; status?: string };
+```
+
+### 5.2 Kinds
+
+A **kind** is a module that knows one sort of item. Adding a resource type or a new
+item sort means adding a kind; nothing else changes.
+
+```ts
+interface ItemKind {
+  id: string;                         // 'flow', 'database', 'llm', 'mcp', 'trigger', …
+  match(item: Item): boolean;         // e.g. database: resource whose type is postgres|mysql|redis|lancedb|qdrant|adb
+  label: string; icon: string;
+  folder?: string;                    // Explorer folder it lists under
+  capabilities: Capability[];         // what can be done with it (§5.4)
+  load(ref: ItemRef): Promise<Doc>;   // fetch what its document needs
+  save?(doc: Doc): Promise<Result>;   // persist edits (config, YAML)
+  remove?(ref: ItemRef): Promise<Result>;
+  rename?(ref: ItemRef, to: string): Promise<Result>;
+  connect?(ref: ItemRef): Promise<ConnectionStatus>;   // reachable? shown on the tab
+  views: { center: string; right?: string[]; bottom?: string[] };   // view ids, rendered by studio-ui
+}
+```
+
+Kinds at the start (the folder each lists under is from the Explorer today):
+
+| Kind | Items | Center view | Right | Bottom |
+|---|---|---|---|---|
+| `flow` | workflows | Flow (graph / code / form), Compose | Form, AI | Runs, Problems |
+| `database` | postgres, mysql, redis, lancedb, qdrant, adb | Query | Config | Results, History, Saved |
+| `llm` | llm, openai, anthropic, ollama, groq | Chat | Config | — |
+| `mcp` | mcp | Tools (list → call) | Config | Result |
+| `trigger` | triggers | Fire (payload, target flows) | Config | Runs of the target flow |
+| `canvas` | canvases | Canvas (attach flow, placement, lifecycle, health, Deploy) | Config | Deployments |
+| `runtime` | runtimes | Runtime (deployments, activity, metrics) | — | Logs |
+| `run` | a run | Run (steps, timeline, journal, checkpoints) | Step inspector | Logs |
+| `memory` | a memory scope (agent / flow) | Memory (tiers + AQL) | — | Results |
+| `template` | agent templates | Template editor (AgentTemplateEditor) | AI | — |
+| `resource` | any other resource (fallback) | Config | — | — |
+
+### 5.3 Workspace
+
+The open documents and layout of one Studio:
+
+- open docs (by address), the active one, dirty state, per-doc UI state (e.g. the
+  run dialog of a flow);
+- `open(ref)`, `close`, `rename`, `remove`, `newDoc(kind, project)`;
+- persisted through `host.storage` (web: `localStorage`; VS Code: workspace state);
+- the layout model (regions, sizes, minimized, maximized) — today's
+  `layout.svelte.ts`, moved behind the same store interface.
+
+### 5.4 Capabilities and permissions
+
+`Capability = 'edit' | 'run' | 'debug' | 'query' | 'chat' | 'tools' | 'fire' |
+'deploy' | 'attach' | 'connect' | 'memory' | 'delete' | 'rename'`.
+
+What the user may do with an item = the kind's capabilities ∩ what the backend
+allows for that item and user (`access` answer per project, cached). Views ask
+`can(ref, 'edit')`; menus and buttons follow. Read-only users get the same Studio
+with edit, deploy, fire and delete removed.
+
+### 5.5 Inventory
+
+The Explorer's data, built from the kinds: projects in scope → folders → items,
+with counts, filter and remembered folder state. A Studio is configured with a
+**scope**: which folders, which one is pinned on top and open (DB Console pins
+Databases; a memory studio pins agents and flows). Loading never throws: failures
+are listed, as the Explorer does today.
+
+### 5.6 Adapters
+
+One module per capability, each the only implementation in the codebase:
+
+| Adapter | Does | Backend |
+|---|---|---|
+| `flows` | list, get YAML, save/deploy, delete, rename (copy + delete) | MCP `list_flows`/`get_flow`/`create_flow`, registry `DELETE` |
+| `config` | read and write a resource / trigger / canvas config; masks secrets | `/registry/resources`, `update_trigger`, `update_canvas` |
+| `query` | run a statement on a database resource → `{ columns, rows, raw, ms }` | `call_sql`, `call_redis`, `query_resource`, `adbSql` |
+| `chat` | send messages to an LLM resource | `a3t-test-resource` (llm) |
+| `mcp` | list tools, call a tool | `a3t-test-resource` (mcp, mcp_call) |
+| `trigger` | fire with a payload → run id | `/webhook/<path>`; other types: `start_run` / `send_event` |
+| `runs` | list, get, journal, start, debug, re-run, cancel; **subscribe** | `list_runs`, `get_run`, `get_run_journal`, … ; SSE `run:<id>` |
+| `ops` | runtimes, deployments, placement, deploy, pause, terminate; **logs** | `/ops/*` |
+| `canvas` | get, attach flow, update, deploy | `canvasApi`, `/ops/deploy` |
+| `memory` | AQL over a scope; tiers; promotions | ADB (`call:adb` / `query_resource`) |
+| `ai` | generate / edit a flow or resource draft from a prompt + context | the designer chat flow |
+
+Adapters return `Result<T> = { ok: true, data } | { ok: false, error }` and never
+throw, the convention of `services/api.ts` today.
+
+### 5.7 Live streams
+
+`runs.subscribe(runId)` and `ops.logs(deploymentId, { follow })` return
+async-iterable streams over SSE. Views render them; the host decides nothing.
+
+---
+
+## 6. studio-ui
+
+### 6.1 Workbench
+
+`Workbench` = `StudioShell` (left / center / right / bottom regions, as today) +
+Explorer + document tabs. The active document's kind supplies the center view and
+the right and bottom panels; panels that the active kind does not have are hidden,
+and the region remembers its last panel per kind.
+
+A Studio is configuration, not a page:
+
+```svelte
+<Workbench app="flows" scope={{ folders: 'all' }} />
+<Workbench app="db"    scope={{ pin: 'database' }} />
+<Workbench app="memory" scope={{ pin: 'memory' }} />
+```
+
+On the web, today's Flow Editor, DB Console and Memory pages become these
+Workbenches (or one Studio with several scopes — §15). In VS Code there is one
+Studio; scopes become Explorer views.
+
+### 6.2 Views (center) and panels
+
+Views are registered by id and receive `{ doc, workspace, host }`:
+`FlowView` (graph / code / form; today's FlowDocument + FlowEditorPane),
+`ComposeView`, `QueryView`, `ChatView`, `ToolsView`, `FireView`, `CanvasView`,
+`RuntimeView`, `RunView` (today's RunView), `MemoryView`, `ConfigView`,
+`TemplateView` (AgentTemplateEditor).
+
+### 6.3 Shared parts
+
+- **ConfigForm** — built from the config's own keys and values, no per-type field
+  lists: strings, numbers, booleans; nested objects as sections; arrays as editable
+  lists. Masked secrets are read-only with **Replace**, so saving never writes the
+  mask back. Read-only mode for Console and read-only users.
+- **ResultTable** — columns, rows, raw JSON, copy, column hiding for secrets.
+- **ChatView**, **CodeEditor** (CodeMirror: YAML, SQL dialects, AQL, JSON),
+  **RunPanel** (runs list + RunView, resizable), **Problems**.
+- Icons, tooltips, context menus, splitters, dialogs: one implementation each
+  (today some are copied per component).
+
+### 6.4 Drag and drop
+
+Drag payload: MIME `application/x-a3t-item` carrying the address. Sources: the
+Explorer (web: HTML5 drag; VS Code: `TreeDragAndDropController` into the webview).
+Targets: ComposeView (flow → sub-flow or flow resource, resource → binding),
+CanvasView (flow → attach), QueryView (table → `SELECT`), chat (item → context).
+
+---
+
+## 7. Compose: one deployable workflow
+
+The Compose view of a flow is a graph of its connections, not a second format:
+
+| Drop | Becomes | In the flow YAML |
+|---|---|---|
+| a flow, as *sub-flow* | in-process call, bundled with the flow | `run: workflow` task |
+| a flow, as *flow resource* | bind to a running instance | resource reference to the flow's endpoint/queue |
+| a resource | binding | `call: llm` / `call: mcp` / `call: adb` … `with: resource:` |
+
+Edges are data flow (output → input). Saving writes the flow YAML; the Canvas
+(§8) deploys it, dependency-deploying flow resources (Canvas spec §1a).
+Validation is the SWF schema plus the slot contracts of the editor spec.
+
+---
+
+## 8. Deploy and operate
+
+- **Canvas** documents: attach a flow (drop or pick), placement, lifecycle,
+  health, **Deploy**. Shows where it landed and its deployments.
+- **Runtime** documents: runtime state, deployments, live activity, metrics; Logs
+  in the bottom region.
+- **Run** documents and the Runs panel: steps, timeline, journal, checkpoints,
+  re-run / debug / from checkpoint — the run/debug spec, unchanged.
+- From any of them: open the flow, the canvas, the runtime, the run (addresses).
+
+---
+
+## 9. Dev runtimes and attach
+
+A **dev runtime** is a FlowR runtime that belongs to one developer
+(labels `env=dev`, `owner=<user>`): local FlowR CE, a codespace, or a pod in a dev
+pool. The Studio:
+
+1. **Connect** — register it (endpoint + token, or pick one from `ops.runtimes`
+   that the user owns). It becomes a target in the Run/Debug dialog and the
+   default target while connected. A status dot shows it in the status bar.
+2. **Run / Debug on it** — the flow's current text, not only the deployed one, so
+   a developer iterates without deploying to a shared runtime.
+3. **Attach** to a running flow — on a dev runtime or any runtime the user may
+   see: live steps (journal subscription), **logs** (follow), checkpoints;
+   breakpoints and stepping only for the user's own debug runs.
+
+Backend needed: a per-deployment log stream (§14), runtime registration for
+user-owned runtimes, running unsaved flow text on a dev runtime.
+
+---
+
+## 10. Memory
+
+`MemoryView` for a scope (an agent or a flow):
+
+- tier tabs — **working, episodic, semantic, procedural**, and **graph** — each a
+  list with time, key, value, source run;
+- an **AQL** editor prefilled for the scope and tier, results in ResultTable;
+- per entry: the run that wrote it (open as a run), promotions between tiers.
+
+Scopes appear in the Explorer under each agent and flow (*Memory*). Today's
+Memory page renders mock data; it is replaced by this view on the `memory`
+adapter. Backend needed: listing memory scopes and tiers per agent/flow from ADB.
+
+---
+
+## 11. AI in the Studio
+
+The AI panel (today's DesignerChat) gets the active document and selection as
+context and can: generate a flow, change the open flow, draft a resource config,
+explain a run or a failed step. Its output is always a **proposal** (a diff on the
+document, or a prefilled ConfigForm); applying and deploying stay user actions.
+In VS Code the same panel is a webview; the extension may also expose the A3T MCP
+tools to the editor's own assistant.
+
+---
+
+## 12. Code layout
+
+Today everything is in one SvelteKit app (`a3t/ui`). The seams are introduced
+in-tree first and extracted to packages when the VS Code work starts:
+
+```
+a3t/ui/src/lib/
+  client/          → a3t-client     (from services/api.ts)
+  studio-core/     → studio-core    (items, kinds/, workspace, inventory, adapters/, streams)
+  studio-ui/       → studio-ui      (Workbench, Explorer, views/, parts/)
+  host/web.ts      web StudioHost
+  components/pages, shell/   Console (section pages) — use studio-core adapters and studio-ui parts
+a3t/vscode/        the extension (later): host/vscode.ts, tree views, file system provider, webviews
+```
+
+Later: an npm workspace with `packages/a3t-client`, `packages/studio-core`,
+`packages/studio-ui`; `a3t/ui` and `a3t/vscode` depend on them. An ESLint
+`no-restricted-imports` rule keeps the layer rules of §4 from day one.
+
+### 12.1 StudioHost
+
+```ts
+interface StudioHost {
+  storage: { get(key: string): unknown; set(key: string, v: unknown): void };
+  token(): Promise<string | null>;              // web: session; VS Code: SecretStorage
+  open(ref: ItemRef, opts?: { side?: boolean }): void;   // web: route; VS Code: editor tab
+  openExternal(url: string): void;
+  notify(msg: string, level: 'info' | 'warn' | 'error'): void;
+  confirm(msg: string): Promise<boolean>;
+  clipboard(text: string): Promise<void>;
+  theme(): 'light' | 'dark';
+}
+```
+
+---
+
+## 13. VS Code extension
+
+| VS Code surface | A3T | Built from |
+|---|---|---|
+| Activity bar view: **A3T Explorer** (TreeView) | projects → flows, resources, triggers, canvases, runtimes, memory | `studio-core` inventory (native tree, no webview) |
+| File system provider, scheme `a3t:` | flows as YAML files (`a3t://project/flow/name.yaml`): native editing, search, diff, git | `flows` adapter |
+| Custom editor ("Open With → A3T Flow") | graph / form / compose for a flow | `studio-ui` views in a webview |
+| Webview panels | Query, Chat, Tools, Fire, Canvas, Runtime, Run, Memory | `studio-ui` views |
+| Commands | Sign in, Connect runtime, Run, Debug, Deploy, Attach, New flow, New resource | adapters |
+| Status bar | signed-in user, project, connected dev runtime | workspace |
+| Output channel | logs of an attached run / deployment | `ops.logs` |
+| Debugger (later) | breakpoints in the YAML gutter, step, variables = step context | a Debug Adapter over `runs.debug` |
+
+Webviews talk to the extension over `postMessage` RPC; the extension owns the
+token and makes every backend call (webviews never hold credentials). Saving an
+`a3t:` file saves a draft; **Deploy** is an explicit command, as on the web.
+
+---
+
+## 14. Backend gaps
+
+| Need | For | Today |
+|---|---|---|
+| Per-item permission answer (`can user X do Y on item Z`) | §5.4 | roles client-side; Cedar decides at the call |
+| Deployment / run log stream (SSE, follow) | §8, §9, VS Code output | no log endpoint; LogsPage shows the decision log |
+| Run subscription (journal + status over SSE) | live runs, attach | polling (`list_runs`, `get_run`) |
+| User-owned dev runtime registration | §9 | runtimes come from the platform only |
+| Run unsaved flow text on a dev runtime | §9 | runs use the deployed flow |
+| Multi-turn LLM chat (`messages`) | Chat view | `a3t-test-resource` sends one `prompt` |
+| Memory scopes and tiers per agent/flow | §10 | Memory page is mock |
+| Rename for flows / resources | Explorer | copy + delete (runs stay under the old name) |
+| Fire for cron / event triggers | Fire view | webhook only |
+
+---
+
+## 15. Plan
+
+Each step ships on dash.dev and is checked there before the next.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | `studio-core` seams in-tree: items, kinds, workspace, inventory; `Workbench`; Flow Editor moved onto it | no visible change; lint rules on |
+| 2 | `config` adapter + ConfigForm; every non-flow item opens as a config form | JSON previews gone |
+| 3 | `query` adapter + `database` kind; DB Console = Workbench pinned to Databases (history, saved queries kept) | DB Console in the Studio |
+| 4 | `chat`, `mcp`, `trigger` kinds | act on every resource |
+| 5 | `canvas`, `runtime`, `run` kinds; Deploy from the Studio | operate from the Studio |
+| 6 | `memory` kind + AQL view (needs ADB scopes) | real memory view |
+| 7 | Compose view + drag and drop | one deployable workflow |
+| 8 | Dev runtime connect + attach + logs (needs backend §14) | develop against a live runtime |
+| 9 | Extract packages; VS Code extension: tree, `a3t:` files, webviews, commands | Studio in VS Code |
+| 10 | Debug adapter for VS Code | native breakpoints |
+| — | Console pages switch to the adapters and parts as each lands; old copies deleted | one implementation |
+
+### Decisions
+
+Resolved (2 Nov 2026): two channels, Console and Studio; one Studio codebase for
+web and VS Code; the layer and kind architecture above.
+
+Open — defaults in brackets, used unless decided otherwise:
+1. LLM chat: single-turn until the flow takes `messages`? [yes; add `messages` in step 4]
+2. Firing a cron trigger: run its target flow with the payload; an event trigger: send a CloudEvent? [yes]
+3. Old DB Console: removed in step 3, or kept behind a link until the new one is tried? [kept one release]
+4. Read-only developers: Studio read-only (§2), or Console only? [Studio read-only]
+5. One web Studio with scopes, or separate Flow / DB / Memory studios on the web? [one Studio, scopes as Explorer views; the routes `/flow-editor`, `/db-console` open it with that scope]
+6. Package extraction: at step 9, or earlier? [step 9]
