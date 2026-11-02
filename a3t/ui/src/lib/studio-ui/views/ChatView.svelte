@@ -1,7 +1,6 @@
 <script lang="ts">
   /// An LLM's Chat view: talk to the model behind the resource. The
   /// conversation lives on the document (not saved); Clear starts over.
-  import ModeSwitch from '../parts/ModeSwitch.svelte';
   import type { ChatMessage, Doc, Workspace } from '$lib/studio-core';
 
   let { doc, workspace }: { doc: Doc; workspace: Workspace } = $props();
@@ -37,7 +36,6 @@
 
 <div class="chv">
   <div class="head">
-    <ModeSwitch {doc} {workspace} />
     <span class="kind">{kind.label}{doc.type ? ` · ${doc.type}` : ''}</span>
     <span class="mono">{doc.ref.project}/{doc.ref.name}</span>
     {#if model}<span class="model" title="Model">{model}</span>{/if}

@@ -3,7 +3,6 @@
   /// run it (Run or Ctrl/⌘+Enter); the answer shows in the Results panel. The
   /// draft is kept per database; runs go to History; Save keeps a query by name.
   import SqlEditor from '$lib/components/editor/SqlEditor.svelte';
-  import ModeSwitch from '../parts/ModeSwitch.svelte';
   import { languagesOf, type Doc, type Workspace } from '$lib/studio-core';
   import type { Studio } from '../layout.svelte.ts';
   import { addHistory, addSaved, loadQueryLists } from '../queryLists.svelte.ts';
@@ -55,7 +54,6 @@
 
 <div class="qv">
   <div class="head">
-    <ModeSwitch {doc} {workspace} />
     <span class="kind">{kind.label}{doc.type ? ` · ${doc.type}` : ''}</span>
     <span class="mono">{doc.ref.project}/{doc.ref.name}</span>
     {#if langs.length > 1}

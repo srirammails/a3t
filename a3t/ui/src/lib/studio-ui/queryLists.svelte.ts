@@ -19,7 +19,6 @@ export const removeSaved = (host: StudioHost, q: SavedQuery) => { queryLists.sav
 export function reuse(workspace: Workspace, q: { resource: string; type?: string; query: string; lang?: string }) {
   const [project, ...rest] = q.resource.split('/');
   const doc = workspace.open({ project, kind: 'resource', name: rest.join('/'), type: q.type });
-  doc.ui.mode = 'query';
   doc.ui.query = q.query;
   if (q.lang) doc.ui.lang = q.lang;
 }

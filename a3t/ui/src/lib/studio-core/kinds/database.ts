@@ -1,8 +1,8 @@
 /// Database resources: a Query view (run statements in the database's own
-/// language, results below) and a Config view (the resource's config form).
+/// language, results below); the resource's config in the Form panel.
 import * as query from '../adapters/query';
 import { removeResource } from '../adapters/registry';
-import { resourceConfig } from './registryItems';
+import { FORM, resourceConfig } from './registryItems';
 import type { ItemKind } from './types';
 
 /// Each database type's languages, the first being the default. `dialect` is the
@@ -25,12 +25,12 @@ export const databaseKind: ItemKind = {
   capabilities: ['edit', 'delete', 'query'],
   views: {
     center: 'query',
-    modes: [{ id: 'query', title: 'Query' }, { id: 'config', title: 'Config' }],
+    right: FORM,
     bottom: [{ id: 'results', title: 'Results' }, { id: 'history', title: 'History' }, { id: 'saved', title: 'Saved' }],
   },
   console: { section: 'resources', title: 'Resources' },
   /// The query being written and the last result are view state; the
-  /// document's text is the config (Config view), saved like any resource.
+  /// document's text is the config (Form panel), saved like any resource.
   initialUi: () => ({ query: '', lang: '', result: null, error: '', running: false }),
   ...resourceConfig,
   async query(doc, text, lang) {

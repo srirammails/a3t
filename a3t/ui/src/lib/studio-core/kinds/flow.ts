@@ -11,7 +11,7 @@ export const flowKind: ItemKind = {
   capabilities: ['edit', 'run', 'debug', 'create', 'delete', 'rename', 'duplicate'],
   views: {
     center: 'flow',
-    right: [{ id: 'form', title: 'Form' }, { id: 'ai', title: 'AI' }],
+    right: [{ id: 'form', title: 'Form', component: 'flow-form' }, { id: 'ai', title: 'AI', component: 'flow-ai' }],
     bottom: [{ id: 'runs', title: 'Runs' }, { id: 'problems', title: 'Problems' }],
   },
 

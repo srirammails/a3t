@@ -54,7 +54,8 @@
 {/snippet}
 
 {#snippet sidePanel(id: string)}
-  {@const P = PANELS[id]}
+  {@const def = [...right, ...bottom].find((p) => p.id === id)}
+  {@const P = PANELS[def?.component ?? id]}
   {#if P}<P {id} doc={active} {workspace} {studio} />{/if}
 {/snippet}
 
@@ -74,7 +75,7 @@
       {@render home?.()}
     {:else}
       {#key active.address}
-        {@const V = VIEWS[kind.views.modes ? (active.ui.mode ?? kind.views.modes[0].id) : kind.views.center]}
+        {@const V = VIEWS[kind.views.center]}
         {#if V}<V doc={active} {workspace} {studio} />{/if}
       {/key}
     {/if}

@@ -3,7 +3,9 @@
 /// `{ id, doc, workspace, studio }` with `doc` the active document or null.
 import type { Component } from 'svelte';
 import FlowView from './views/FlowView.svelte';
-import ConfigView from './views/ConfigView.svelte';
+import CodeView from './views/CodeView.svelte';
+import TemplateView from './views/TemplateView.svelte';
+import ConfigPanel from './panels/ConfigPanel.svelte';
 import QueryView from './views/QueryView.svelte';
 import ChatView from './views/ChatView.svelte';
 import ToolsView from './views/ToolsView.svelte';
@@ -18,7 +20,8 @@ import TargetRunsPanel from './panels/TargetRunsPanel.svelte';
 
 export const VIEWS: Record<string, Component<any>> = {
   flow: FlowView,
-  config: ConfigView,
+  code: CodeView,
+  template: TemplateView,
   query: QueryView,
   chat: ChatView,
   tools: ToolsView,
@@ -26,8 +29,9 @@ export const VIEWS: Record<string, Component<any>> = {
 };
 
 export const PANELS: Record<string, Component<any>> = {
-  form: FlowAssistPanel,
-  ai: FlowAssistPanel,
+  'flow-form': FlowAssistPanel,
+  'flow-ai': FlowAssistPanel,
+  config: ConfigPanel,
   runs: RunsPanel,
   problems: ProblemsPanel,
   results: ResultsPanel,

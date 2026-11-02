@@ -3,7 +3,6 @@
   /// and firing it with a payload, as its type would; the runs it starts show
   /// in the Runs panel below. Fires the trigger as saved.
   import YamlEditor from '$lib/components/editor/YamlEditor.svelte';
-  import ModeSwitch from '../parts/ModeSwitch.svelte';
   import { fromText, type Doc, type Workspace } from '$lib/studio-core';
   import type { Studio } from '../layout.svelte.ts';
 
@@ -37,7 +36,6 @@
 
 <div class="fv">
   <div class="head">
-    <ModeSwitch {doc} {workspace} />
     <span class="kind">{kind.label}{type ? ` · ${type}` : ''}</span>
     <span class="mono">{doc.ref.project}/{doc.ref.name}</span>
     {#if t && !t.enabled}<span class="paused">paused</span>{/if}

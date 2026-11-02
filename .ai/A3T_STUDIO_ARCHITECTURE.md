@@ -305,6 +305,18 @@ there is one Studio; scopes become Explorer views.
 
 ### 6.2 Views (center) and panels
 
+**The center is for acting on an item; its settings are in the Form panel**
+(right region, decided 2 Nov 2026). Flows: graph / code, Run, Debug, Deploy in
+the center; Form and AI on the right. Databases: the query editor; LLMs: chat;
+MCP servers: tools; triggers: Fire (their target flow's runs below). Items with
+no action of their own yet (other resources, canvases) show their config as code
+in the center and as a form in the Form panel — two editors of one document;
+templates show their spec. Every kind's Form tab has the id `form`, so it stays
+the open tab as you move between kinds; a `PanelDef`'s `component` picks what
+renders it (the flow form for flows, `config` for the rest). Save (Ctrl/⌘+S) sits
+wherever the document is edited; its state is on the document.
+
+
 Views are registered by id and receive `{ doc, workspace, host }`:
 `FlowView` (graph / code / form; today's FlowDocument + FlowEditorPane),
 `ComposeView`, `QueryView`, `ChatView`, `ToolsView`, `FireView`, `CanvasView`,
@@ -511,8 +523,8 @@ Each step ships on dash.dev and is checked there before the next.
 | 1 | `studio-core` seams in-tree: items, kinds, workspace, inventory; `Workbench`; Flow Editor moved onto it | no visible change; lint rules on — **done 2 Nov 2026** (branch `a3t-studio`) |
 | 1b | Entry point (`<Studio>`, `mountStudio`), Studio home with recent items, project scope from the host, Console imports only the entry point | **done 2 Nov 2026** |
 | 2 | `config` adapter + ConfigForm; every non-flow item opens as a config form | JSON previews gone — **done 2 Nov 2026**: resources, canvases and triggers edit and save (Form or JSON, Ctrl/⌘+S); masked values stay as stored unless replaced; templates read-only until their own view (saving one changes its agents) |
-| 3 | `query` adapter + `database` kind; DB Console = Workbench pinned to Databases (history, saved queries kept) | DB Console in the Studio — **done 2 Nov 2026**: Query and Config views (`views.modes`), Results / History / Saved panels, ADB AQL or SQL; the previous console one release behind "Classic console"; its AI pane was a placeholder and is not carried over |
-| 4 | `chat`, `mcp`, `trigger` kinds | act on every resource — **done 2 Nov 2026**: LLMs (Chat), MCP servers (Tools: list, form from the tool's input schema, call), triggers (Fire: webhook POST, CloudEvent of the trigger's `source` type, or start the workflow targets; Runs of the target below); each keeps a Config view |
+| 3 | `query` adapter + `database` kind; DB Console = Workbench pinned to Databases (history, saved queries kept) | DB Console in the Studio — **done 2 Nov 2026**: Query view (config in the Form panel), Results / History / Saved panels, ADB AQL or SQL; the previous console one release behind "Classic console"; its AI pane was a placeholder and is not carried over |
+| 4 | `chat`, `mcp`, `trigger` kinds | act on every resource — **done 2 Nov 2026**: LLMs (Chat), MCP servers (Tools: list, form from the tool's input schema, call), triggers (Fire: webhook POST, CloudEvent of the trigger's `source` type, or start the workflow targets; Runs of the target below); config in the Form panel |
 | 5 | `canvas`, `runtime`, `run` kinds; Deploy from the Studio | operate from the Studio |
 | 6 | `memory` kind + AQL view (needs ADB scopes) | real memory view |
 | 7 | Compose view + drag and drop | one deployable workflow |

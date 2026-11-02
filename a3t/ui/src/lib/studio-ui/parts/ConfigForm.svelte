@@ -5,11 +5,13 @@
   /// read-only until replaced (saving them unchanged keeps what is stored).
   import { getAt, pathKey, removeAt, setAt, type Path } from '$lib/studio-core';
 
-  let { value, onchange, readonly = false, masked = new Set<string>() }: {
+  let { value, onchange, readonly = false, masked = new Set<string>(), stack = false }: {
     value: Record<string, unknown>;
     onchange?: (next: Record<string, unknown>) => void;
     readonly?: boolean;
     masked?: Set<string>;
+    /// Labels above fields, for narrow places (the Form panel).
+    stack?: boolean;
   } = $props();
 
   /// Masked fields the user chose to replace (they become password fields).
@@ -33,7 +35,7 @@
   }
 </script>
 
-<div class="cf">
+<div class="cf" class:stack>
   {@render fields(value, [])}
 </div>
 
@@ -117,6 +119,9 @@
   .cf { display: flex; flex-direction: column; gap: 6px; max-width: 760px; }
   .row { display: grid; grid-template-columns: minmax(120px, 200px) 1fr; align-items: center; gap: 10px; text-transform: none; letter-spacing: 0; font-weight: 400; }
   .row.long { align-items: start; }
+  .stack .row { grid-template-columns: 1fr; gap: 3px; }
+  .stack .add-row { flex-wrap: wrap; }
+  .stack .add-row .key { width: 100%; }
   .k { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .k em { font-style: normal; margin-left: 6px; font-size: 10px; padding: 1px 5px; border-radius: 3px; background: var(--warn-bg); color: var(--warn); }
   .v, .item { display: flex; align-items: center; gap: 6px; min-width: 0; }

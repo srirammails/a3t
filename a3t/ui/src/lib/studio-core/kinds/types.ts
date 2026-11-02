@@ -5,9 +5,10 @@ import type { Doc } from '../workspace';
 
 export type Capability = 'edit' | 'run' | 'debug' | 'create' | 'delete' | 'rename' | 'duplicate' | 'query' | 'chat' | 'tools' | 'fire';
 
-/// A panel a kind shows in a studio region. `id` names a panel component in
-/// studio-ui's registry.
-export type PanelDef = { id: string; title: string };
+/// A panel a kind shows in a studio region. `id` is the region's tab (kept as
+/// the active tab across kinds, e.g. every kind's "form"); `component` names the
+/// studio-ui panel that renders it (default: `id`).
+export type PanelDef = { id: string; title: string; component?: string };
 
 /// Everything the Studio knows about one sort of item. Adding a sort of item
 /// (or a resource type with its own behaviour) means adding a kind; nothing
@@ -18,10 +19,10 @@ export interface ItemKind {
   icon: string;
   match(item: Item): boolean;
   capabilities: Capability[];
-  /// Ids of studio-ui components: the center view (or, with `modes`, the views a
-  /// document switches between — `doc.ui.mode`, the first by default), and the
-  /// region panels.
-  views: { center: string; modes?: PanelDef[]; right?: PanelDef[]; bottom?: PanelDef[] };
+  /// Where it shows: `center` names the studio-ui view for acting on it (edit
+  /// code, run, query, chat, fire…); `right` holds its Form (config) and helpers;
+  /// `bottom` what acting produces (runs, results…).
+  views: { center: string; right?: PanelDef[]; bottom?: PanelDef[] };
   /// The Console section where this kind is managed in full, if any.
   console?: { section: string; title: string };
 

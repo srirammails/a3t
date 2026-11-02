@@ -7,9 +7,12 @@ import * as act from '../adapters/act';
 import { fail, ok } from '../items';
 import { fromText, maskedPaths, toText } from '../config';
 import type { Doc } from '../workspace';
-import type { ItemKind } from './types';
+import type { ItemKind, PanelDef } from './types';
 
-const configViews = { center: 'config' };
+/// The Form panel: an item's config as a form (studio-ui `config`).
+export const FORM: PanelDef[] = [{ id: 'form', title: 'Form', component: 'config' }];
+/// No action of its own yet: the config as code in the center, as a form beside it.
+const configViews = { center: 'code', right: FORM };
 const textDirty = (doc: Doc) => doc.loaded && (doc.text ?? '') !== (doc.saved ?? '');
 
 function loaded(doc: Doc, text: string, data: any) {
@@ -48,11 +51,7 @@ export const triggerKind: ItemKind = {
   match: (it) => it.kind === 'trigger',
   capabilities: ['edit', 'delete', 'fire'],
   /// Fire it, and watch its target flow's runs below; or edit its config.
-  views: {
-    center: 'fire',
-    modes: [{ id: 'fire', title: 'Fire' }, { id: 'config', title: 'Config' }],
-    bottom: [{ id: 'target-runs', title: 'Runs' }],
-  },
+  views: { center: 'fire', right: FORM, bottom: [{ id: 'target-runs', title: 'Runs' }] },
   initialUi: () => ({ payload: '{\n  "message": "Hello from the Studio"\n}\n', firing: false, fired: null, error: '' }),
   /// As saved (not as being edited): what the platform will fire.
   fire: (doc, payload) => act.fire({ namespace: doc.data?.namespace ?? doc.ref.project, config: doc.data?.config, targets: doc.data?.targets ?? [] }, payload),
@@ -86,12 +85,14 @@ export const templateKind: ItemKind = {
   id: 'template', label: 'Template', icon: '▤',
   match: (it) => it.kind === 'template',
   capabilities: ['delete'],
-  views: configViews,
+  /// Its spec in the center, its other fields in the Form panel.
+  views: { center: 'template', right: FORM },
   console: { section: 'templates', title: 'Templates' },
   async load(doc) {
     const r = doc.ref.id ? await config.getTemplate(doc.ref.id) : fail('This template has no id');
     if (!r.ok) { doc.error = r.error; return; }
-    loaded(doc, toText(r.data), r.data);
+    const { spec_yaml: _spec, ...rest } = r.data;
+    loaded(doc, toText(rest), r.data);
   },
   remove: (it) => (it.id ? registry.removeTemplate(it.id) : Promise.resolve(fail('This template has no id'))),
 };
