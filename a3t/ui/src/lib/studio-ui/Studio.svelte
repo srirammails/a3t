@@ -31,7 +31,7 @@
   }
 </script>
 
-<Workbench {studio} {workspace} homeKind={config.homeKind} create={config.create} pin={config.pin} {lead}>
+<Workbench {studio} {workspace} homeKind={config.homeKind} pin={config.pin} {lead}>
   {#snippet home()}
     <HomeView {config} {workspace} />
   {/snippet}

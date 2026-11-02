@@ -13,13 +13,11 @@
   import type { RegionId, Studio } from './layout.svelte.ts';
   import { kindById, type PanelDef, type Workspace } from '$lib/studio-core';
 
-  let { studio, workspace, homeKind, create = [], home, lead, pin }: {
+  let { studio, workspace, homeKind, home, lead, pin }: {
     studio: Studio;
     workspace: Workspace;
     /// The kind whose panels show while no document (or one without panels) is active.
     homeKind: string;
-    /// What the tab bar's "+ New" offers (the first as its button, all in its menu).
-    create?: { kind: string; type?: string; label: string }[];
     /// Shown in the editor area with nothing open.
     home?: Snippet;
     /// The host's controls at the start of the tab bar.
@@ -79,9 +77,6 @@
     void workspace.close(id);
   }
 
-  const project = () => workspace.host.scope.current() ?? workspace.host.scope.projects()[0] ?? 'a3t';
-  const newDoc = (c: { kind: string; type?: string }) => { newMenu = false; studio.state.centerPanel = null; workspace.create(c.kind, project(), c.type); };
-  let newMenu = $state(false);
 
   // ── Context menu: the Studio's own, wherever the user right-clicks ──
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
@@ -197,26 +192,7 @@
 {#snippet centerArea()}
   <div class="center-head">
     {@render lead?.()}
-    <DocTabs {studio} {tabs} active={activeTab} onselect={selectTab} onclose={closeTab}>
-      {#snippet actions()}
-        {#if create.length}
-          <span class="newwrap">
-            <button class="new" onclick={() => newDoc(create[0])} title="New {create[0].label}">+ New {create[0].label}</button>
-            {#if create.length > 1}
-              <button class="new caret" onclick={() => (newMenu = !newMenu)} aria-label="New…" aria-haspopup="menu" aria-expanded={newMenu}>▾</button>
-              {#if newMenu}
-                <div class="nm-overlay" role="presentation" onclick={() => (newMenu = false)}></div>
-                <div class="nm" role="menu">
-                  {#each create as c (`${c.kind}/${c.type ?? ''}`)}
-                    <button role="menuitem" onclick={() => newDoc(c)}><span class="ic">{kindById(c.kind).icon}</span>{c.label}</button>
-                  {/each}
-                </div>
-              {/if}
-            {/if}
-          </span>
-        {/if}
-      {/snippet}
-    </DocTabs>
+    <DocTabs {studio} {tabs} active={activeTab} onselect={selectTab} onclose={closeTab} />
   </div>
   <div class="center-body">
     {#if centerPanel}
@@ -239,14 +215,4 @@
   .center-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .center-body > :global(*) { flex: 1; min-height: 0; }
   .center-panel { display: flex; flex-direction: column; overflow: auto; }
-  .new { border: 0; background: transparent; color: var(--spec); font-size: 12px; padding: 0 10px; cursor: pointer; white-space: nowrap; }
-  .new:hover { background: var(--bg-subtle); }
-  .newwrap { position: relative; display: inline-flex; align-self: stretch; }
-  .new.caret { padding: 0 6px; }
-  .nm-overlay { position: fixed; inset: 0; z-index: 90; }
-  .nm { position: absolute; right: 0; top: 100%; z-index: 91; min-width: 200px; display: flex; flex-direction: column; padding: 4px;
-        background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); }
-  .nm button { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 6px 10px; border-radius: 4px; cursor: pointer; text-align: left; font-size: 12.5px; color: var(--text-1); }
-  .nm button:hover { background: var(--bg-subtle); }
-  .nm .ic { width: 16px; text-align: center; color: var(--text-3); }
 </style>
