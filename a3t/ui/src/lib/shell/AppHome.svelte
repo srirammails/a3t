@@ -33,7 +33,7 @@
   /// tells you what it does.
   const BLURB: Record<string, string> = {
     chat: 'Ask about the platform, build flows and agents, and run them — in conversation.',
-    'flow-editor': 'Author CNCF Serverless Workflow definitions with a graph, code and form view.',
+    'flow-editor': 'One editor for flows, databases, LLMs, MCP servers, triggers and canvases.',
     resources: 'Databases, LLMs, MCP servers, secrets — everything agents need, in one registry.',
     agents: 'Configured agents: their template, model and the tools they may use.',
     projects: 'Namespaces you work in, who is in them, and the rules they run under.',

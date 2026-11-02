@@ -4,8 +4,8 @@
  * Access rules:
  *   superadmin — sees all menu items (platform-level access)
  *   admin      — sees all menu items
- *   operator   — Build (read-only templates/canvas), Augment (read), Operate (full), Workbench (flow editor)
- *   viewer     — Build (read-only), Augment (read), Operate (logs only), no Workbench
+ *   operator   — Build (read-only templates/canvas), Augment (read), Operate (full), Studio
+ *   viewer     — Build (read-only), Augment (read), Operate (logs only), no Studio
  */
 
 import type { UserRole, MenuGroup } from './types';
@@ -38,11 +38,13 @@ export const MENU_CONFIG: MenuGroup[] = [
     ],
   },
   {
-    label: 'Workbench',
+    label: 'Studio',
     roles: ALL_ROLES,
     items: [
-      { type: 'flow-editor',      label: 'Flow Editor',      tag: null, icon: 'flow',     roles: ALL_ROLES },
-      { type: 'db-console',       label: 'Query Console',    tag: null, icon: 'database', roles: ALL_ROLES },
+      // One editor for every kind of item (flows, databases, LLMs, MCP servers,
+      // triggers, canvases). The Query Console is the Studio pinned to
+      // databases; /db-console still opens it for old links.
+      { type: 'flow-editor',      label: 'Studio',           tag: null, icon: 'flow',     roles: ALL_ROLES },
       { type: 'knowledge',        label: 'Knowledge',        tag: null, icon: 'kg', roles: ALL_ROLES },
     ],
   },

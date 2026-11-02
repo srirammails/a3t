@@ -1,6 +1,6 @@
 <script lang="ts">
-  /// The Console's Flow Editor page: the Studio with the flows configuration,
-  /// hosted by the web dash. The Studio is used only through its entry point.
+  /// The Console's Studio page (menu: Studio; /studio, and /flow-editor for old
+  /// links), hosted by the web dash. The Studio is used only through its entry point.
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import { Studio, STUDIOS } from '$lib/studio-ui';
   import { webHost } from '$lib/host/web.svelte.ts';

@@ -485,10 +485,10 @@ do:
           <div class="sp-main">
             <div class="sp-close-bar">
               <div class="sp-btn-wrap">
-                <button class="sp-action-btn" onclick={() => navigateTo('flow-editor', 'Flow Editor')}>
+                <button class="sp-action-btn" onclick={() => navigateTo('flow-editor', 'Studio')}>
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 1h6v6M9 7L15 1M7 3H2a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1V9"/></svg>
                 </button>
-                <span class="sp-tooltip">Open in Flow Editor</span>
+                <span class="sp-tooltip">Open in Studio</span>
               </div>
               {#if $canEditTpl}
               <div class="sp-btn-wrap">

@@ -297,9 +297,11 @@ kinds "+ New" creates, layout defaults, the home banner):
 With nothing open the Studio shows its **home**: the banner, "+ New …", and the
 items opened recently (kept by the Workspace through the host's storage).
 
-On the web, today's Flow Editor, DB Console and Memory pages become these
-Workbenches (or one Studio with several scopes — §15). In VS Code there is one
-Studio; scopes become Explorer views.
+On the web the Console's menu has **one Studio entry** (2 Nov 2026: "Studio",
+`/studio`; `/flow-editor` still resolves) — the former Flow Editor, which opens
+every kind. The Query Console has no menu entry: databases open in the Studio;
+`/db-console` still opens the Studio pinned to Databases for old links. In VS Code
+there is one Studio; scopes become Explorer views.
 
 ### 6.2 Views (center) and panels
 
@@ -529,5 +531,5 @@ Open — defaults in brackets, used unless decided otherwise:
 2. ~~Firing a cron trigger / an event trigger?~~ Done as proposed (step 4).
 3. Old DB Console: removed in step 3, or kept behind a link until the new one is tried? [kept one release]
 4. Read-only developers: Studio read-only (§2), or Console only? [Studio read-only]
-5. One web Studio with scopes, or separate Flow / DB / Memory studios on the web? [one Studio, scopes as Explorer views; the routes `/flow-editor`, `/db-console` open it with that scope]
+5. ~~One web Studio with scopes, or separate studios?~~ One Studio in the menu (2 Nov); `/db-console` kept for old links.
 6. Package extraction: at step 9, or earlier? [step 9]

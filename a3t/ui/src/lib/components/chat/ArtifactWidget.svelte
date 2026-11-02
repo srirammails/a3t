@@ -31,7 +31,7 @@
       </button>
       {#if hasPanel}
         <button class="wbtn" title="Open in the full editor"
-          onclick={() => navigateToDetail('flow-editor', name || 'Flow Editor', `${ns}/${name}`, { namespace: ns, name })}>↗</button>
+          onclick={() => navigateToDetail('flow-editor', name || 'Studio', `${ns}/${name}`, { namespace: ns, name })}>↗</button>
       {/if}
     </div>
   </div>

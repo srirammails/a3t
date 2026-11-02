@@ -699,7 +699,7 @@ do:
   open={!!selected}
   onclose={closePanel}
   onsave={selected?.category === 'flows' ? saveFlow : undefined}
-  onopenineditor={selected?.category === 'flows' && !isNewFlow ? () => navigateTo('flow-editor', 'Flow Editor') : undefined}
+  onopenineditor={selected?.category === 'flows' && !isNewFlow ? () => navigateTo('flow-editor', 'Studio') : undefined}
 >
   {#if selected}
     <div class="panel-layout">

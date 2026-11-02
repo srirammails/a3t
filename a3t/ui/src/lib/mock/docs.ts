@@ -135,11 +135,11 @@ export const mockDocs: Record<string, PageDocs> = {
   },
 
   'flow-editor': {
-    title: 'Flow Editor',
+    title: 'Studio',
     sections: [
       {
-        heading: 'Flow Editor',
-        body: `Visual editor for CNCF Serverless Workflow definitions. Author agent templates with a drag-and-drop DAG editor, or write YAML directly with live validation and preview.`,
+        heading: 'Studio',
+        body: `One editor for everything in your projects. The Explorer lists flows, resources (databases, LLMs, MCP servers, secrets…), triggers, templates and canvases; each opens in a tab. Flows edit as a graph, YAML or form, with Run, Debug and Deploy. Databases open a query editor with results, history and saved queries. LLMs open a chat, MCP servers their tools, triggers a Fire view. Every item has a Config view built from its own settings.`,
       },
     ],
   },

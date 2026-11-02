@@ -1,5 +1,5 @@
 <script lang="ts">
-  /// The per-app context list: conversations in Chat, flows in the Flow Editor,
+  /// The per-app context list: conversations in Chat, flows in the Studio,
   /// resources in Resources. It occupies the side region next to the app rail and
   /// is independently pinnable — unpinned it is revealed on demand from the Active
   /// Apps menu, which is what frees the column for a wider main view.
@@ -178,8 +178,8 @@
   /// A blank editor: navigating with no selection is what FlowEditor treats as a
   /// new flow, so there is no separate "new" state to keep in sync.
   function newFlow() {
-    trackOpen('flow-editor', 'Flow Editor');
-    navigateTo('flow-editor', 'Flow Editor');
+    trackOpen('flow-editor', 'Studio');
+    navigateTo('flow-editor', 'Studio');
     if (!isContextPinned()) settleContextPane();
   }
 

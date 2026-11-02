@@ -34,12 +34,12 @@ export const STUDIOS = {
       bottom: { size: 320, minimized: true, active: 'runs' },
     },
     home: {
-      headline: 'Author a flow.',
-      highlight: 'flow',
-      subtitle: 'CNCF Serverless Workflow definitions, edited as a graph, as YAML, or as a form.',
-      description: 'Open a flow from the Explorer or start a new one. Check it under Problems, deploy it, then run or debug it from Runs — all without leaving the editor.',
+      headline: 'Build in the Studio.',
+      highlight: 'Studio',
+      subtitle: 'Flows, databases, LLMs, MCP servers, triggers and canvases — one editor for all of them.',
+      description: 'Open anything from the Explorer: edit a flow as a graph, YAML or form and run or debug it; query a database; chat with an LLM; call an MCP server’s tools; fire a trigger. Each item’s config is one click away.',
       accent: 'spec',
-      docsPath: '/concepts/workflows/',
+      docsPath: '/getting-started/introduction/',
     },
   },
   db: {

@@ -500,7 +500,7 @@
 </script>
 
 <!-- Slide Panel -->
-<SlidePanel open={!!agent} onclose={closePanel} onsave={() => creatingNew ? createAgent() : saveBindings()} onopenineditor={() => navigateTo('flow-editor', 'Flow Editor')}>
+<SlidePanel open={!!agent} onclose={closePanel} onsave={() => creatingNew ? createAgent() : saveBindings()} onopenineditor={() => navigateTo('flow-editor', 'Studio')}>
   {#if agent}
     <div class="panel-layout">
       <PropertiesTree
