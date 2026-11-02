@@ -28,21 +28,22 @@ impl TaskHandler for EmitHandler {
         let Task::Emit(emit) = &task.task else {
             return Err(RuntimeError::task_failed(&task.name, "not an emit task"));
         };
-        let with = serde_json::to_value(&emit.event.with).map_err(|e| RuntimeError::Internal(e.to_string()))?;
+        let mut with = serde_json::to_value(&emit.event.with).map_err(|e| RuntimeError::Internal(e.to_string()))?;
+        // The same id on every attempt of this step, so a repeat (after a
+        // crash) is dropped by the store; an id given in the flow wins.
+        if let (Some(key), Some(w)) = (swf_runtime::effects::step_key(), with.as_object_mut()) {
+            w.entry("id").or_insert_with(|| Value::String(format!("{}:{key}", ctx.instance_id)));
+        }
         let event = flowr_storage::engine::cloud_event(&with, &format!("/flowr/{}/{}", ctx.namespace, ctx.name));
-        let engine = ctx
+        let storage = ctx
             .storage
             .as_ref()
             .and_then(|s| s.downcast_ref::<Arc<dyn StorageBackend>>().cloned())
-            .and_then(|s| s.engine());
-        let Some(engine) = engine else {
-            return Err(RuntimeError::task_failed(&task.name, "emit needs the engine store (FLOWR_STORE=lance has none)"));
-        };
-        let woke = engine
-            .deliver_event(&ctx.namespace, event.clone())
+            .ok_or_else(|| RuntimeError::Internal("storage not available".into()))?;
+        let out = crate::events::publish(storage.as_ref(), &ctx.namespace, event.clone(), Some(ctx.principal.clone()))
             .await
             .map_err(|e| RuntimeError::task_failed(&task.name, format!("emit: {e}")))?;
-        tracing::debug!(task = %task.name, event_type = %event["type"], woke = woke.len(), "event emitted");
+        tracing::debug!(task = %task.name, event_type = %event["type"], result = %out, "event emitted");
         // The step's output is its input, as the spec has it for `emit`.
         Ok(TaskResult::new(input))
     }

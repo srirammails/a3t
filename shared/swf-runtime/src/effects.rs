@@ -67,6 +67,12 @@ fn current() -> Option<EffectScope> {
     SCOPE.try_with(|s| s.clone()).ok().flatten()
 }
 
+/// The current step's path in the run, when the step is journaled — the same
+/// on every attempt (an `emit` names its event after it).
+pub fn step_key() -> Option<String> {
+    current().map(|s| s.key)
+}
+
 /// Whether the current step is journaled (effects are recorded, waits durable).
 pub fn journaled() -> bool {
     current().is_some()

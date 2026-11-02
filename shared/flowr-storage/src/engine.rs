@@ -330,7 +330,8 @@ pub trait RunStore: Send + Sync {
     /// Runs left owned or pending by a process that is gone (owner lease
     /// expired), for startup recovery.
     async fn orphaned(&self) -> StoreResult<Vec<RunRow>>;
-    /// Remove finished runs (and their journals) completed before `before`.
+    /// Remove finished runs (and their journals) completed before `before`, and
+    /// the ids of events delivered before it.
     async fn purge_finished(&self, before: DateTime<Utc>) -> StoreResult<usize>;
     /// A `listen` step starts waiting (§5.9): journal `WaitForEvents` and open
     /// the wait (`wait_id` is the step key, unique within the run), atomically. From now on, events delivered in the run's
@@ -340,7 +341,9 @@ pub trait RunStore: Send + Sync {
     async fn close_wait(&self, run: RunId, epoch: Epoch, wait_id: &str) -> StoreResult<bool>;
     /// Offer an event to the open waits in `namespace`. Each wait it completes
     /// is closed, and its run gets `EventReceived` and a `ResumeRun` task, in
-    /// one transaction. Returns the runs woken.
+    /// one transaction. Returns the runs woken. An event whose `id` was already
+    /// delivered in `namespace` (kept until `purge_finished` passes it) is
+    /// dropped: sending it again wakes nothing.
     async fn deliver_event(&self, namespace: &str, event: Value) -> StoreResult<Vec<RunId>>;
     /// A run asks a person (an approval, §5.9): journal `ApprovalRequested` and
     /// open the wait, keyed by `wait_id` (the request id, unique), atomically.

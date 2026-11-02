@@ -20,6 +20,8 @@
   let entries = $state<Entry[]>([]);
   let error = $state('');
   let message = $state('');
+  /// What just worked (shown in green; `message` is for what went wrong).
+  let notice = $state('');
   let tab = $state<'steps' | 'timeline' | 'journal' | 'checkpoints' | 'io'>('steps');
   let selected = $state<string | null>(null);
   let detailTab = $state<'input' | 'output' | 'context' | 'records'>('output');
@@ -43,7 +45,7 @@
   let timer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     const id = runId;
-    run = null; entries = []; selected = null; message = ''; editing = false;
+    run = null; entries = []; selected = null; message = ''; notice = ''; editing = false;
     let stop = false;
     const tick = async () => {
       if (stop || id !== runId) return;
@@ -99,7 +101,7 @@
 
   // ── Debug ──
   async function command(c: DebugCommand, stepKey?: string) {
-    busy = true; message = '';
+    busy = true; message = ''; notice = '';
     const r = await runsApi.debug(runId, c, stepKey);
     busy = false;
     if (!r.ok) message = r.error ?? 'Command failed';
@@ -117,7 +119,7 @@
     busy = false;
     if (!r.ok) { message = r.error ?? 'Edit failed'; return; }
     editing = false;
-    message = `Input for ${paused.step_key} replaced — Continue or Step to run it.`;
+    notice = `Input for ${paused.step_key} replaced — Continue or Step to run it.`;
     await load();
   }
   // ── Events: wake a listening run from here ──
@@ -137,7 +139,7 @@
     if (!r.ok) { message = r.error ?? 'Send failed'; return; }
     sending = false;
     const n = r.data?.woke?.length ?? 0;
-    message = n ? `Event sent — woke ${n} run${n > 1 ? 's' : ''}.` : 'Event sent — no waiting run matched it.';
+    notice = n ? `Event sent — woke ${n} run${n > 1 ? 's' : ''}.` : 'Event sent — no waiting run matched it.';
     await load();
   }
 
@@ -311,6 +313,7 @@
       {/if}
     {/if}
     {#if message}<div class="rv-msg">{message}</div>{/if}
+    {#if notice && !message}<div class="rv-msg ok">{notice}</div>{/if}
     {#if run.error}<div class="rv-msg">{run.error}</div>{/if}
 
     {#if editing}
@@ -460,6 +463,7 @@
   .rv-ctl { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .rv-ctl select { padding: 3px 6px; border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 12px; background: var(--bg-surface); }
   .rv-note { color: var(--text-3); }
+  .rv-msg.ok { background: var(--ok-bg, #e7f6ec); color: var(--ok, #15803d); }
   .rv-msg { padding: 6px 10px; border-radius: var(--r-sm); background: var(--err-bg, #fde8e8); color: var(--err, #b42318); white-space: pre-wrap; }
   .rv-edit { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: var(--r-sm); }
   .rv-edit textarea { font-family: var(--font-mono); font-size: 12px; padding: 6px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-page); color: var(--text-1); }

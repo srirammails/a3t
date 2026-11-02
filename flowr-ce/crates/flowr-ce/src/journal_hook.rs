@@ -159,6 +159,9 @@ pub(crate) fn class_of(task: &NamedTask) -> StepClass {
             StepClass::Pure
         }
         Task::Listen(_) => StepClass::Read,
+        // Its event id is the same on every attempt and the store drops
+        // repeats, so sending it again is safe.
+        Task::Emit(_) => StepClass::Idempotent,
         Task::Call(c) => match &c.target {
             CallTarget::Http(h) if h.method.as_deref().map(|m| m.eq_ignore_ascii_case("get")).unwrap_or(false) => StepClass::Read,
             _ => StepClass::Effect,
@@ -686,7 +689,8 @@ impl StepHook for JournalHook {
                     || (class == StepClass::Idempotent && policy == "retry")
                     // An agent records its own calls (fine mode): running it
                     // again replays them and repeats none.
-                    || is_agent(task);
+                    || is_agent(task)
+                    || matches!(task.task, Task::Emit(_));
                 if !rerun {
                     let error = format!(
                         "in-doubt side effect: step {key} started but did not record a result before the run was interrupted; \

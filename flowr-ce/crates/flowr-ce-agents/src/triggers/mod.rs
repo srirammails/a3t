@@ -296,6 +296,55 @@ impl TriggerManager {
         results
     }
 
+    /// Deliver a CloudEvent sent in `namespace` (by `emit`, `send_event` or
+    /// `POST /events`) to that namespace's event triggers whose `source` is its
+    /// type, or `*`. A workflow target gets the event as its input.
+    pub async fn deliver_cloud_event(
+        &self,
+        namespace: &str,
+        event: &Value,
+        agent_sender: &dyn AgentMessageSender,
+        workflow_executor: &dyn WorkflowExecutor,
+    ) -> Vec<TriggerDeliveryResult> {
+        let event_type = event.get("type").and_then(|t| t.as_str()).unwrap_or_default();
+        let matching: Vec<Trigger> = {
+            let triggers = self.triggers.read().await;
+            triggers
+                .values()
+                .filter(|t| t.enabled && t.namespace == namespace)
+                .filter(|t| match &t.config {
+                    TriggerConfig::Event { source, filter, .. } => {
+                        (source == event_type || source == "*")
+                            && filter.as_ref().is_none_or(|f| serde_json::to_string(event).unwrap_or_default().contains(f.as_str()))
+                    }
+                    _ => false,
+                })
+                .cloned()
+                .collect()
+        };
+        let mut results = Vec::new();
+        for trigger in matching {
+            let TriggerConfig::Event { message, .. } = &trigger.config else { continue };
+            let content = message.clone().unwrap_or_else(|| {
+                format!("Event '{}' received:\n{}", event_type, serde_json::to_string_pretty(event).unwrap_or_default())
+            });
+            results.push(
+                self.deliver_to_targets(
+                    &trigger.id,
+                    &trigger.name,
+                    &trigger.targets,
+                    &content,
+                    Some(event.clone()),
+                    &format!("event:{event_type}"),
+                    agent_sender,
+                    workflow_executor,
+                )
+                .await,
+            );
+        }
+        results
+    }
+
     /// Emit an event to the internal event bus
     pub fn emit_event(&self, event_type: &str, payload: Value) {
         let _ = self.event_tx.send((event_type.to_string(), payload));

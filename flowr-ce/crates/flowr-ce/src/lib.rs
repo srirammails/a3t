@@ -12,6 +12,7 @@ pub mod token_stream;
 pub mod canvas;
 pub mod ops;
 mod engine_worker;
+pub mod events;
 pub mod engine_remote;
 mod journal_hook;
 pub mod integrity;
@@ -275,6 +276,8 @@ pub fn build_ce_router(storage: Arc<dyn StorageBackend>) -> Router {
     let _ = GLOBAL_STORAGE.set(storage.clone());
     // Deletes through the shared MCP tools respect the dependency tree too.
     flowr_mcp_core::set_delete_guard(Arc::new(integrity::Guard { storage: storage.clone() }));
+    // `send_event` also starts the flows of event triggers.
+    events::install_sink();
 
     let registry_routes = registry::registry_router(storage.clone());
     let canvas_routes = canvas::canvas_router(storage.clone());
@@ -333,6 +336,7 @@ pub fn build_ce_router(storage: Arc<dyn StorageBackend>) -> Router {
         .route("/inputs", get(list_inputs_handler))
         .route("/inputs/:request_id", get(get_input_handler).post(submit_input_handler))
         // Webhook (exact form + catch-all path form, e.g. /webhook/agent/{id}/chat)
+        .route("/events/:namespace", post(events::post_event))
         .route("/webhook", post(webhook_handler))
         .route("/webhook/*path", post(webhook_handler))
         .layer(cors)
@@ -738,6 +742,15 @@ impl flowr_ce_agents::triggers::WorkflowExecutor for TriggerWorkflowAdapter {
                     run.dedupe_key = Some(format!("cron:{id}:{namespace}/{name}:{minute}"));
                     run.trigger = format!("cron:{id}");
                 }
+            }
+            // One run per event and target, however often the event is sent.
+            if let (Some(_), Some(id), Some(kind)) = (
+                request.input.get("specversion"),
+                request.input.get("id").and_then(|v| v.as_str()),
+                request.input.get("type").and_then(|v| v.as_str()),
+            ) {
+                run.dedupe_key = Some(format!("event:{id}:{namespace}/{name}"));
+                run.trigger = format!("event:{kind}");
             }
             let task = flowr_storage::engine::NewTask::start(&run);
             let (id, outcome) = engine.start(run, task).await.map_err(|e| anyhow::anyhow!("{}", e))?;

@@ -112,6 +112,18 @@ pub async fn call(storage: &dyn StorageBackend, principal: &Principal, name: &st
 
 type R = Result<CallToolResult, String>;
 
+/// Where `send_event` hands an event when the server also starts flows from
+/// events (FlowR's event triggers); without one, it only wakes listening runs.
+pub type EventSink = std::sync::Arc<
+    dyn Fn(String, Value, Principal) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send>> + Send + Sync,
+>;
+
+static EVENT_SINK: std::sync::OnceLock<EventSink> = std::sync::OnceLock::new();
+
+pub fn set_event_sink(sink: EventSink) {
+    let _ = EVENT_SINK.set(sink);
+}
+
 fn engine(storage: &dyn StorageBackend) -> Result<std::sync::Arc<dyn EngineStore>, String> {
     storage.engine().ok_or_else(|| "this server runs without the run store (FLOWR_STORE=lance)".to_string())
 }
@@ -468,8 +480,12 @@ async fn send_event(storage: &dyn StorageBackend, principal: &Principal, args: &
         return Err(format!("Forbidden: this needs run access to project '{ns}'."));
     }
     let event = cloud_event(given, &format!("/a3t/{}", who(principal)));
+    if let Some(sink) = EVENT_SINK.get() {
+        let out = sink(ns.to_string(), event, principal.clone()).await?;
+        return Ok(CallToolResult::json(out));
+    }
     let woke = e.deliver_event(ns, event.clone()).await.map_err(|e| e.to_string())?;
-    Ok(CallToolResult::json(json!({ "id": event["id"], "woke": woke })))
+    Ok(CallToolResult::json(json!({ "id": event["id"], "woke": woke, "started": [] })))
 }
 
 async fn rerun_run(storage: &dyn StorageBackend, principal: &Principal, args: &Value) -> R {

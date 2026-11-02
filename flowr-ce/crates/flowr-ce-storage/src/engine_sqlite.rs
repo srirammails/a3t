@@ -114,6 +114,14 @@ CREATE TABLE IF NOT EXISTS waits (
 CREATE INDEX IF NOT EXISTS waits_ns ON waits(namespace, created_at);
 CREATE INDEX IF NOT EXISTS waits_id ON waits(wait_id);
 
+CREATE TABLE IF NOT EXISTS events_seen (
+  namespace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  at        INTEGER NOT NULL,
+  PRIMARY KEY (namespace, id)
+);
+CREATE INDEX IF NOT EXISTS events_seen_at ON events_seen(at);
+
 CREATE TABLE IF NOT EXISTS outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL
 );
@@ -748,6 +756,7 @@ impl RunStore for SqliteStore {
             tx.execute(&format!("DELETE FROM tasks WHERE run_id IN (SELECT run_id FROM runs WHERE {done})"), [cut]).map_err(be)?;
             tx.execute(&format!("DELETE FROM waits WHERE run_id IN (SELECT run_id FROM runs WHERE {done})"), [cut]).map_err(be)?;
             let n = tx.execute(&format!("DELETE FROM runs WHERE {done}"), [cut]).map_err(be)?;
+            tx.execute("DELETE FROM events_seen WHERE at < ?1", [cut]).map_err(be)?;
             Ok(n)
         })
         .await
@@ -789,6 +798,14 @@ impl RunStore for SqliteStore {
             .write(move |tx| {
                 let now_t = Utc::now();
                 let now = nanos(now_t);
+                if let Some(id) = event.get("id").and_then(|i| i.as_str()) {
+                    let fresh = tx
+                        .execute("INSERT OR IGNORE INTO events_seen(namespace, id, at) VALUES (?1, ?2, ?3)", params![namespace, id, now])
+                        .map_err(be)?;
+                    if fresh == 0 {
+                        return Ok(Vec::new());
+                    }
+                }
                 let open: Vec<(String, String, String, String)> = {
                     let mut st = tx
                         .prepare("SELECT wait_id, run_id, correlation, received FROM waits WHERE namespace = ?1 AND kind = 'event' ORDER BY created_at")

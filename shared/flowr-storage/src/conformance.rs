@@ -41,6 +41,7 @@ where
     outbox_drains_in_order(&make().await).await;
     purge_removes_only_old_finished_runs(&make().await).await;
     event_waits_wake_matching_runs_once(&make().await).await;
+    repeated_event_ids_are_dropped(&make().await).await;
     approvals_are_answered_once(&make().await).await;
 }
 
@@ -471,4 +472,24 @@ async fn approvals_are_answered_once<S: EngineStore>(s: &S) {
     s.request(id, RunRequest::Cancel { by: "u1".into(), reason: "no".into() }).await.unwrap();
     assert!(s.approvals().await.unwrap().is_empty());
     assert!(!s.decide_approval("r3", json!({ "allow": true }), "u1").await.unwrap());
+}
+
+async fn repeated_event_ids_are_dropped<S: EngineStore>(s: &S) {
+    let wait = json!({ "mode": "any", "filters": [{ "type": "t" }] });
+    let a = start(s, new_run("p", "a")).await;
+    let (lease, _, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    s.open_wait(a, epoch, "w", wait.clone()).await.unwrap();
+    s.release(a, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
+    // Seen first in another namespace: not a repeat here.
+    assert!(s.deliver_event("q", json!({ "id": "e1", "type": "t" })).await.unwrap().is_empty());
+    assert_eq!(s.deliver_event("p", json!({ "id": "e1", "type": "t" })).await.unwrap(), vec![a]);
+
+    let b = start(s, new_run("p", "b")).await;
+    let claimed = s.claim_runs(DEFAULT_POOL, "w", 2, LEASE).await.unwrap();
+    let (lease, _, epoch) = claimed.into_iter().find(|(_, t, _)| t.run_id == b).unwrap();
+    s.open_wait(b, epoch, "w", wait).await.unwrap();
+    s.release(b, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
+    assert!(s.deliver_event("p", json!({ "id": "e1", "type": "t" })).await.unwrap().is_empty(), "a repeat wakes nothing");
+    assert_eq!(s.deliver_event("p", json!({ "id": "e2", "type": "t" })).await.unwrap(), vec![b]);
+    // Events without an id are never deduplicated (nothing to compare).
 }

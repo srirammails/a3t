@@ -42,6 +42,8 @@ struct Inner {
     outbox_id: u64,
     /// Open event waits, oldest first.
     waits: Vec<WaitRow>,
+    /// Ids of events delivered, per namespace, and when.
+    events_seen: HashMap<(String, String), DateTime<Utc>>,
 }
 
 struct WaitRow {
@@ -482,6 +484,7 @@ impl RunStore for MemoryStore {
         }
         inner.run_dedupe.retain(|_, (r, _)| !gone.contains(r));
         inner.waits.retain(|w| !gone.contains(&w.run));
+        inner.events_seen.retain(|_, at| *at >= before);
         Ok(gone.len())
     }
 
@@ -562,6 +565,11 @@ impl RunStore for MemoryStore {
         let mut pools = Vec::new();
         {
             let mut inner = self.lock();
+            if let Some(id) = event.get("id").and_then(|i| i.as_str()) {
+                if inner.events_seen.insert((namespace.to_string(), id.to_string()), now).is_some() {
+                    return Ok(Vec::new());
+                }
+            }
             let mut i = 0;
             while i < inner.waits.len() {
                 if inner.waits[i].namespace != namespace || inner.waits[i].kind != "event" {
