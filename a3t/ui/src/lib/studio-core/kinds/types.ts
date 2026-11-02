@@ -30,6 +30,8 @@ export interface ItemKind {
   /// Persist the document; answers where it now lives.
   save?(doc: Doc): Promise<Result<ItemRef>>;
   dirty?(doc: Doc): boolean;
+  /// Paths (`pathKey`) of values the platform showed masked in the loaded document.
+  masked?(doc: Doc): Set<string>;
   /// A count on a panel's tab (e.g. problems), or null.
   badge?(doc: Doc, panel: string): number | null;
 

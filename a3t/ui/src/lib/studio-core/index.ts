@@ -6,4 +6,5 @@ export * from './items';
 export type { StudioHost } from './host';
 export { KINDS, kindFor, kindById, can, type ItemKind, type Capability, type PanelDef } from './kinds';
 export { Workspace, emptyWorkspace, type Doc, type WorkspaceState } from './workspace';
+export { maskedPaths, getAt, setAt, removeAt, pathKey, fromText, toText, type Path } from './config';
 export { loadInventory, namesIn, type Inventory, type TreeNode } from './inventory';

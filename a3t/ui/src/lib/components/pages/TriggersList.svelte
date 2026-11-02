@@ -9,6 +9,7 @@
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { API_BASE } from '$lib/config';
   import { mcpCall } from '$lib/services/api';
+  import { createTrigger, putTrigger } from '$lib/studio-core/adapters/config';
   import { SvelteFlow, Background, Controls, type Node, type Edge, type Connection, Position } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
   import TargetNode from '$lib/components/editor/TargetNode.svelte';
@@ -232,16 +233,20 @@
     view = 'editor';
   }
 
-  function closeEditor() { view = 'list'; }
+  function closeEditor() { view = 'list'; saveError = ''; }
 
+  let saveError = $state('');
   async function saveTrigger() {
     const c: any = { type: formType };
     if (formType === 'webhook') { c.path = formPath; c.method = formMethod; if (formMsgTemplate) c.message_template = formMsgTemplate; }
     else if (formType === 'cron') { c.expression = formCron; c.message = formCronMsg; if (formTimezone) c.timezone = formTimezone; }
     else if (formType === 'event') { c.source = formEventSource; if (formEventFilter) c.filter = formEventFilter; }
     const triggerObj = { name: formName, namespace: formNs, config: c, targets: formTargets, enabled: formEnabled, description: formDesc };
-    if (editingTrigger) await mcpCall('update_trigger', { id: editingTrigger.id, trigger: triggerObj });
-    else await mcpCall('create_trigger', { trigger: triggerObj });
+    // The trigger's fields go at the top level, as the platform's Trigger reads them
+    // (a wrapped { trigger } failed both calls, silently).
+    const r = editingTrigger ? await putTrigger(editingTrigger.id, triggerObj) : await createTrigger(triggerObj);
+    if (!r.ok) { saveError = r.error; return; }
+    saveError = '';
     view = 'list';
     await loadTriggers();
   }
@@ -418,6 +423,7 @@
 <!-- ═══════════ EDITOR (SlidePanel pop-in) ═══════════ -->
 <SlidePanel open={view === 'editor'} onclose={closeEditor} onsave={saveTrigger}>
   <div class="te" bind:this={editorContainer}>
+    {#if saveError}<div class="te-error" role="alert">Could not save: {saveError}</div>{/if}
     <!-- TOP: Form -->
     <div class="te-form">
       <div class="tf-row-top">
@@ -655,6 +661,8 @@
 
   .tf-check { flex-direction: row !important; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); margin-top: 6px; }
   .tf-check input { accent-color: var(--spec); }
+
+  .te-error { margin: 8px 12px 0; padding: 8px 10px; border-radius: var(--r-sm); background: var(--err-bg, #fde8e8); color: var(--err, #b42318); font-size: 12px; }
 
   /* Connected targets bar */
   .te-targets-bar { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-subtle); flex-wrap: wrap; flex-shrink: 0; }

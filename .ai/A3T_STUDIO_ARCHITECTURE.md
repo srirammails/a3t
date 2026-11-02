@@ -507,7 +507,7 @@ Each step ships on dash.dev and is checked there before the next.
 |---|---|---|
 | 1 | `studio-core` seams in-tree: items, kinds, workspace, inventory; `Workbench`; Flow Editor moved onto it | no visible change; lint rules on — **done 2 Nov 2026** (branch `a3t-studio`) |
 | 1b | Entry point (`<Studio>`, `mountStudio`), Studio home with recent items, project scope from the host, Console imports only the entry point | **done 2 Nov 2026** |
-| 2 | `config` adapter + ConfigForm; every non-flow item opens as a config form | JSON previews gone |
+| 2 | `config` adapter + ConfigForm; every non-flow item opens as a config form | JSON previews gone — **done 2 Nov 2026**: resources, canvases and triggers edit and save (Form or JSON, Ctrl/⌘+S); masked values stay as stored unless replaced; templates read-only until their own view (saving one changes its agents) |
 | 3 | `query` adapter + `database` kind; DB Console = Workbench pinned to Databases (history, saved queries kept) | DB Console in the Studio |
 | 4 | `chat`, `mcp`, `trigger` kinds | act on every resource |
 | 5 | `canvas`, `runtime`, `run` kinds; Deploy from the Studio | operate from the Studio |

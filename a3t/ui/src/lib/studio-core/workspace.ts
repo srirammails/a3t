@@ -170,10 +170,10 @@ export class Workspace {
     for (const fn of this.listeners) fn();
   }
 
-  /// Open tabs are kept (not their text: it reloads from the platform).
+  /// Open tabs are kept as addresses; their content reloads from the platform.
   private persist() {
     const docs = this.state.docs.filter((d) => !d.isNew)
-      .map((d) => ({ ref: d.ref, type: d.type, data: d.kind === 'flow' ? undefined : d.data }));
+      .map((d) => ({ ref: d.ref, type: d.type }));
     const active = this.active?.isNew ? null : this.state.active;
     this.host.storage.set(this.key, { active, docs, recent: this.state.recent } satisfies Stored);
   }
