@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-flowr-types.workspace = true
+flowr-types = { workspace = true, optional = true }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -17,6 +17,9 @@ futures.workspace = true
 tokio = { workspace = true, optional = true }
 
 [features]
+default = ["backend"]
+# The storage backends' traits (FlowR's types). ADB uses the engine without them.
+backend = ["dep:flowr-types"]
 # The engine-store conformance suite, for backends' tests.
 conformance = ["dep:tokio"]
 
