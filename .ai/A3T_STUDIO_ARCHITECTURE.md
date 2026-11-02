@@ -105,20 +105,57 @@ when the user may; every Studio document offers **Open in Console**.
  Platform      FlowR CE/EE (MCP tools, /registry, /ops, runs + journal), ADB (AQL)
 ```
 
-**Rules (enforced by lint, §12):**
+**Rules (enforced by `scripts/check-layers.mjs`, §12):**
 1. Dependencies point **down** only. `studio-core` imports nothing from Svelte, the
    DOM, SvelteKit or VS Code. `studio-ui` makes no network calls; it calls core.
 2. **Kind knowledge lives in one place**: a kind module in `studio-core/kinds/`
    (and its views in `studio-ui/views/`). No `if (kind === …)` anywhere else.
-3. **Host differences live in one place**: an implementation of `StudioHost`.
+3. **Host differences live in one place**: an implementation of `StudioHost` —
+   including which projects are in scope. `studio-ui` imports no Console stores,
+   shell or host code.
+5. The Console uses the Studio only through its entry point (`$lib/studio-ui`),
+   never its internal components; it may use `studio-core` adapters directly.
 4. One way to do each thing: the adapters in `studio-core/adapters/` are the only
    code that queries a database, chats with an LLM, fires a trigger, etc. Console
    pages use them too.
 
 `studio-core` is plain TS (no runes) so the VS Code extension host (Node) can use
-it for native views. It exposes state as small observable stores
-(`subscribe(fn) → unsubscribe`, Svelte-store compatible); `studio-ui` reads them
-with `$store`, the extension subscribes directly.
+it for native views. Its stateful objects (the Workspace) mutate a state object
+the host gives them and also offer `subscribe(fn) → unsubscribe`: the web passes
+Svelte `$state`, so components follow it; the extension subscribes.
+
+### 4.1 How the Studio is hosted
+
+The Studio UI is Svelte, compiled to one JavaScript bundle; hosts never see
+Svelte. They use the Studio's **entry point** (`studio-ui/index.ts`, §12.2) and
+`studio-core`:
+
+```
+dash.dev (browser, one page)
+  Console (Svelte pages)
+    └─ <Studio host config> / mountStudio(el, …)   ← the entry point
+         └─ Studio UI (Svelte components)
+              └─ studio-core (TS) ── a3t-client ──► FlowR / ADB
+
+VS Code
+  Extension host (Node, TS)                 Webview (a small browser page)
+    ├─ studio-core (TS)                       └─ mountStudio(el, webviewHost)
+    │    ├─ Explorer tree (native)                 └─ Studio UI (same bundle)
+    │    ├─ a3t: files, commands                        └─ studio-core (TS)
+    │    └─ a3t-client ──► FlowR / ADB                       │
+    └─ ◄──────────── postMessage (requests, results) ─────────┘
+```
+
+Same in both: `studio-core`, the Studio UI bundle, `mountStudio`. Per host: the
+`StudioHost` (§12.1) — the web host calls the backend directly; the webview host
+forwards requests to the extension, which holds the token and makes every call.
+
+**Not WebAssembly for the Studio.** The Studio is UI and API calls, native to
+JavaScript; its libraries (xyflow, CodeMirror) are JavaScript; both hosts run JS.
+WebAssembly fits **engine logic shared with FlowR** instead — the engine's own
+flow validation, jq expression evaluation and AQL parsing compiled from Rust and
+called from a `studio-core` adapter, so the editor and the engine agree exactly.
+Optional, when validation (step 7) and the AQL editor (step 6) need it.
 
 ---
 
@@ -249,13 +286,16 @@ Explorer + document tabs. The active document's kind supplies the center view an
 the right and bottom panels; panels that the active kind does not have are hidden,
 and the region remembers its last panel per kind.
 
-A Studio is configuration, not a page:
+A Studio is configuration, not a page — a `StudioConfig` (app id, home kind,
+kinds "+ New" creates, layout defaults, the home banner):
 
 ```svelte
-<Workbench app="flows" scope={{ folders: 'all' }} />
-<Workbench app="db"    scope={{ pin: 'database' }} />
-<Workbench app="memory" scope={{ pin: 'memory' }} />
+<Studio host={webHost} config={STUDIOS.flows} />
+<Studio host={webHost} config={STUDIOS.db} />       <!-- step 3 -->
 ```
+
+With nothing open the Studio shows its **home**: the banner, "+ New …", and the
+items opened recently (kept by the Workspace through the host's storage).
 
 On the web, today's Flow Editor, DB Console and Memory pages become these
 Workbenches (or one Studio with several scopes — §15). In VS Code there is one
@@ -392,6 +432,11 @@ interface StudioHost {
   confirm(msg: string): Promise<boolean>;
   clipboard(text: string): Promise<void>;
   openConsole(section: string, title: string): void;     // a Console section page
+  scope: {                                                // which projects the Studio shows
+    projects(): string[];                                 // web: the project switcher; VS Code: settings
+    current(): string | null;                             // where "+ New" creates
+    onChange(fn: () => void): () => void;
+  };
   // added with the steps that need them:
   token(): Promise<string | null>;              // web: session; VS Code: SecretStorage
   open(ref: ItemRef, opts?: { side?: boolean }): void;   // web: route; VS Code: editor tab
@@ -401,7 +446,21 @@ interface StudioHost {
 }
 ```
 
-Today: `studio-core/host.ts` has the first four; the web host is `host/web.ts`.
+Today: `studio-core/host.ts` has the first five; the web host is `host/web.svelte.ts`.
+
+### 12.2 Entry point
+
+`studio-ui/index.ts` is all a host imports from studio-ui:
+
+```ts
+export { default as Studio } from './Studio.svelte';   // Svelte hosts (the Console)
+export function mountStudio(target: Element, opts: { host: StudioHost; config: StudioConfig; open?: Item[] })
+  : { open(item: Item): void; dispose(): void };       // any host (VS Code webview)
+export { STUDIOS, type StudioConfig } from './studios';
+```
+
+`<Studio>` takes one optional snippet, `lead` (controls the host puts at the start
+of the tab bar — the Console's submenu toggle); `mountStudio` has no snippets.
 
 ---
 
@@ -447,6 +506,7 @@ Each step ships on dash.dev and is checked there before the next.
 | # | Step | Result |
 |---|---|---|
 | 1 | `studio-core` seams in-tree: items, kinds, workspace, inventory; `Workbench`; Flow Editor moved onto it | no visible change; lint rules on — **done 2 Nov 2026** (branch `a3t-studio`) |
+| 1b | Entry point (`<Studio>`, `mountStudio`), Studio home with recent items, project scope from the host, Console imports only the entry point | **done 2 Nov 2026** |
 | 2 | `config` adapter + ConfigForm; every non-flow item opens as a config form | JSON previews gone |
 | 3 | `query` adapter + `database` kind; DB Console = Workbench pinned to Databases (history, saved queries kept) | DB Console in the Studio |
 | 4 | `chat`, `mcp`, `trigger` kinds | act on every resource |

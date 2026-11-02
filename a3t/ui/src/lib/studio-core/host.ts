@@ -8,4 +8,11 @@ export interface StudioHost {
   clipboard(text: string): Promise<void>;
   /// Show a Console section page (e.g. `resources`, `triggers`).
   openConsole(section: string, title: string): void;
+  /// Which projects the Studio shows, and where "+ New" creates.
+  scope: {
+    projects(): string[];
+    current(): string | null;
+    /// Called when the projects in scope change; returns an unsubscribe.
+    onChange(fn: () => void): () => void;
+  };
 }

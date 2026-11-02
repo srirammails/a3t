@@ -4,9 +4,7 @@
   /// several projects in view, one node per project. A filter narrows every
   /// folder; folder state is remembered. Right-click (or F2 / Delete on a row)
   /// for an item's actions — which ones, and what they do, come from its kind.
-  import { untrack } from 'svelte';
-  import { namespacesFor } from '$lib/stores/context.svelte.ts';
-  import { contextRev_ } from '$lib/stores/apps.svelte.ts';
+  import { onMount, untrack } from 'svelte';
   import DeleteConfirm from '$lib/components/shared/DeleteConfirm.svelte';
   import { address, can, kindFor, loadInventory, namesIn, type Inventory, type Item, type TreeNode, type Workspace } from '$lib/studio-core';
 
@@ -27,17 +25,15 @@
 
   async function load() {
     loading = true;
-    looked = namespacesFor('owned');
+    looked = workspace.host.scope.projects();
     inventory = await loadInventory(looked);
     loading = false;
   }
 
-  let loadedRev = -1;
-  $effect(() => {
-    const rev = contextRev_();
-    if (rev === loadedRev) return;
-    loadedRev = rev;
-    untrack(() => void load());
+  // Load now, and again whenever the host's projects in scope change.
+  onMount(() => {
+    void load();
+    return workspace.host.scope.onChange(() => void load());
   });
 
   /// The tree as shown: filtered, with empty folders hidden while filtering.

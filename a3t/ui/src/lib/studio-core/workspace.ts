@@ -27,10 +27,17 @@ export type Doc = {
   ui: Record<string, any>;
 };
 
-export type WorkspaceState = { docs: Doc[]; active: string | null };
-export const emptyWorkspace = (): WorkspaceState => ({ docs: [], active: null });
+export type WorkspaceState = {
+  docs: Doc[];
+  active: string | null;
+  /// Items opened lately, newest first (the Studio home lists them).
+  recent: Item[];
+};
+export const emptyWorkspace = (): WorkspaceState => ({ docs: [], active: null, recent: [] });
 
-type Stored = { active: string | null; docs: { ref: ItemRef; type?: string; data?: any }[] };
+const RECENT = 12;
+
+type Stored = { active: string | null; docs: { ref: ItemRef; type?: string; data?: any }[]; recent?: Item[] };
 
 export class Workspace {
   private listeners = new Set<() => void>();
@@ -64,6 +71,8 @@ export class Workspace {
   /// Open an item (or bring its tab forward).
   open(item: Item): Doc {
     const addr = address(item);
+    const { data: _data, ...light } = item;
+    this.state.recent = [light, ...this.state.recent.filter((r) => address(r) !== addr)].slice(0, RECENT);
     if (!this.find(addr)) {
       const kind = kindFor(item);
       const { type, data, ...ref } = item;
@@ -131,12 +140,14 @@ export class Workspace {
 
   /// Deleted elsewhere (the Explorer): its tab goes, edits and all.
   removed(ref: ItemRef) {
+    this.state.recent = this.state.recent.filter((r) => !sameRef(r, ref));
     const doc = this.state.docs.find((d) => sameRef(d.ref, ref));
     if (doc) this.drop(doc.address);
   }
 
   /// Renamed elsewhere: the tab stays where it was and reloads under the new name.
   renamed(from: ItemRef, to: ItemRef) {
+    this.state.recent = this.state.recent.map((r) => (sameRef(r, from) ? { ...r, ...to } : r));
     const doc = this.state.docs.find((d) => sameRef(d.ref, from));
     if (!doc) return;
     this.retarget(doc, to);
@@ -164,7 +175,7 @@ export class Workspace {
     const docs = this.state.docs.filter((d) => !d.isNew)
       .map((d) => ({ ref: d.ref, type: d.type, data: d.kind === 'flow' ? undefined : d.data }));
     const active = this.active?.isNew ? null : this.state.active;
-    this.host.storage.set(this.key, { active, docs } satisfies Stored);
+    this.host.storage.set(this.key, { active, docs, recent: this.state.recent } satisfies Stored);
   }
 
   private restore() {
@@ -180,5 +191,6 @@ export class Workspace {
     }
     const active = legacy[v.active] ?? v.active;
     this.state.active = this.find(active) ? active : this.state.docs[0]?.address ?? null;
+    if (Array.isArray(v.recent)) this.state.recent = v.recent;
   }
 }

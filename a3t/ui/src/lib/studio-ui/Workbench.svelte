@@ -1,29 +1,26 @@
 <script lang="ts">
-  /// A Studio: the shell's regions with the Explorer on the left, open documents
-  /// in tabs in the middle, and the right and bottom panels of the active
-  /// document's kind. Pages configure it (which app, which kinds "+ New"
-  /// creates, what shows with nothing open); they hold no editor logic.
+  /// The Studio's frame: the shell's regions with the Explorer on the left, open
+  /// documents in tabs in the middle, and the right and bottom panels of the
+  /// active document's kind.
   import type { Snippet } from 'svelte';
-  import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import StudioShell from './StudioShell.svelte';
   import Explorer from './Explorer.svelte';
   import DocTabs from './DocTabs.svelte';
   import { VIEWS, PANELS } from './registry';
   import type { Studio } from './layout.svelte.ts';
   import { kindById, type Workspace } from '$lib/studio-core';
-  import { getProject } from '$lib/stores/context.svelte.ts';
 
-  let { studio, workspace, appType, homeKind, create = [], home }: {
+  let { studio, workspace, homeKind, create = [], home, lead }: {
     studio: Studio;
     workspace: Workspace;
-    /// The app's id in the shell (its submenu toggle).
-    appType: string;
     /// The kind whose panels show while no document (or one without panels) is active.
     homeKind: string;
     /// Kinds the tab bar offers "+ New …" for.
     create?: string[];
     /// Shown in the editor area with nothing open.
     home?: Snippet;
+    /// The host's controls at the start of the tab bar.
+    lead?: Snippet;
   } = $props();
 
   const active = $derived(workspace.active);
@@ -37,7 +34,7 @@
     return { id: d.address, title: d.ref.name, icon: k.icon, hint: `${k.label} ${d.ref.project}/${d.ref.name}`, dirty: workspace.isDirty(d) };
   }));
 
-  const newDoc = (kindId: string) => workspace.create(kindId, getProject() || 'a3t');
+  const newDoc = (kindId: string) => workspace.create(kindId, workspace.host.scope.current() ?? workspace.host.scope.projects()[0] ?? 'a3t');
 </script>
 
 <div class="wb">
@@ -61,7 +58,7 @@
 
 {#snippet centerArea()}
   <div class="center-head">
-    <SubmenuToggle {appType} />
+    {@render lead?.()}
     <DocTabs {studio} {tabs} active={workspace.state.active} onselect={(id) => workspace.select(id)} onclose={(id) => void workspace.close(id)}>
       {#snippet actions()}
         {#each create as c (c)}

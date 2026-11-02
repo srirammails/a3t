@@ -1,7 +1,9 @@
 // The Studio's layer rules (flowr-system/.ai/A3T_STUDIO_ARCHITECTURE.md §4):
 //   studio-core  plain TypeScript: no Svelte, DOM components, stores or host code,
 //                so the VS Code extension can run it;
-//   studio-ui    components: no direct network calls (they go through studio-core).
+//   studio-ui    components: no network calls (they go through studio-core), and no
+//                Console stores, shell or host code (the host comes in as a StudioHost);
+//   Console      uses the Studio only through its entry point, $lib/studio-ui.
 // Run by the Vite build (a violation fails it) and by `npm run check:layers`.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -18,6 +20,16 @@ const RULES = [
     deny: [/^\$lib\/services\//],
     why: 'studio-ui makes no network calls; use a studio-core adapter',
   },
+  {
+    dir: 'src/lib/studio-ui',
+    deny: [/^\$lib\/(stores|shell|host|components\/pages)\//],
+    why: 'studio-ui gets its host as a StudioHost; it imports no Console stores, shell, host or pages',
+  },
+  ...['src/lib/components', 'src/lib/shell', 'src/lib/stores', 'src/lib/host', 'src/routes'].map((dir) => ({
+    dir,
+    deny: [/^\$lib\/studio-ui\/./],
+    why: "the Console uses the Studio only through its entry point: import from '$lib/studio-ui'",
+  })),
 ];
 
 const IMPORT = /\bimport\s+(?:type\s+)?(?:[^'"]*?\sfrom\s+)?['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
