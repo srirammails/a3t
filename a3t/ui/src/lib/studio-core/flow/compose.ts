@@ -33,7 +33,7 @@ export const PALETTE: PaletteGroup[] = [
     { id: 'sql', label: 'SQL', icon: '⛁', base: 'query', task: () => call('sql', { query: 'SELECT 1', _resource: '' }) },
     { id: 'lancedb', label: 'LanceDB', icon: '⛁', base: 'search', task: () => call('lancedb', { operation: 'query', table: '', limit: 10, _resource: '' }) },
     { id: 'adb', label: 'ADB (AQL)', icon: '⛁', base: 'recall', task: () => call('adb', { query: 'RECALL FROM WORKING LIMIT 5', _resource: '' }) },
-    { id: 'redis', label: 'Redis', icon: '⛁', base: 'cache', task: () => call('redis', { operation: 'get', key: '', _resource: '' }) },
+    { id: 'redis', label: 'Redis', icon: '⛁', base: 'cache', task: () => call('redis', { command: 'GET', args: ['${ .key }'], _resource: '' }) },
     { id: 'human', label: 'Ask a person', icon: '☺', base: 'approve', task: () => call('human', { prompt: 'Approve?' }) },
   ] },
   { title: 'Run', steps: [
@@ -51,7 +51,23 @@ export const PALETTE: PaletteGroup[] = [
   ] },
 ];
 
-export const paletteStep = (id: string) => PALETTE.flatMap((g) => g.steps).find((s) => s.id === id) ?? null;
+/// A palette step by id; `fn:<name>` is a call of a function the flow declares
+/// in `use.functions` (the designer's Library group).
+export function paletteStep(id: string): PaletteStep | null {
+  if (id.startsWith('fn:')) {
+    const name = id.slice(3);
+    return { id, label: name, icon: 'ƒ', base: name, task: () => ({ call: name }) };
+  }
+  return PALETTE.flatMap((g) => g.steps).find((s) => s.id === id) ?? null;
+}
+
+/// The flow's own reusable tasks (`use.functions`), as palette steps.
+export function libraryOf(yaml: string): PaletteStep[] {
+  try {
+    const fns = YAML.parse(yaml ?? '')?.use?.functions;
+    return fns && typeof fns === 'object' ? Object.keys(fns).map((n) => paletteStep(`fn:${n}`)!) : [];
+  } catch { return []; }
+}
 
 const LLM = new Set(['llm', 'openai', 'anthropic', 'ollama', 'groq']);
 
@@ -72,7 +88,7 @@ export function taskForItem(it: Item): { base: string; task: Body } | null {
   if (t === 'postgres' || t === 'mysql') return { base: `query-${it.name}`, task: call('sql', { query: 'SELECT 1', _resource: ref }) };
   if (t === 'lancedb') return { base: `search-${it.name}`, task: call('lancedb', { operation: 'query', table: '', limit: 10, _resource: ref }) };
   if (t === 'adb' || t === 'clawdb') return { base: `recall-${it.name}`, task: call('adb', { query: 'RECALL FROM WORKING LIMIT 5', _resource: ref }) };
-  if (t === 'redis') return { base: `cache-${it.name}`, task: call('redis', { operation: 'get', key: '', _resource: ref }) };
+  if (t === 'redis') return { base: `cache-${it.name}`, task: call('redis', { command: 'GET', args: ['${ .key }'], _resource: ref }) };
   if (t === 'qdrant') return { base: `search-${it.name}`, task: call('qdrant', { operation: 'search', collection: '', limit: 10, _resource: ref }) };
   if (t === 'secret' || t === 'credential') return { base: `use-${it.name}`, task: { set: { [it.name.replace(/[^a-z0-9_]/gi, '_')]: `\${ $secrets["${ref}"] }` } } };
   return { base: `use-${it.name}`, task: { set: { resource: ref } } };

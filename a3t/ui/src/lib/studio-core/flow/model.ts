@@ -2,6 +2,7 @@
 /// steps as the engine keys them, problems before deploy, where a step is in
 /// the YAML, and renaming. Plain TypeScript (studio-core).
 import * as YAML from 'yaml';
+import { outline } from './schema';
 
 export function parse(yaml: string | undefined): { doc: any; error: string | null } {
   try {
@@ -36,19 +37,16 @@ export function stepKeys(tasks: any, prefix = ''): string[] {
   return out;
 }
 
-export type Problem = { level: 'error' | 'warning'; message: string };
+export type Problem = { level: 'error' | 'warning'; message: string; line?: number | null };
 
-/// What is wrong with a flow before it is deployed.
+/// What is wrong with a flow before it is deployed: the CNCF DSL schema's
+/// findings (./schema), then what the engine needs beyond it.
 export function problems(yaml: string | undefined): Problem[] {
   const { doc, error } = parse(yaml);
-  if (error) return [{ level: 'error', message: `YAML: ${error}` }];
-  const out: Problem[] = [];
-  const d = doc?.document;
-  if (!d) out.push({ level: 'error', message: 'Missing `document:` (dsl, namespace, name, version).' });
-  else {
-    for (const k of ['dsl', 'namespace', 'name', 'version']) if (!d[k]) out.push({ level: 'error', message: `document.${k} is missing.` });
-  }
-  if (!Array.isArray(doc?.do) || !doc.do.length) out.push({ level: 'error', message: 'The flow has no steps (`do:` is empty or missing).' });
+  const o = outline(yaml ?? '');
+  if (error) return o.problems.length ? o.problems : [{ level: 'error', message: `YAML: ${error}` }];
+  const out: Problem[] = o.problems.map(({ level, message, line }) => ({ level, message, line }));
+  if (Array.isArray(doc?.do) && !doc.do.length) out.push({ level: 'error', message: 'The flow has no steps (`do:` is empty).' });
   const keys = stepKeys(doc?.do);
   const seen = new Set<string>();
   for (const k of keys) {

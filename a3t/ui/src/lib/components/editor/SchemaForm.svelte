@@ -87,12 +87,17 @@
     return v;
   }
 
-  /// Which key of a CNCF task body holds its editable config.
-  function configSlot(body: any): 'with' | 'set' | 'run' | null {
+  /// Where in a CNCF task body its editable config sits: `with`, `set`, or the
+  /// process under `run` (`run.workflow`, `run.shell`…).
+  function configSlot(body: any): string[] | null {
     if (!body || typeof body !== 'object') return null;
-    if (body.call !== undefined) return 'with';
-    if (body.set !== undefined) return 'set';
-    if (body.run !== undefined) return body.with !== undefined ? 'with' : 'run';
+    if (body.call !== undefined) return ['with'];
+    if (body.set !== undefined) return ['set'];
+    if (body.run !== undefined) {
+      if (body.with !== undefined) return ['with'];
+      const kind = ['workflow', 'container', 'script', 'shell'].find((k) => body.run && typeof body.run === 'object' && body.run[k] && typeof body.run[k] === 'object');
+      return kind ? ['run', kind] : ['run'];
+    }
     return null;   // composite task — leave its body alone
   }
 
@@ -108,7 +113,11 @@
       const key = Object.keys(orig)[0];
       const body = plainClone(orig[key]);
       const slot = configSlot(body);
-      if (slot) body[slot] = st.config ?? {};
+      if (slot) {
+        let at = body;
+        for (const k of slot.slice(0, -1)) at = at[k];
+        at[slot[slot.length - 1]] = st.config ?? {};
+      }
       return { [st.name ?? key]: body };
     });
   }

@@ -18,10 +18,33 @@
   /// `marks`: step lines — with them comes a breakpoint gutter (`ongutter` on a
   /// click), line tints, and the current line kept in view. `oncontext`: a
   /// right-click on a line; return true to take it over from the browser menu.
-  let { value = '', onchange, readOnly = false, reveal = null, marks = null, ongutter, oncontext }: {
+  /// `issues`: problems the host found (the CNCF schema's), tinted on their
+  /// lines with the message on hover.
+  type Issue = { line: number; level: 'error' | 'warning'; message: string };
+  let { value = '', onchange, readOnly = false, reveal = null, marks = null, ongutter, oncontext, issues = null }: {
     value: string; onchange?: (val: string) => void; readOnly?: boolean; reveal?: { line: number; n: number } | null;
     marks?: LineMark[] | null; ongutter?: (line: number) => void; oncontext?: (e: MouseEvent, line: number) => boolean;
+    issues?: Issue[] | null;
   } = $props();
+
+  // ── Problems ──
+  const setIssues = StateEffect.define<Issue[]>();
+  const issuesField = StateField.define<Issue[]>({
+    create: () => [],
+    update(v, tr) {
+      for (const e of tr.effects) if (e.is(setIssues)) return e.value;
+      return v;
+    },
+  });
+  const issueLines = EditorView.decorations.compute([issuesField], (state) => {
+    const by = new Map<number, Issue[]>();
+    for (const i of state.field(issuesField)) if (i.line >= 1 && i.line <= state.doc.lines) by.set(i.line, [...(by.get(i.line) ?? []), i]);
+    const out: Range<Decoration>[] = [...by].sort((a, b) => a[0] - b[0]).map(([line, is]) => {
+      const err = is.some((i) => i.level === 'error');
+      return Decoration.line({ class: `cm-issue ${err ? 'cm-issue-error' : 'cm-issue-warning'}`, attributes: { title: is.map((i) => `${i.level === 'error' ? '✗' : '!'} ${i.message}`).join('\n') } }).range(lineOf(state, line).from);
+    });
+    return Decoration.set(out);
+  });
 
   // ── Step marks ──
   const setMarks = StateEffect.define<LineMark[]>();
@@ -107,6 +130,8 @@
       doc: value,
       extensions: [
         marksField,
+        issuesField,
+        issueLines,
         stepGutter,
         lineNumbers(),
         highlightActiveLineGutter(),
@@ -160,6 +185,11 @@
     if (cur && cur !== lastCurrent && cur <= view.state.doc.lines) effects.push(EditorView.scrollIntoView(lineOf(view.state, cur).from, { y: 'nearest', yMargin: 60 }));
     lastCurrent = cur;
     view.dispatch({ effects });
+  });
+
+  $effect(() => {
+    if (!ready) return;
+    view.dispatch({ effects: setIssues.of($state.snapshot(issues ?? []) as Issue[]) });
   });
 
   function goto(r: { line: number } | null) {
@@ -230,6 +260,11 @@
   .yaml-editor :global(.cm-bp-after) { border: 1.5px solid var(--err, #d92d20); background: linear-gradient(90deg, transparent 50%, var(--err, #d92d20) 50%); }
   .yaml-editor :global(.cm-bp-on_error) { background: var(--err, #d92d20); border-radius: 1px; transform: rotate(45deg) scale(0.85); }
   .yaml-editor :global(.cm-bp-spacer) { visibility: hidden; }
+
+  /* Problems: a tint and a mark at the line's start; the message on hover. */
+  .yaml-editor :global(.cm-issue) { position: relative; }
+  .yaml-editor :global(.cm-issue-error) { background: rgba(217, 45, 32, 0.07); box-shadow: inset 3px 0 0 var(--err, #d92d20); }
+  .yaml-editor :global(.cm-issue-warning) { background: rgba(180, 83, 9, 0.06); box-shadow: inset 3px 0 0 var(--warn, #b45309); }
 
   /* The shown run: each step line's state, and where the run stands. */
   .yaml-editor :global(.cm-st) { box-shadow: inset 3px 0 0 var(--st, transparent); }

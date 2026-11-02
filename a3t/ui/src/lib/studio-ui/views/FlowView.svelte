@@ -106,7 +106,8 @@
   <div class="fd-body">
     {#if doc.loaded || doc.isNew}
       <FlowEditorPane part="main" aiKind="flow" aiName={`${doc.ref.project}/${doc.ref.name}`} initialYaml={doc.text ?? ''} onchange={(v: string) => (doc.text = v)} showCode={doc.ui.codeAsked}
-        {debug} onrun={blocked ? undefined : onrun} {onshowrun}>
+        {debug} onrun={blocked ? undefined : onrun} {onshowrun} palette gotoLine={doc.ui.gotoLine ?? null}
+        onaddstep={(id: string) => { const s = paletteStep(id); if (s) addStep(s.base, s.task()); }}>
         {#snippet toolbar()}
           <!-- Name centred on the Graph | Code bar, actions at its right end:
                one bar for the document instead of two. -->

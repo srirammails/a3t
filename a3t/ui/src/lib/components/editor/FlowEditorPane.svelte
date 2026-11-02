@@ -4,7 +4,8 @@
   import '@xyflow/svelte/dist/style.css';
   import StepNode from './StepNode.svelte';
   import WorkflowNode from './WorkflowNode.svelte';
-  import AgentNode from './AgentNode.svelte';
+  import AgentBlockNode from './AgentBlockNode.svelte';
+  import AgentPortNode from './AgentPortNode.svelte';
   import AgentSectionNode from './AgentSectionNode.svelte';
   import PortCardNode from './PortCardNode.svelte';
   import ResourceNode from './ResourceNode.svelte';
@@ -14,6 +15,10 @@
   import JoinNode from './JoinNode.svelte';
   import FlowMarkerNode from './FlowMarkerNode.svelte';
   import YamlEditor from './YamlEditor.svelte';
+  import SchemaOutline from './SchemaOutline.svelte';
+  import GraphPalette from './GraphPalette.svelte';
+  import { addTask, paletteStep } from '$lib/studio-core/flow/compose';
+  import { outline } from '$lib/studio-core/flow/schema';
   import GraphFollow from './GraphFollow.svelte';
   import SchemaForm from './SchemaForm.svelte';
   import AgentTemplateEditor from './AgentTemplateEditor.svelte';
@@ -41,6 +46,9 @@
     toolbar,
     showCode,
     focusStep = null,
+    gotoLine = null,
+    palette = false,
+    onaddstep,
   }: {
     initialYaml: string;
     onchange?: (val: string) => void;
@@ -74,13 +82,20 @@
     showCode?: number;
     /// A step for the form to open (its name, and a stamp per request).
     focusStep?: { name: string; n: number } | null;
+    /// A line to show in the Code view (a problem picked in the Problems panel).
+    gotoLine?: { line: number; n: number } | null;
+    /// Show the step palette on the graph (flows): drag a step onto the flow, or
+    /// click to add it. `onaddstep` gets the palette step's id (the host adds it
+    /// and opens it in its form); without it the pane adds the step itself.
+    palette?: boolean;
+    onaddstep?: (stepId: string) => void;
     /// Host content for the Graph | Code toolbar (`main` only), after the tabs —
     /// the studio puts the flow's name and Run/Deploy here instead of a bar of its own.
     toolbar?: Snippet;
   } = $props();
 
   const nodeTypes = {
-    step: StepNode, workflow: WorkflowNode, agent: AgentNode,
+    step: StepNode, workflow: WorkflowNode, agent: AgentBlockNode, agentPort: AgentPortNode,
     agentSection: AgentSectionNode, portCard: PortCardNode,
     resource: ResourceNode, pipeline: PipelineStepNode, subflow: SubFlowNode,
     control: ControlNode, join: JoinNode, flowMarker: FlowMarkerNode,
@@ -306,6 +321,36 @@
     if (id) graphFocus = { id, n: ++revealN };
   }
 
+  /// A palette block clicked: the host adds it (and opens it in its form), or we do.
+  function addFromPalette(id: string) {
+    if (onaddstep) { onaddstep(id); return; }
+    const st = paletteStep(id);
+    if (st) onCodeChange(addTask(yamlSource, st.base, st.task()).yaml);
+  }
+
+  // ── The code view's schema outline ──
+  let showOutline = $state((() => { try { return localStorage.getItem('a3t.code.outline') !== 'off'; } catch { return true; } })());
+  $effect(() => { try { localStorage.setItem('a3t.code.outline', showOutline ? 'on' : 'off'); } catch { /* private window */ } });
+  let outlinePct = $state(42);
+  let outlineDrag = $state(false);
+  let codeSplit: HTMLDivElement | undefined = $state();
+  function onOutlineDrag(e: MouseEvent) {
+    e.preventDefault(); outlineDrag = true;
+    const move = (ev: MouseEvent) => { if (!codeSplit) return; const r = codeSplit.getBoundingClientRect(); outlinePct = Math.max(22, Math.min(70, ((ev.clientX - r.left) / r.width) * 100)); };
+    const up = () => { outlineDrag = false; window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+  }
+  /// The schema's problems, marked on their lines in the text.
+  const schemaProblems = $derived(leftMode === 'code' || soloMode === 'code' ? outline(yamlSource).problems : []);
+  const codeIssues = $derived(schemaProblems.filter((p) => p.line).map((p) => ({ line: p.line!, level: p.level, message: p.message })));
+  const issueCount = $derived(schemaProblems.length);
+  // A problem picked elsewhere (the Problems panel): show its line.
+  $effect(() => {
+    const g = gotoLine;
+    if (!g) return;
+    untrack(() => { leftMode = 'code'; soloMode = 'code'; reveal = { line: g.line, n: ++revealN }; });
+  });
+
   // ── Context menu ──
   type Menu = { x: number; y: number; key?: string; label?: string; from: 'graph' | 'code' };
   let menu = $state<Menu | null>(null);
@@ -370,6 +415,7 @@
 </script>
 
 {#snippet graphView(showMiniMap: boolean)}
+  {#if palette && !readOnly && !isAgentTemplate}<GraphPalette yaml={yamlSource} onadd={addFromPalette} />{/if}
   {#if nodes.length > 0}
     {#if baseGraph?.meta}
       <div class="wf-meta-bar">
@@ -400,8 +446,21 @@
 {/snippet}
 
 {#snippet codeView()}
-  <YamlEditor value={yamlSource} onchange={onCodeChange} {readOnly} {reveal}
-    marks={codeMarks} ongutter={onGutter} oncontext={debug ? onCodeContext : undefined} />
+  <!-- The text, with the CNCF DSL outline beside it: the whole schema at each
+       place, what the flow sets in full, its problems marked in both. -->
+  <div class="code-split" class:no-outline={!showOutline} class:dragging={outlineDrag} bind:this={codeSplit} style="grid-template-columns: {showOutline ? `${outlinePct}% 5px 1fr` : '1fr'}">
+    {#if showOutline}
+      <div class="code-outline">
+        <SchemaOutline text={yamlSource} onchange={onCodeChange} {readOnly} onreveal={(line) => (reveal = { line, n: ++revealN })} />
+      </div>
+      <div class="code-div" role="separator" onmousedown={onOutlineDrag}></div>
+    {/if}
+    <div class="code-text">
+      <button class="outline-tg" onclick={() => (showOutline = !showOutline)} title={showOutline ? 'Hide the CNCF DSL outline' : 'Show the CNCF DSL outline'}>{showOutline ? '◧' : '◨'} Schema{#if !showOutline && issueCount} <b>{issueCount}</b>{/if}</button>
+      <YamlEditor value={yamlSource} onchange={onCodeChange} {readOnly} {reveal} issues={codeIssues}
+        marks={codeMarks} ongutter={onGutter} oncontext={debug ? onCodeContext : undefined} />
+    </div>
+  </div>
 {/snippet}
 
 {#snippet contextMenu(m: Menu)}
@@ -620,6 +679,17 @@
   .fep-tab:hover:not(.active) { color: var(--text-2); }
 
   .fep-pane-body { flex: 1; overflow: hidden; position: relative; }
+
+  .code-split { display: grid; height: 100%; min-height: 0; overflow: hidden; }
+  .code-split.dragging { user-select: none; cursor: col-resize; }
+  .code-outline { min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border); }
+  .code-div { cursor: col-resize; background: var(--bg-subtle); }
+  .code-div:hover, .code-split.dragging .code-div { background: var(--spec, #5530a8); }
+  .code-text { position: relative; min-width: 0; min-height: 0; height: 100%; }
+  .outline-tg { position: absolute; top: 6px; right: 12px; z-index: 5; display: flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 11px;
+                border: 1px solid var(--border); border-radius: 10px; background: var(--bg-surface); color: var(--text-3); cursor: pointer; }
+  .outline-tg:hover { color: var(--spec); border-color: var(--spec); }
+  .outline-tg b { color: var(--err, #b42318); }
 
   .fep-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-4); font-size: 13px; flex-direction: column; gap: 4px; }
   .fep-empty code { font-family: var(--font-mono); background: var(--bg-subtle); padding: 1px 5px; border-radius: 3px; font-size: 12px; }

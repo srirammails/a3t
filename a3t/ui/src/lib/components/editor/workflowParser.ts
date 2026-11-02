@@ -16,18 +16,11 @@ const GAP_V  = 48;          // vertical gap between nodes
 const GAP_H  = 50;          // horizontal gap between branch columns
 const COL_W  = NODE_W + GAP_H;  // one column width
 const JOIN_SIZE = 30;
-const AGENT_NODE_W = 240;
+const AGENT_NODE_W = 160;
 const AGENT_NODE_H = 140;
 const SECTION_NODE_W = 200;
 const SECTION_NODE_H = 80;
 const SECTION_GAP = 20;
-
-// Agent lifecycle phases
-const AGENT_PHASES = [
-  'init_turn', 'load_session', 'recall_memory', 'procedural_check',
-  'build_prompt', 'append_message', 'reasoning_loop',
-  'store_memory', 'save_session', 'emit_response',
-];
 
 // ── Internal task shape (normalised from both formats) ───────────
 export interface NTask {
@@ -161,8 +154,12 @@ function normaliseCncfEntry(entry: any): NTask {
   }
   // run: shell / script / workflow / container
   if (def.run !== undefined) {
-    const runType = typeof def.run === 'string' ? def.run : 'shell';
-    return { name, type: `run:${runType}`, config: def.with ?? def.run, ...common };
+    // `run:` holds one of container / script / shell / workflow (CNCF).
+    const runType = typeof def.run === 'string' ? def.run
+      : (['workflow', 'container', 'script', 'shell'].find((k) => def.run && k in def.run) ?? 'shell');
+    // The form edits the process's own fields (run.workflow.name…).
+    const runCfg = def.with ?? (def.run && typeof def.run === 'object' && def.run[runType] && typeof def.run[runType] === 'object' ? def.run[runType] : def.run);
+    return { name, type: `run:${runType}`, config: runCfg, ...common };
   }
 
   // Fallback: treat as set with the whole def as config
@@ -209,6 +206,9 @@ class GraphBuilder {
   }
 
   edge(source: string, target: string, opts: Partial<Edge> = {}) {
+    // An agent's next step leaves from its output, not its error or extension connector.
+    if (!opts.sourceHandle && this.nodes.find((n) => n.id === source)?.type === 'agent') opts = { ...opts, sourceHandle: 'out' };
+    if (!opts.targetHandle && this.nodes.find((n) => n.id === target)?.type === 'agent') opts = { ...opts, targetHandle: 'in' };
     this.edges.push({
       id: `e-${source}-${target}-${this.counter++}`,
       source,
@@ -311,39 +311,36 @@ function isAgentCall(type: string): boolean {
   return type === 'call:a3t:agent' || type === 'call:agent' || type === 'call:a3t:agent-engine';
 }
 
+const CHAT_FLOWS = new Set(['a3t-chat-engine', 'a3t-chat-agent']);
+
+/// What the graph shows of an agent step: a `call: a3t:agent`, or a run of an
+/// agent's chat flow (an agent dropped from the Explorer). Null for other steps.
+function agentOf(task: NTask): Record<string, unknown> | null {
+  if (isAgentCall(task.type)) {
+    const cfg = task.config ?? {};
+    const inner = typeof cfg.config === 'object' && cfg.config ? cfg.config : cfg;
+    return {
+      kindLabel: 'agent', version: '', model: inner.llm_resource ?? '',
+      extensionCount: (cfg._extensions ?? []).length, errorCount: 0,
+    };
+  }
+  // `run:workflow` carries `run.workflow` as its config.
+  const wf = task.type === 'run:workflow' ? (task.config?.workflow ?? task.config) : null;
+  if (wf && CHAT_FLOWS.has(wf.name) && wf.input && typeof wf.input === 'object' && 'agent_id' in wf.input) {
+    return { kindLabel: 'agent', version: wf.version && wf.version !== 'latest' ? `v${wf.version}` : 'latest', model: '', extensionCount: 0, errorCount: 0 };
+  }
+  return null;
+}
+
 function layoutLeaf(g: GraphBuilder, task: NTask, cx: number, y: number): LR {
   const id = g.id('s');
 
-  // Agent node — render as compact AgentNode instead of StepNode
-  if (isAgentCall(task.type)) {
+  // An agent in a flow is one unit: a square block with its connectors —
+  // input, output, errors, extensions — that the steps around it join to.
+  const agent = agentOf(task);
+  if (agent) {
     const x = cx - AGENT_NODE_W / 2;
-    const cfg = task.config ?? {};
-    const cfgInner = cfg.config ?? cfg;
-    const tools = cfgInner.tools ?? [];
-    const toolFlows = cfgInner.tool_flows ?? {};
-    const mcpServers = cfgInner.mcp_servers ?? [];
-    const extensions = cfg._extensions ?? []; // from workflow use.extensions
-
-    g.node(id, 'agent', x, y, {
-      label:            task.name,
-      agentConfig:      cfg,
-      icon:             (task.name ?? 'A').slice(0, 2).toUpperCase(),
-      mode:             cfgInner.mode ?? 'session',
-      model:            cfgInner.llm_resource ?? cfgInner.llmResourceRef ?? '',
-      systemPrompt:     truncExpr(cfgInner.system_prompt ?? ''),
-      temperature:      cfgInner.temperature ?? 0.7,
-      maxIterations:    cfgInner.max_iterations ?? 10,
-      flowPoints:       AGENT_PHASES.length,
-      toolCount:        tools.length + Object.keys(toolFlows).length,
-      integrationCount: mcpServers.length + Object.keys(toolFlows).length,
-      extensionCount:   extensions.length,
-      inputFields:      3,
-      outputFields:     5,
-      tools,
-      toolFlows,
-      mcpServers,
-      extensions: cfg._extensions ?? [],
-    });
+    g.node(id, 'agent', x, y, { label: task.name, ...agent, detailed: false });
     return { entryId: id, exitIds: [id], bottom: y + AGENT_NODE_H, left: x, right: x + AGENT_NODE_W };
   }
 
@@ -699,45 +696,65 @@ export function parseWorkflowToGraph(parsed: any): WorkflowGraph {
   // Extensions from use block
   const extensions = parsed.use?.extensions ?? [];
 
-  // ── Agent template synthesis: render as single AgentNode ──
+  // ── An agent template opened on its own: the agent block, and each of its
+  //    connectors as a node — input, output, every error, every extension. ──
   if (isAgentTemplateYaml(parsed)) {
     const g = new GraphBuilder();
-    const agentId = g.id('agent');
     const agentCfg = extractAgentConfig(parsed);
     const cfgInner = agentCfg.config ?? agentCfg;
     const name = parsed.metadata?.name ?? parsed.document?.name ?? parsed.name ?? 'agent';
-    const tools = cfgInner.tools ?? [];
-    const toolFlows = cfgInner.tool_flows ?? {};
-    const mcpServers = cfgInner.mcp_servers ?? [];
+    const version = parsed.document?.version ?? parsed.version ?? '';
+    const errors = parsed.use?.errors && typeof parsed.use.errors === 'object' ? Object.entries<any>(parsed.use.errors) : [];
+    const exts = (Array.isArray(extensions) ? extensions : []).map((e: any, i: number) => {
+      const n = e && typeof e === 'object' ? (e.name ?? Object.keys(e)[0] ?? `ext-${i}`) : `ext-${i}`;
+      const def = e && typeof e === 'object' ? (e.name ? e : e[n] ?? {}) : {};
+      return { name: String(n), extend: def.extend ?? 'all' };
+    });
 
-    g.node(agentId, 'agent', 300 - AGENT_NODE_W / 2, 80, {
-      label:            name,
-      agentConfig:      { ...agentCfg, input: parsed.input, output: parsed.output, use: parsed.use },
-      icon:             name.slice(0, 2).toUpperCase(),
-      mode:             cfgInner.mode ?? cfgInner.identity?.mode ?? 'session',
-      model:            cfgInner.llm_resource ?? cfgInner.brain?.llmResourceRef ?? '',
-      systemPrompt:     truncExpr(cfgInner.system_prompt ?? cfgInner.brain?.systemPrompt ?? ''),
-      temperature:      cfgInner.temperature ?? cfgInner.brain?.temperature ?? 0.7,
-      maxIterations:    cfgInner.max_iterations ?? cfgInner.brain?.maxIterations ?? 10,
-      flowPoints:       AGENT_PHASES.length,
-      toolCount:        tools.length + Object.keys(toolFlows).length,
-      integrationCount: mcpServers.length + Object.keys(toolFlows).length,
-      extensionCount:   extensions.length,
-      inputFields:      3,
-      outputFields:     5,
-      tools,
-      toolFlows,
-      mcpServers,
-      extensions,
+    const CX = 360, AY = 120;
+    const agentId = g.id('agent');
+    g.node(agentId, 'agent', CX - AGENT_NODE_W / 2, AY, {
+      label: name, version: version ? `v${version}` : '', kindLabel: 'agent template', detailed: true,
+      model: typeof cfgInner === 'object' ? (cfgInner.llm_resource ?? cfgInner.brain?.llmResourceRef ?? '') : '',
+      errorCount: errors.length, extensionCount: exts.length,
+    });
+    const port = (port: string, label: string, sub: string, detail: string, x: number, y: number, section: string) => {
+      const pid = g.id(port);
+      g.node(pid, 'agentPort', x, y, { port, label, sub, detail, _portChild: true, _portSection: section });
+      return pid;
+    };
+    const keysOf = (sch: any) => Object.keys(sch?.document?.properties ?? sch?.properties ?? {});
+    const SQ = AY + 30;  // the square's top, under the label
+    if (parsed.input) {
+      const ks = keysOf(parsed.input.schema);
+      const pid = port('input', 'input', ks.length ? ks.join(', ') : (parsed.input.from ? String(parsed.input.from) : 'schema'), 'What the agent is started with (input:)', CX - AGENT_NODE_W / 2 - 230, SQ + 30, 'identity');
+      g.edge(pid, agentId, { targetHandle: 'in', style: 'stroke: #0891b2;' });
+    }
+    if (parsed.output) {
+      const ks = keysOf(parsed.output.schema);
+      const pid = port('output', 'output', ks.length ? ks.join(', ') : (parsed.output.as ? String(parsed.output.as) : 'schema'), 'What the agent returns (output:)', CX + AGENT_NODE_W / 2 + 80, SQ, 'identity');
+      g.edge(agentId, pid, { sourceHandle: 'out', style: 'stroke: #059669;' });
+    }
+    errors.forEach(([k, e], i) => {
+      const sub = [e?.status, e?.title].filter(Boolean).join(' · ') || String(e?.type ?? '').split('/').pop() || 'error';
+      const pid = port('error', k, sub, `use.errors.${k}${e?.type ? ` — ${e.type}` : ''}`, CX + AGENT_NODE_W / 2 + 80, SQ + 60 + i * 52, 'extensions');
+      g.edge(agentId, pid, { sourceHandle: 'err', style: 'stroke: #dc2626; stroke-dasharray: 4 3;' });
+    });
+    // Extensions under the agent, three to a row.
+    const extW = 200, PER = 3;
+    exts.forEach((x, i) => {
+      const inRow = Math.min(PER, exts.length - Math.floor(i / PER) * PER);
+      const col = i % PER, row = Math.floor(i / PER);
+      const pid = port('extension', x.name, `extend: ${x.extend}`, `use.extensions.${x.name}`, CX - (inRow * extW) / 2 + col * extW + 10, AY + AGENT_NODE_H + 70 + row * 64, 'extensions');
+      g.edge(agentId, pid, { sourceHandle: 'ext', targetHandle: 'in', style: 'stroke: #b45309; stroke-dasharray: 4 3;' });
     });
 
     return {
       nodes: g.nodes, edges: g.edges,
       meta: {
         name, namespace: parsed.document?.namespace ?? 'system',
-        version: parsed.document?.version ?? parsed.version ?? '',
-        dsl: parsed.document?.dsl, hasExtensions: extensions.length > 0,
-        extensionCount: extensions.length, taskCount: 1, format: 'cncf-dsl',
+        version, dsl: parsed.document?.dsl, hasExtensions: exts.length > 0,
+        extensionCount: exts.length, taskCount: 1, format: 'cncf-dsl',
       },
     };
   }

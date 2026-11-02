@@ -22,7 +22,7 @@
   {:else if doc.error}
     <div class="err">Could not load {doc.ref.name}: {doc.error}</div>
   {:else}
-    <FlowEditorPane part="main" aiKind="template" aiName={`${doc.ref.project}/${doc.ref.name}`} initialYaml={doc.text ?? ''}
+    <FlowEditorPane part="main" aiKind="template" aiName={`${doc.ref.project}/${doc.ref.name}`} initialYaml={doc.text ?? ''} gotoLine={doc.ui.gotoLine ?? null}
       onchange={(v: string) => (doc.text = v)} showCode={doc.ui.codeAsked}>
       {#snippet toolbar()}
         <div class="title">

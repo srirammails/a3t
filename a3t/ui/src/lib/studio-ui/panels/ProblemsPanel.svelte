@@ -15,7 +15,13 @@
   <div class="note ok">No problems in {flow.ref.name}.</div>
 {:else}
   <ul class="problems">
-    {#each issues as p}<li class={p.level}><span>{p.level === 'error' ? '✗' : '!'}</span>{p.message}</li>{/each}
+    {#each issues as p}
+      <li class={p.level}>
+        <span>{p.level === 'error' ? '✗' : '!'}</span>
+        {#if p.line}<button class="ln" onclick={() => (flow!.ui.gotoLine = { line: p.line!, n: Date.now() })} title="Show in the code">line {p.line}</button>{/if}
+        <span class="msg">{p.message}</span>
+      </li>
+    {/each}
   </ul>
 {/if}
 
@@ -24,6 +30,9 @@
   .note.ok { color: var(--ok, #15803d); }
   .problems { list-style: none; margin: 0; padding: 8px 12px; font-size: 12.5px; }
   .problems li { display: flex; gap: 8px; padding: 3px 0; }
+  .ln { border: 0; background: none; padding: 0; font: 11px var(--font-mono); color: var(--spec); cursor: pointer; white-space: nowrap; }
+  .ln:hover { text-decoration: underline; }
+  .problems li .msg { color: var(--text-1) !important; }
   .problems li.error span { color: var(--err, #b42318); }
   .problems li.warning span { color: var(--warn, #b45309); }
 </style>
