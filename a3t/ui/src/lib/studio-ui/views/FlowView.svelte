@@ -5,7 +5,7 @@
   /// on the document, so switching tabs never loses an edit.
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
   import { flowDebug } from '$lib/components/run/debugState.svelte.ts';
-  import type { Doc, Workspace } from '$lib/studio-core';
+  import { addTask, getTrigger, ITEM_MIME, paletteStep, putTrigger, STEP_MIME, taskForItem, type Doc, type Item, type Workspace } from '$lib/studio-core';
   import type { Studio } from '../layout.svelte.ts';
 
   let { doc, workspace, studio }: { doc: Doc; workspace: Workspace; studio: Studio } = $props();
@@ -40,6 +40,59 @@
     onrun(m === 'debug');
   }
 
+  // ── Compose: drop a palette step or an Explorer item on the flow ──
+  let dropping = $state(false);
+  function ondragover(e: DragEvent) {
+    const t = e.dataTransfer?.types ?? [];
+    if (t.includes(STEP_MIME) || t.includes(ITEM_MIME)) { e.preventDefault(); dropping = true; }
+  }
+  /// Add a task and open it in the Form panel.
+  function addStep(base: string, task: Record<string, unknown>) {
+    const r = addTask(doc.text ?? '', base, task);
+    doc.text = r.yaml;
+    doc.ui.focusStep = { name: r.name, n: Date.now() };
+    studio.reveal('right', 'form');
+    message = '';
+  }
+  async function ondrop(e: DragEvent) {
+    dropping = false;
+    const step = e.dataTransfer?.getData(STEP_MIME);
+    const raw = e.dataTransfer?.getData(ITEM_MIME);
+    if (!step && !raw) return;
+    e.preventDefault();
+    if (step) {
+      const s = paletteStep(step);
+      if (s) addStep(s.base, s.task());
+      return;
+    }
+    const it = JSON.parse(raw!) as Item;
+    if (it.kind === 'trigger') { await wire(it); return; }
+    if (it.kind === 'flow' && it.project === doc.ref.project && it.name === doc.ref.name) { message = 'A flow cannot run itself as a sub-flow.'; return; }
+    const made = taskForItem(it);
+    if (made) addStep(made.base, made.task);
+    else message = `${it.name} is not something a flow step uses.`;
+  }
+  /// A trigger is not a step: it starts flows. Dropping one adds this flow to its targets.
+  async function wire(it: Item) {
+    if (doc.isNew) { message = 'Deploy the flow first — a trigger starts the saved flow.'; return; }
+    if (!it.id) return;
+    if (!(await workspace.host.confirm(`Start ${doc.ref.project}/${doc.ref.name} from trigger ${it.name} too?`))) return;
+    const t = await getTrigger(it.id);
+    if (!t.ok) { message = t.error; return; }
+    const { id: _id, status: _s, ...rest } = t.data;
+    if ((rest.targets ?? []).some((x: any) => x.type === 'workflow' && x.name === doc.ref.name && (x.namespace ?? rest.namespace) === doc.ref.project)) { message = `${it.name} already starts this flow.`; return; }
+    const r = await putTrigger(it.id, { ...rest, targets: [...(rest.targets ?? []), { type: 'workflow', namespace: doc.ref.project, name: doc.ref.name }] });
+    message = r.ok ? `Trigger ${it.name} now starts this flow too.` : r.error;
+  }
+  // A click in the step palette asks for a step.
+  $effect(() => {
+    const req = doc.ui.addStep as { id: string; n: number } | undefined;
+    if (!req) return;
+    doc.ui.addStep = undefined;
+    const s = paletteStep(req.id);
+    if (s) addStep(s.base, s.task());
+  });
+
   async function deploy() {
     busy = true; message = '';
     const r = await workspace.save(doc);
@@ -48,7 +101,8 @@
   }
 </script>
 
-<div class="fd">
+<div class="fd" class:dropping {ondragover} ondragleave={(e) => { if (e.currentTarget === e.target) dropping = false; }} {ondrop} role="region" aria-label="Flow">
+  {#if dropping}<div class="drop-hint">Drop to add a step</div>{/if}
   <div class="fd-body">
     {#if doc.loaded || doc.isNew}
       <FlowEditorPane part="main" aiKind="flow" aiName={`${doc.ref.project}/${doc.ref.name}`} initialYaml={doc.text ?? ''} onchange={(v: string) => (doc.text = v)} showCode={doc.ui.codeAsked}
@@ -85,7 +139,10 @@
 </div>
 
 <style>
-  .fd { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .fd { display: flex; flex-direction: column; height: 100%; min-height: 0; position: relative; }
+  .fd.dropping { outline: 2px dashed var(--spec); outline-offset: -4px; }
+  .drop-hint { position: absolute; left: 50%; top: 56px; transform: translateX(-50%); z-index: 30; pointer-events: none;
+               padding: 4px 12px; border-radius: 12px; background: var(--spec); color: white; font-size: 12px; }
   /* Centred on the whole bar, not the gap between tabs and buttons; kept narrow
      enough to clear both, and ellipsised past that. */
   .fd-title { position: absolute; left: 50%; transform: translateX(-50%); max-width: 36%;

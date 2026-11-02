@@ -13,7 +13,7 @@
 {#if flow}
   {#key `${flow.address}:${id}`}
     <FlowEditorPane part={id === 'ai' ? 'ai' : 'form'} aiKind="flow" aiName={`${flow.ref.project}/${flow.ref.name}`}
-      initialYaml={flow.text ?? ''} onchange={(v: string) => (flow.text = v)} />
+      initialYaml={flow.text ?? ''} onchange={(v: string) => (flow.text = v)} focusStep={flow.ui.focusStep ?? null} />
   {/key}
 {:else}
   <div class="note">{doc ? `The ${id === 'ai' ? 'AI assistant' : 'form'} works on flows.` : 'Open a flow to edit it here.'}</div>

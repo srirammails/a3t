@@ -34,6 +34,7 @@
   type Placed = PanelDef & { home: RegionId };
   const panels = $derived<Placed[]>([
     { id: 'explorer', title: 'Explorer', home: 'left' },
+    ...((kind ? kind.views.left : fallback.views.left) ?? []).map((p) => ({ ...p, home: 'left' as const })),
     // An open item's own panels; the home kind's only while nothing is open.
     ...((kind ? kind.views.right : fallback.views.right) ?? []).map((p) => ({ ...p, home: 'right' as const })),
     ...((kind ? kind.views.bottom : fallback.views.bottom) ?? []).map((p) => ({ ...p, home: 'bottom' as const })),

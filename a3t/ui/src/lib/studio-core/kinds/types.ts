@@ -26,8 +26,9 @@ export interface ItemKind {
   /// Where it shows: `center` names the studio-ui view for acting on it (run,
   /// query, chat, fire, design…); `code` the view for editing it as code (Edit,
   /// double-click; `doc.ui.view = 'code'`); `right` holds its Form and AI;
-  /// `bottom` what acting produces (runs, results…).
-  views: { center: string; code?: string; right?: PanelDef[]; bottom?: PanelDef[] };
+  /// `bottom` what acting produces (runs, results…); `left` tools beside the
+  /// Explorer (the flow's step palette).
+  views: { center: string; code?: string; left?: PanelDef[]; right?: PanelDef[]; bottom?: PanelDef[] };
   /// The Console section where this kind is managed in full, if any.
   console?: { section: string; title: string };
 

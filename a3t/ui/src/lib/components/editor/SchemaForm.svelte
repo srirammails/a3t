@@ -5,7 +5,11 @@
   import { isCncfDsl, normaliseTasks } from './workflowParser';
   import type { FunctionManifest } from '$lib/editor/types';
 
-  let { value = '', onchange }: { value: string; onchange?: (val: string) => void } = $props();
+  let { value = '', onchange, focus = null }: {
+    value: string; onchange?: (val: string) => void;
+    /// Open this step and bring it into view (a stamp per request).
+    focus?: { name: string; n: number } | null;
+  } = $props();
 
   // Get registry manifests for schema-driven config rendering
   function getManifest(callType: string): FunctionManifest | null {
@@ -172,6 +176,14 @@
     emit();
   }
 
+  /// A CNCF task's resource is `with._resource` (what the engine reads); the
+  /// legacy shape keeps it on the step.
+  const resourceOf = (step: any): string => String((cncf ? step.config?._resource : step.resource) ?? '');
+  function setResource(idx: number, val: string) {
+    if (cncf) updateStepConfig(idx, '_resource', val);
+    else updateStepField(idx, 'resource', val);
+  }
+
   function updateStepConfig(idx: number, key: string, val: any) {
     const step = parsed.steps[idx];
     if (!step.config) step.config = {};
@@ -236,6 +248,17 @@
   }
 
   let expandedSteps = $state<Record<number, boolean>>({});
+  let root = $state<HTMLElement | null>(null);
+  let focused = 0;
+  // A step asked for (dropped on the flow): open it, close the others, show it.
+  $effect(() => {
+    if (!focus || focus.n === focused || !parsed?.steps) return;
+    const idx = parsed.steps.findIndex((s: any) => s.name === focus.name);
+    if (idx < 0) return;
+    focused = focus.n;
+    expandedSteps = { [idx]: true };
+    queueMicrotask(() => root?.querySelector(`[data-step="${CSS.escape(focus.name)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+  });
 
   // ── Task type schemas ──
 
@@ -423,7 +446,7 @@
   }
 </script>
 
-<div class="schema-form">
+<div class="schema-form" bind:this={root}>
   {#if parseError}
     <div class="form-error">{parseError}</div>
   {:else if parsed}
@@ -474,13 +497,13 @@
         <div class="steps-list">
           {#each parsed.steps as step, idx}
             {@const schema = getSchema(step.type)}
-            <div class="step-card" class:expanded={expandedSteps[idx]}>
+            <div class="step-card" class:expanded={expandedSteps[idx]} data-step={step.name}>
               <div class="step-header" role="button" tabindex="0" onclick={() => expandedSteps[idx] = !expandedSteps[idx]} onkeydown={(e) => { if (e.key === 'Enter') expandedSteps[idx] = !expandedSteps[idx]; }}>
                 <svg class="step-chevron" class:open={expandedSteps[idx]} width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>
                 <span class="step-num">{idx + 1}</span>
                 <span class="step-name">{step.name ?? 'unnamed'}</span>
                 <span class="step-type-badge">{step.type ?? '?'}</span>
-                {#if step.resource}<span class="step-resource">{step.resource}</span>{/if}
+                {#if resourceOf(step)}<span class="step-resource">{resourceOf(step)}</span>{/if}
                 {#if step.then}<span class="step-then">&#8594; {step.then}</span>{/if}
                 <span class="step-actions">
                   <button class="step-btn" onclick={(e) => { e.stopPropagation(); moveStep(idx, -1); }} title="Move up" disabled={idx === 0}>&#9650;</button>
@@ -507,7 +530,7 @@
                     {#if NEEDS_RESOURCE.has(step.type)}
                       <label class="form-label">
                         <span>resource</span>
-                        <input type="text" value={step.resource ?? ''} oninput={(e) => updateStepField(idx, 'resource', e.currentTarget.value)} placeholder="namespace/name" />
+                        <input type="text" value={resourceOf(step)} oninput={(e) => setResource(idx, e.currentTarget.value)} placeholder="namespace/name" />
                       </label>
                     {/if}
                     <label class="form-label">

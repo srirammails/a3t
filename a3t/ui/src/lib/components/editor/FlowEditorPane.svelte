@@ -40,6 +40,7 @@
     onshowrun,
     toolbar,
     showCode,
+    focusStep = null,
   }: {
     initialYaml: string;
     onchange?: (val: string) => void;
@@ -71,6 +72,8 @@
     onshowrun?: () => void;
     /// Bump to switch the main view to Code (the Studio's Edit / double-click).
     showCode?: number;
+    /// A step for the form to open (its name, and a stamp per request).
+    focusStep?: { name: string; n: number } | null;
     /// Host content for the Graph | Code toolbar (`main` only), after the tabs —
     /// the studio puts the flow's name and Run/Deploy here instead of a bar of its own.
     toolbar?: Snippet;
@@ -96,7 +99,13 @@
   $effect(() => { if (soloMode !== 'form') onsection?.(soloMode); });
   // With the AI tab hidden, never leave the right pane on a tab that is gone.
   $effect(() => { if (!showAi && rightMode === 'ai') rightMode = 'form'; });
-  let yamlSource = $state(initialYaml);
+  let yamlSource = $state(untrack(() => initialYaml));
+  // Follow the text when it changes outside (a step dropped on the flow, the
+  // other pane of the same document); our own edits come back unchanged.
+  $effect(() => {
+    const next = initialYaml;
+    if (next !== untrack(() => yamlSource)) yamlSource = next;
+  });
   let agentScrollTarget = $state('');
   let splitPercent = $state(50);
   let dragging = $state(false);
@@ -449,7 +458,7 @@
   {:else if isAgentTemplate && parsed}
     <AgentTemplateEditor template={parsed} scrollTo={agentScrollTarget} onchange={onAgentFormChange} onopensub={onopensub} {readOnly} {configSeed} {onsection} />
   {:else}
-    <SchemaForm value={yamlSource} onchange={onFormChange} />
+    <SchemaForm value={yamlSource} onchange={onFormChange} focus={focusStep} />
   {/if}
 {/snippet}
 

@@ -581,7 +581,7 @@ Each step ships on dash.dev and is checked there before the next.
 | 4 | `chat`, `mcp`, `trigger` kinds | act on every resource — **done 2 Nov 2026**: LLMs (Chat), MCP servers (Tools: list, form from the tool's input schema, call), triggers (Fire: webhook POST, CloudEvent of the trigger's `source` type, or start the workflow targets; Runs of the target below); config in the Form panel |
 | 5 | `canvas`, `runtime`, `run` kinds; Deploy from the Studio | operate from the Studio — **done 2 Nov 2026**: canvas (attach a flow by pick or drag from the Explorer, placement dry-run, live deployment, Deploy / Pause / Resume / Restart / Undeploy, + on Canvases creates one), runtime (state, host, deployments with their actions; Runtimes folder); runs stay in the Runs panels (a separate run tab was tried and removed, 2 Nov); logs wait for the platform's log stream (§14) |
 | 6 | `memory` kind + AQL view (needs ADB scopes) | real memory view |
-| 7 | Compose view + drag and drop | one deployable workflow |
+| 7 | Compose view + drag and drop | one deployable workflow — **first cut 2 Nov 2026**: a **Steps** palette (CNCF tasks and platform calls, beside the Explorer; drag or click) and Explorer items drop on a flow — a resource becomes the step that uses it (`with._resource`), a flow a `run: workflow` sub-flow, an agent a call to its chat flow, a trigger is wired to start the flow; each new step is added at the end of `do` and opens in the Form. Next: drop between steps, connections drawn on the graph |
 | 8 | Dev runtime connect + attach + logs (needs backend §14) | develop against a live runtime |
 | 9 | Extract packages; VS Code extension: tree, `a3t:` files, webviews, commands | Studio in VS Code |
 | 10 | Debug adapter for VS Code | native breakpoints |
