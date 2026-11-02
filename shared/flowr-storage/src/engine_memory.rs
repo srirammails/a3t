@@ -1,8 +1,9 @@
 //! In-memory engine store: the reference implementation of the engine
 //! contracts — [`EngineCore`] (the rules, `engine_core.rs`) behind a mutex,
 //! with notices delivered to in-process subscribers. Nothing survives the
-//! process. The SQLite store must behave exactly like this one, and ADB runs
-//! the same core: the conformance suite runs against all of them.
+//! process. ADB, FlowR's durable store, runs the same core; the conformance
+//! suite runs against both. (The SQLite store this used to be compared with is
+//! kept on the branch `engine-sqlite`.)
 
 use std::collections::HashMap;
 use std::sync::Mutex;

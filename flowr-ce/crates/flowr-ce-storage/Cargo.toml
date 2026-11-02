@@ -19,7 +19,6 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # Engine store
-rusqlite.workspace = true
 
 # LanceDB storage
 lancedb.workspace = true

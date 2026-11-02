@@ -120,11 +120,6 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
         // A runtime: the console holds the queue, runs and journals.
         info!(url = %std::env::var("FLOWR_ENGINE_URL").unwrap_or_default(), "engine store: remote (console gateway)");
         storage.with_engine(Arc::new(remote))
-    } else if engine && std::env::var("FLOWR_STORE").is_ok_and(|v| v.eq_ignore_ascii_case("sqlite")) {
-        let path = format!("{}/flowr.db", data_dir);
-        let engine = flowr_ce_storage::engine_sqlite::SqliteStore::open(&path).map_err(|e| anyhow::anyhow!("{}", e))?;
-        info!(path = %path, "engine store: SQLite");
-        storage.with_engine(Arc::new(engine))
     } else if engine {
         storage.with_engine(engine_adb::embedded(data_dir).await?)
     } else {
