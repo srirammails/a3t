@@ -331,7 +331,8 @@ async fn run_claimed(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineSto
             // Wake it when the timer fires — or at its deadline, if that comes
             // first (it then faults on waking) — on whichever worker is free.
             let wake_at = deadline.map_or(fire_at, |d| d.min(fire_at));
-            let wake = NewTask::resume_for(&row, Some(format!("{run_id}:timer:{}", wake_at.timestamp_millis())), wake_at);
+            // In the pool it runs in: a runtime's run stays on the runtime.
+            let wake = NewTask { pool: task.pool.clone(), ..NewTask::resume_for(&row, Some(format!("{run_id}:timer:{}", wake_at.timestamp_millis())), wake_at) };
             if let Err(e) = engine.enqueue(wake).await {
                 error!(%run_id, error = %e, "could not schedule the timer; the run stays owned until its lease runs out and is retried");
                 return;
@@ -344,7 +345,7 @@ async fn run_claimed(storage: Arc<dyn StorageBackend>, engine: Arc<dyn EngineSto
             // Woken by a matching event or an answer (the store enqueues that),
             // or at the wait's timeout or the run's deadline, whichever is first.
             if let Some(wake_at) = [timeout_at, deadline].into_iter().flatten().min() {
-                let wake = NewTask::resume_for(&row, Some(format!("{run_id}:wait:{}", wake_at.timestamp_millis())), wake_at);
+                let wake = NewTask { pool: task.pool.clone(), ..NewTask::resume_for(&row, Some(format!("{run_id}:wait:{}", wake_at.timestamp_millis())), wake_at) };
                 if let Err(e) = engine.enqueue(wake).await {
                     error!(%run_id, error = %e, "could not schedule the wait's timeout; the run stays owned until its lease runs out and is retried");
                     return;

@@ -117,3 +117,27 @@ async fn a_run_whose_worker_died_resumes_elsewhere() {
     assert_eq!(st.output.unwrap()["hello"], "cy");
     assert_eq!(engine.get(id).await.unwrap().unwrap().epoch, 2, "taken over by a new owner");
 }
+
+const NAP: &str = "document:\n  dsl: 1.0.3\n  namespace: t\n  name: nap\n  version: 1.0.0\ndo:\n- nap:\n    wait:\n      seconds: 6\n- after:\n    set:\n      woke: true\n";
+
+/// A run that waits on a durable timer wakes in the pool it was running in:
+/// a runtime's runs stay on the runtime (found on vc-dev: the wake-up went to
+/// the console's `default` pool).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timer_wakes_the_run_in_its_own_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = storage(dir.path()).await;
+    s.workflows().register(WorkflowRecord::from_yaml(NAP).unwrap()).await.unwrap();
+    // Only a worker for pool "gpu": a wake-up anywhere else is never claimed.
+    flowr_ce::spawn_pool_worker(s.clone(), vec!["gpu".into()]);
+    let engine = s.engine().unwrap();
+    let req = ExecutionRequest::new("t", "nap");
+    let id = req.instance_id;
+    let mut run = flowr_ce_storage::engine_adapters::new_run(&req);
+    run.run_id = id;
+    let task = flowr_storage::engine::NewTask { pool: "gpu".into(), ..flowr_storage::engine::NewTask::start(&run) };
+    engine.start(run, task).await.unwrap();
+    let st = wait_for(s.as_ref(), id, finished).await;
+    assert_eq!(st.status, ExecutionStatus::Completed, "{:?}", st.error);
+    assert_eq!(st.output.unwrap()["woke"], true);
+}
