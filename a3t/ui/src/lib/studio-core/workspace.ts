@@ -15,6 +15,7 @@
 import { address, sameRef, type Item, type ItemRef } from './items';
 import { KINDS, kindById, kindFor, type ItemKind } from './kinds';
 import type { StudioHost } from './host';
+import { merge3, type Conflict } from './merge';
 
 export type Doc = {
   /// The item's address: the tab id.
@@ -186,6 +187,50 @@ export class Workspace {
     this.changed();
   }
 
+  // ── Sync: what the registry has now, and merging it into the draft ──
+
+  /// The registry's copy as it is now (read without touching the document).
+  async remote(doc: Doc): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+    const kind = this.kindOf(doc);
+    if (doc.isNew) return { ok: true, text: '' };
+    if (!kind.load) return { ok: false, error: `${kind.label} cannot be read back` };
+    const probe: Doc = { ...doc, ui: {}, text: undefined, saved: undefined, loaded: false, error: undefined };
+    await kind.load(probe);
+    if (probe.error) return { ok: false, error: probe.error };
+    return { ok: true, text: probe.saved ?? probe.text ?? '' };
+  }
+
+  /// Has the registry moved on from the copy these edits started from?
+  async remoteChanged(doc: Doc): Promise<{ changed: boolean; text?: string; error?: string }> {
+    const r = await this.remote(doc);
+    if (!r.ok) return { changed: false, error: r.error };
+    const base = doc.draft?.base ?? doc.saved ?? '';
+    const changed = !doc.isNew && r.text !== base;
+    doc.ui.draftStale = changed;
+    return { changed, text: r.text };
+  }
+
+  /// Merge the registry's changes into the edits (three-way, from the copy the
+  /// edits started from). The result is the document's text — saved as a draft,
+  /// on top of the registry's current copy — for review before Push. Conflicts
+  /// keep the draft's value and are listed on `ui.conflicts`.
+  async merge(doc: Doc): Promise<{ ok: true; conflicts: Conflict[]; applied: number } | { ok: false; error: string }> {
+    const r = await this.remote(doc);
+    if (!r.ok) return r;
+    const base = doc.draft?.base ?? doc.saved ?? '';
+    let m;
+    try { m = merge3(base, doc.text ?? '', r.text); } catch (e) { return { ok: false, error: `Cannot merge: ${(e as Error).message}` }; }
+    doc.saved = r.text;
+    doc.text = m.text;
+    doc.ui.draftStale = false;
+    doc.ui.conflicts = m.conflicts;
+    const d: Draft = { text: m.text, at: Date.now(), base: r.text };
+    doc.draft = d;
+    this.host.storage.set(this.draftKey(doc.address), d);
+    this.changed();
+    return { ok: true, conflicts: m.conflicts, applied: m.applied };
+  }
+
   /// Push to the registry through the document's kind; its draft is done with,
   /// and the tab follows the item to where it now lives.
   async push(doc: Doc) {
@@ -198,6 +243,7 @@ export class Workspace {
       this.host.storage.set(this.draftKey(doc.address), null);
       doc.draft = null;
       doc.ui.draftStale = false;
+      doc.ui.conflicts = null;
       this.retarget(doc, r.data);
     }
     return r;

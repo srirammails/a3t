@@ -576,14 +576,20 @@ One vocabulary everywhere in the Studio (buttons, menus, messages):
 | Term | Meaning | Backend |
 |---|---|---|
 | **Save** (Ctrl/⌘+S) | keep the edits as a draft, locally (the host's storage); survives a reload, nobody else sees it; a new item comes back still new | none — `Workspace.saveDraft` / `discardDraft` |
-| **Push** | send the item to the registry; the draft is done with | `create_flow`, template / agent / resource / trigger updates — `ItemKind.push` |
+| **Sync** | check the registry: if its copy moved on since the edits started → **Merge**, else → **Push** | `Workspace.remoteChanged` / `merge` / `push` |
+| **Push** (Sync ▾) | send the item to the registry, over its copy; **Push as a new version** bumps `document.version` (patch / minor / major) and keeps the old one beside it | `create_flow`, template / agent / resource / trigger updates — `ItemKind.push` |
+| **Merge** (Sync ▾) | three-way merge (`studio-core/merge.ts`): the copy the edits started from, the edits, the registry now; keys and named list items (tasks, cases, extensions) merge, comments kept; both-changed places keep the edit and are listed as conflicts; the result is a draft on top of the registry copy, for review then Push | client-side |
 | **Deploy** | put a pushed flow on a runtime, where its canvas places it | `POST /canvas/flows/<ns>/<name>/deploy` |
-| **Run / Debug** | execute the pushed flow | runs API |
+| **Deploy / Run / Debug** (Run ▾) | Deploy as above; execute the pushed flow | runs API |
 | **Stop** | stop a run | `cancel_run` (and the debugger's stop) |
 | **Terminate** | kill a runtime: its runs stop, it is removed, what was deployed there is rescheduled | `POST /ops/runtimes/<n>/terminate` |
 | **Hibernate** | snapshot a runtime (gVisor checkpoint) and stop it; Resume restores it | `POST /ops/runtimes/<n>` hibernate |
 
 Run, Debug and Deploy use the registry's copy, so they wait for a Push. A draft whose registry copy changed since it was made says so ("registry changed"); pushing replaces the registry copy. Drafts are per browser until the backend has a draft store (gap: server-side drafts, shared with the team).
+
+Versions: the **Versions** panel (bottom, beside Runs) and the Sync dropdown list the versions the registry keeps (flows: `document.version`, side by side, one active), with Load (into the editor) and Make active (roll back / forward).
+
+**Registry versioning the Studio needs (backend gap, adb-integration):** today pushing a flow's same `document.version` overwrites it silently, and templates, agents and resources have no versions. Needed for every item kind: (1) a **revision** per push (monotonic, with who and when); (2) **read by revision** and a history, so Merge fetches the exact base instead of the copy kept in the draft; (3) **conditional push** — push carries the revision it started from, the server answers 409 with the current revision when it moved on (Push as overwrite sends none). Until then the Studio checks the registry just before pushing, which leaves a small race window.
 
 ## 15. Plan
 

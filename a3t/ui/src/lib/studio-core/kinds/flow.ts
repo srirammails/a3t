@@ -1,6 +1,6 @@
 import * as flows from '../adapters/flows';
 import { fail, ok } from '../items';
-import { FLOW_NAME, newFlowYaml, parse, problems } from '../flow/model';
+import { FLOW_NAME, newFlowYaml, parse, problems, versionOf, withVersion } from '../flow/model';
 import type { ItemKind } from './types';
 
 export const flowKind: ItemKind = {
@@ -14,7 +14,7 @@ export const flowKind: ItemKind = {
     center: 'flow',
     left: [{ id: 'steps', title: 'Steps', component: 'steps' }],
     right: [{ id: 'form', title: 'Form', component: 'flow-form' }, { id: 'ai', title: 'AI', component: 'ai' }],
-    bottom: [{ id: 'runs', title: 'Runs' }, { id: 'problems', title: 'Problems', onlyWithBadge: true }],
+    bottom: [{ id: 'runs', title: 'Runs' }, { id: 'versions', title: 'Versions' }, { id: 'problems', title: 'Problems', onlyWithBadge: true }],
   },
 
   /// The run dialog of the Runs panel, opened by the view's Run / Debug.
@@ -40,6 +40,12 @@ export const flowKind: ItemKind = {
     doc.saved = text;
     return ok({ project: parsed.document?.namespace ?? doc.ref.project, kind: 'flow', name: parsed.document?.name ?? doc.ref.name });
   },
+
+  versions: (doc) => flows.versions(doc.ref.project, doc.ref.name),
+  activate: (doc, v) => flows.activate(doc.ref.project, doc.ref.name, v),
+  loadVersion: (doc, v) => flows.getYaml(doc.ref.project, doc.ref.name, v),
+  versionOf,
+  withVersion,
 
   dirty: (doc) => !!doc.isNew || (doc.loaded && (doc.text ?? '') !== (doc.saved ?? '')),
 

@@ -45,6 +45,14 @@ export interface ItemKind {
   /// Push the document to the registry; answers where it now lives. (Saving
   /// is the Workspace's: a local draft. Deploying to a runtime is the view's.)
   push?(doc: Doc): Promise<Result<ItemRef>>;
+  /// Versions the registry keeps of the item (flows: `document.version`), the
+  /// active one, and switching it; `versionOf` reads the edited text's version
+  /// and `withVersion` sets it (for Push as a new version).
+  versions?(doc: Doc): Promise<Result<{ versions: string[]; active: string }>>;
+  activate?(doc: Doc, version: string): Promise<Result>;
+  loadVersion?(doc: Doc, version: string): Promise<Result<string>>;
+  versionOf?(text: string): string;
+  withVersion?(text: string, version: string): string;
   /// It differs from what the registry has (not pushed).
   dirty?(doc: Doc): boolean;
   /// Paths (`pathKey`) of values the platform showed masked in the loaded document.

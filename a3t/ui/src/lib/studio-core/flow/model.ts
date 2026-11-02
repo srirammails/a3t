@@ -122,3 +122,28 @@ export function withFlowName(yaml: string, name: string): string {
 /// `document.name` as the CNCF DSL defines it: lowercase letters and digits,
 /// dashes only inside.
 export const FLOW_NAME = /^[a-z0-9](-?[a-z0-9])*$/;
+
+/// `document.version` of a flow's text ('' when absent or not parseable).
+export function versionOf(yaml: string | undefined): string {
+  try { return String(YAML.parse(yaml ?? '')?.document?.version ?? ''); } catch { return ''; }
+}
+/// The text with `document.version` set (layout and comments kept).
+export function withVersion(yaml: string, version: string): string {
+  const d = YAML.parseDocument(yaml);
+  d.setIn(['document', 'version'], version);
+  return d.toString();
+}
+/// The next semantic version: 1.2.3 → patch 1.2.4, minor 1.3.0, major 2.0.0.
+export function bumpVersion(v: string, part: 'patch' | 'minor' | 'major'): string {
+  const [a, b, c] = (v.match(/^(\d+)\.(\d+)\.(\d+)/)?.slice(1) ?? ['1', '0', '0']).map(Number);
+  return part === 'major' ? `${a + 1}.0.0` : part === 'minor' ? `${a}.${b + 1}.0` : `${a}.${b}.${c + 1}`;
+}
+/// Versions newest first (semantic order; others after, as given).
+export function sortVersions(vs: string[]): string[] {
+  const key = (v: string) => (v.match(/^(\d+)\.(\d+)\.(\d+)/)?.slice(1).map(Number) ?? null);
+  return [...vs].sort((x, y) => {
+    const a = key(x), b = key(y);
+    if (!a || !b) return a ? -1 : b ? 1 : 0;
+    return b[0] - a[0] || b[1] - a[1] || b[2] - a[2];
+  });
+}

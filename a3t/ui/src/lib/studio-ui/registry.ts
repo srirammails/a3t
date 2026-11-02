@@ -14,6 +14,7 @@ import TriggerView from './views/TriggerView.svelte';
 import CanvasView from './views/CanvasView.svelte';
 import AgentView from './views/AgentView.svelte';
 import AgentFormPanel from './panels/AgentFormPanel.svelte';
+import VersionsPanel from './panels/VersionsPanel.svelte';
 import TemplateFieldsPanel from './panels/TemplateFieldsPanel.svelte';
 import TemplateAgentsPanel from './panels/TemplateAgentsPanel.svelte';
 import AgentRunsPanel from './panels/AgentRunsPanel.svelte';
@@ -51,6 +52,7 @@ export const PANELS: Record<string, Component<any>> = {
   'agent-runs': AgentRunsPanel,
   steps: StepPalette,
   runs: RunsPanel,
+  versions: VersionsPanel,
   problems: ProblemsPanel,
   results: ResultsPanel,
   history: HistoryPanel,

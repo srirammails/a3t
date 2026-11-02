@@ -1,7 +1,7 @@
 <script lang="ts">
   /// A flow's center view: the graph / code editor, with the flow's name and its
-  /// life on the editor's own Graph | Code bar — Save (a draft here), Push (to the
-  /// registry), Deploy (onto a runtime) and the Run/Debug split button.
+  /// life on the editor's own Graph | Code bar — Save (a draft here), Sync ▾ (Push /
+  /// Merge with the registry) and Run ▾ (Deploy onto a runtime, Run, Debug).
   /// Form and AI are right-region panels on the same document; the text lives
   /// on the document, so switching tabs never loses an edit.
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
@@ -33,15 +33,24 @@
   }
   const onshowrun = () => studio.reveal('bottom', 'runs');
 
-  // ── Run / Debug split button ──
-  let runMode = $state<'run' | 'debug'>((() => { try { return localStorage.getItem('a3t.flow.runMode') === 'debug' ? 'debug' : 'run'; } catch { return 'run'; } })());
+  // ── Run ▾: Deploy / Run / Debug; the main button does the last one picked ──
+  type Mode = 'deploy' | 'run' | 'debug';
+  let runMode = $state<Mode>((() => { try { const m = localStorage.getItem('a3t.flow.runMode'); return m === 'debug' || m === 'deploy' ? m : 'run'; } catch { return 'run'; } })());
   let runMenu = $state(false);
   const blocked = $derived(doc.isNew ? 'Push the flow first — a run uses the registry’s copy' : unpushed ? 'Push your changes first — a run uses the registry’s copy' : '');
-  function pick(m: 'run' | 'debug') {
+  function go(m: Mode) {
+    if (m === 'deploy') void deploy(); else onrun(m === 'debug');
+  }
+  function pick(m: Mode) {
     runMode = m; runMenu = false;
     try { localStorage.setItem('a3t.flow.runMode', m); } catch { /* private window */ }
-    onrun(m === 'debug');
+    go(m);
   }
+  const MODES: Record<Mode, { label: string; hint: string }> = {
+    deploy: { label: '⇪ Deploy', hint: 'Put the flow on a runtime, where its canvas places it' },
+    run: { label: '▶ Run', hint: 'Run with inputs' },
+    debug: { label: '🐞 Debug', hint: 'Breakpoints, stepping, step inputs and outputs' },
+  };
 
   // ── Compose: drop a palette step or an Explorer item on the flow ──
   let dropping = $state(false);
@@ -124,17 +133,18 @@
           </div>
           {#if message}<span class="msg" title={message}>{message}</span>{:else if deployNote}<span class="msg ok" title={deployNote}>{deployNote}</span>{/if}
           <SaveBar {doc} {workspace} quiet />
-          <button class="btn sm deploy" disabled={busy || !!blocked} onclick={deploy} title={blocked ? blocked.replace('a run uses', 'a deploy uses') : 'Deploy the flow onto a runtime (where its canvas places it)'}>{busy ? 'Deploying…' : 'Deploy'}</button>
           <div class="split">
-            <button class="btn sm split-main" disabled={!!blocked || busy} onclick={() => onrun(runMode === 'debug')} title={blocked || (runMode === 'debug' ? 'Debug: breakpoints, stepping, step inputs and outputs' : 'Run with inputs')}>
-              {runMode === 'debug' ? '🐞 Debug' : '▶ Run'}
+            <button class="btn sm split-main" disabled={!!blocked || busy} onclick={() => go(runMode)} title={blocked || MODES[runMode].hint}>
+              {busy && runMode === 'deploy' ? 'Deploying…' : MODES[runMode].label}
             </button>
-            <button class="btn sm split-caret" disabled={busy} onclick={() => (runMenu = !runMenu)} aria-label="Run or debug" aria-haspopup="menu" aria-expanded={runMenu}>▾</button>
+            <button class="btn sm split-caret" disabled={busy} onclick={() => (runMenu = !runMenu)} aria-label="Deploy, run or debug" aria-haspopup="menu" aria-expanded={runMenu}>▾</button>
             {#if runMenu}
               <div class="split-overlay" role="presentation" onclick={() => (runMenu = false)}></div>
               <div class="split-menu" role="menu">
-                <button role="menuitem" class:on={runMode === 'run'} disabled={!!blocked} onclick={() => pick('run')}><span>▶ Run</span><small>Run with inputs</small></button>
-                <button role="menuitem" class:on={runMode === 'debug'} disabled={!!blocked} onclick={() => pick('debug')}><span>🐞 Debug</span><small>Breakpoints, stepping, step inputs and outputs</small></button>
+                {#each ['deploy', 'run', 'debug'] as const as m (m)}
+                  <button role="menuitem" class:on={runMode === m} disabled={!!blocked} onclick={() => pick(m)}><span>{MODES[m].label}</span><small>{MODES[m].hint}</small></button>
+                {/each}
+                {#if blocked}<span class="blocked">{blocked}</span>{/if}
               </div>
             {/if}
           </div>
@@ -156,8 +166,7 @@
   .fd-name { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mono { font-family: var(--font-mono); }
   .msg.ok { color: var(--ok, #15803d); }
-  .deploy { background: var(--bg-surface); color: var(--runtime, #1a7158); border: 1px solid var(--runtime, #1a7158); }
-  .deploy:hover:not(:disabled) { background: var(--runtime-bg, #e3f4ef); }
+  .blocked { padding: 6px 10px 4px; font-size: 11.5px; color: var(--warn, #b45309); border-top: 1px solid var(--border); margin-top: 3px; }
   .msg { font-size: 11.5px; color: var(--err, #b42318); max-width: 24%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .grow { flex: 1; }
   .fd-body { flex: 1; min-height: 0; position: relative; overflow: hidden; }
