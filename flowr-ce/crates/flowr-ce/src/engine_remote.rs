@@ -26,10 +26,8 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
@@ -58,7 +56,20 @@ pub(crate) fn mark_live(pool: &str) {
     live().lock().unwrap().insert(pool.to_string(), Instant::now());
 }
 
-use flowr_storage::engine_wire::{dispatch as dispatch_op, err_from, err_json};
+use flowr_storage::engine_wire::{dispatch as dispatch_op, err_json, unwrap, Client, Transport};
+
+/// The console's engine store, used from a runtime pod.
+pub type RemoteEngineStore = Client<HttpTransport>;
+
+/// The console's engine store at `base` (its gateway), with `token`.
+pub fn remote(base: &str, token: &str) -> RemoteEngineStore {
+    Client::new(HttpTransport::new(base, token))
+}
+
+/// From `FLOWR_ENGINE_URL` / `FLOWR_ENGINE_TOKEN`, if set.
+pub fn remote_from_env() -> Option<RemoteEngineStore> {
+    HttpTransport::from_env().map(Client::new)
+}
 
 /// Run one op against the console's store, noting which pools claim.
 async fn dispatch(store: &dyn EngineStore, op: &str, a: &Value) -> StoreResult<Value> {
@@ -156,13 +167,14 @@ pub(crate) fn spawn_gateway(store: Arc<dyn EngineStore>) {
 // ── Remote store (runtime) ──
 
 /// The console's engine store, used from a runtime pod.
-pub struct RemoteEngineStore {
+/// The gateway over HTTP: `RemoteEngineStore` is the wire client on it.
+pub struct HttpTransport {
     base: String,
     token: String,
     http: reqwest::Client,
 }
 
-impl RemoteEngineStore {
+impl HttpTransport {
     pub fn new(base: &str, token: &str) -> Self {
         Self {
             base: base.trim_end_matches('/').to_string(),
@@ -177,7 +189,7 @@ impl RemoteEngineStore {
         Some(Self::new(&url, &std::env::var("FLOWR_ENGINE_TOKEN").unwrap_or_default()))
     }
 
-    async fn op<T: DeserializeOwned>(&self, op: &str, args: Value) -> StoreResult<T> {
+    async fn op(&self, op: &str, args: Value) -> StoreResult<Value> {
         // Retried briefly: the console restarting must not fail a run's write.
         let mut wait = Duration::from_millis(200);
         for attempt in 0..5 {
@@ -185,10 +197,7 @@ impl RemoteEngineStore {
             match res {
                 Ok(r) if r.status().is_success() => {
                     let body: Value = r.json().await.map_err(|e| StoreError::Backend(e.to_string()))?;
-                    if let Some(e) = body.get("err") {
-                        return Err(err_from(e));
-                    }
-                    return serde_json::from_value(body.get("ok").cloned().unwrap_or(Value::Null)).map_err(|e| StoreError::Backend(e.to_string()));
+                    return unwrap(body);
                 }
                 Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => {
                     return Err(StoreError::Backend("the engine gateway refused this runtime's token".into()))
@@ -227,105 +236,9 @@ impl RemoteEngineStore {
 }
 
 #[async_trait]
-impl TaskQueue for RemoteEngineStore {
-    async fn enqueue(&self, t: NewTask) -> StoreResult<EnqueueOutcome> {
-        self.op("enqueue", json!({ "task": t })).await
-    }
-    async fn heartbeat(&self, leases: &[Lease], extend: Duration) -> StoreResult<Vec<LeaseStatus>> {
-        self.op("heartbeat", json!({ "leases": leases, "extend_ms": extend.as_millis() as u64 })).await
-    }
-    async fn ack(&self, lease: &Lease) -> StoreResult<()> {
-        self.op("ack", json!({ "lease": lease })).await
-    }
-    async fn nack(&self, lease: &Lease, retry_at: Option<DateTime<Utc>>) -> StoreResult<()> {
-        self.op("nack", json!({ "lease": lease, "retry_at": retry_at })).await
-    }
-    async fn pending(&self, pool: &str) -> StoreResult<usize> {
-        self.op("pending", json!({ "pool": pool })).await
-    }
-    async fn live_pools(&self, within: Duration) -> StoreResult<Vec<String>> {
-        self.op("live_pools", json!({ "within_ms": within.as_millis() as u64 })).await
-    }
-}
-
-#[async_trait]
-impl RunStore for RemoteEngineStore {
-    async fn start(&self, run: NewRun, task: NewTask) -> StoreResult<(RunId, EnqueueOutcome)> {
-        self.op("start", json!({ "run": run, "task": task })).await
-    }
-    async fn claim_runs(&self, pool: &str, worker: &str, n: usize, lease: Duration) -> StoreResult<Vec<(Lease, Task, Epoch)>> {
-        self.op("claim_runs", json!({ "pool": pool, "worker": worker, "n": n, "lease_ms": lease.as_millis() as u64 })).await
-    }
-    async fn renew(&self, run: RunId, epoch: Epoch, lease: Duration) -> StoreResult<bool> {
-        self.op("renew", json!({ "run": run, "epoch": epoch, "lease_ms": lease.as_millis() as u64 })).await
-    }
-    async fn release(&self, run: RunId, epoch: Epoch, phase: RunPhase, outcome: RunOutcome, lease: &Lease) -> StoreResult<()> {
-        self.op("release", json!({ "run": run, "epoch": epoch, "phase": phase, "outcome": outcome, "lease": lease })).await
-    }
-    async fn request(&self, run: RunId, req: RunRequest) -> StoreResult<()> {
-        self.op("request", json!({ "run": run, "req": req })).await
-    }
-    async fn get(&self, run: RunId) -> StoreResult<Option<RunRow>> {
-        self.op("get", json!({ "run": run })).await
-    }
-    async fn list(&self, q: RunQuery) -> StoreResult<Page<RunRow>> {
-        self.op("list", json!({ "q": q })).await
-    }
-    async fn orphaned(&self) -> StoreResult<Vec<RunRow>> {
-        self.op("orphaned", json!({})).await
-    }
-    async fn purge_finished(&self, before: DateTime<Utc>) -> StoreResult<usize> {
-        self.op("purge_finished", json!({ "before": before })).await
-    }
-    async fn open_wait(&self, run: RunId, epoch: Epoch, wait_id: &str, correlation: Value) -> StoreResult<()> {
-        self.op("open_wait", json!({ "run": run, "epoch": epoch, "wait_id": wait_id, "correlation": correlation })).await
-    }
-    async fn close_wait(&self, run: RunId, epoch: Epoch, wait_id: &str) -> StoreResult<bool> {
-        self.op("close_wait", json!({ "run": run, "epoch": epoch, "wait_id": wait_id })).await
-    }
-    async fn deliver_event(&self, namespace: &str, event: Value) -> StoreResult<Vec<RunId>> {
-        self.op("deliver_event", json!({ "namespace": namespace, "event": event })).await
-    }
-    async fn open_approval(&self, run: RunId, epoch: Epoch, wait_id: &str, request: Value) -> StoreResult<()> {
-        self.op("open_approval", json!({ "run": run, "epoch": epoch, "wait_id": wait_id, "request": request })).await
-    }
-    async fn approvals(&self) -> StoreResult<Vec<(RunId, String, Value)>> {
-        self.op("approvals", json!({})).await
-    }
-    async fn decide_approval(&self, wait_id: &str, decision: Value, by: &str) -> StoreResult<bool> {
-        self.op("decide_approval", json!({ "wait_id": wait_id, "decision": decision, "by": by })).await
-    }
-}
-
-#[async_trait]
-impl Journal for RemoteEngineStore {
-    async fn append(&self, run: RunId, epoch: Epoch, records: &[Record]) -> StoreResult<AppendOutcome> {
-        self.op("append", json!({ "run": run, "epoch": epoch, "records": records })).await
-    }
-    async fn read_from(&self, run: RunId, after_seq: u64) -> StoreResult<Vec<JournalEntry>> {
-        self.op("read_from", json!({ "run": run, "after_seq": after_seq })).await
-    }
-    async fn commit_step(&self, run: RunId, epoch: Epoch, c: StepCommit) -> StoreResult<u64> {
-        self.op("commit_step", json!({ "run": run, "epoch": epoch, "commit": c })).await
-    }
-    async fn latest_checkpoint(&self, run: RunId) -> StoreResult<Option<(u64, Vec<u8>)>> {
-        self.op("latest_checkpoint", json!({ "run": run })).await
-    }
-    async fn checkpoints(&self, run: RunId) -> StoreResult<Vec<CheckpointMeta>> {
-        self.op("checkpoints", json!({ "run": run })).await
-    }
-    async fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxRow>> {
-        self.op("outbox", json!({ "limit": limit })).await
-    }
-    async fn outbox_done(&self, up_to_id: u64) -> StoreResult<()> {
-        self.op("outbox_done", json!({ "up_to_id": up_to_id })).await
-    }
-}
-
-#[async_trait]
-impl Notifier for RemoteEngineStore {
-    async fn publish(&self, topic: &str, msg: Value) -> StoreResult<()> {
-        self.op("publish", json!({ "topic": topic, "msg": msg })).await
+impl Transport for HttpTransport {
+    async fn call(&self, op: &str, args: Value) -> StoreResult<Value> {
+        self.op(op, args).await
     }
 
     /// Server-sent events from the console, reconnecting until the receiver

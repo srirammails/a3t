@@ -105,10 +105,10 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
         .map_err(|e| anyhow::anyhow!("{}", e))?;
     // Runs go through the durable engine store (queue, runs, journal in
     // <data_dir>/flowr.db) unless FLOWR_STORE=lance.
-    let storage = if let Some(remote) = engine_remote::RemoteEngineStore::from_env().filter(|_| engine) {
+    let storage = if let Some(remote) = engine_remote::remote_from_env().filter(|_| engine) {
         // A runtime: the console holds the queue, runs and journals.
         info!(url = %std::env::var("FLOWR_ENGINE_URL").unwrap_or_default(), "engine store: remote (console gateway)");
-        remote.forward_streams();
+        remote.transport().forward_streams();
         storage.with_engine(Arc::new(remote))
     } else if engine {
         let path = format!("{}/flowr.db", data_dir);

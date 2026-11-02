@@ -6,6 +6,9 @@
 
 use std::time::Duration;
 
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use futures::stream::BoxStream;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
@@ -81,5 +84,152 @@ pub async fn dispatch(store: &dyn EngineStore, op: &str, a: &Value) -> StoreResu
         "outbox_done" => out(store.outbox_done(arg(a, "up_to_id")?).await),
         "publish" => out(store.publish(&arg::<String>(a, "topic")?, arg(a, "msg")?).await),
         other => Err(StoreError::Backend(format!("unknown op `{other}`"))),
+    }
+}
+
+// ── Client ──
+
+/// How a [`Client`] reaches a store: one op (the `{ok}` / `{err}` envelope
+/// already unwrapped, see [`unwrap`]) and a topic's notices.
+#[async_trait]
+pub trait Transport: Send + Sync {
+    async fn call(&self, op: &str, args: Value) -> StoreResult<Value>;
+    /// Notices on `topic`, best effort (claimers also poll).
+    fn subscribe(&self, topic: &str) -> BoxStream<'static, Value>;
+}
+
+/// An answer in the wire's envelope as a store result.
+pub fn unwrap(body: Value) -> StoreResult<Value> {
+    match body.get("err") {
+        Some(e) => Err(err_from(e)),
+        None => Ok(body.get("ok").cloned().unwrap_or(Value::Null)),
+    }
+}
+
+/// The engine store traits over a [`Transport`]: FlowR's gateway client (HTTP)
+/// and ADB's (Flight) share this encoding with [`dispatch`].
+pub struct Client<T: Transport> {
+    transport: T,
+}
+
+impl<T: Transport> Client<T> {
+    pub fn new(transport: T) -> Self {
+        Self { transport }
+    }
+
+    pub fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    async fn op<R: DeserializeOwned>(&self, op: &str, args: Value) -> StoreResult<R> {
+        let v = self.transport.call(op, args).await?;
+        serde_json::from_value(v).map_err(|e| StoreError::Backend(format!("{op}: {e}")))
+    }
+}
+
+#[async_trait]
+impl<T: Transport> TaskQueue for Client<T> {
+    async fn enqueue(&self, t: NewTask) -> StoreResult<EnqueueOutcome> {
+        self.op("enqueue", json!({ "task": t })).await
+    }
+    async fn heartbeat(&self, leases: &[Lease], extend: Duration) -> StoreResult<Vec<LeaseStatus>> {
+        self.op("heartbeat", json!({ "leases": leases, "extend_ms": extend.as_millis() as u64 })).await
+    }
+    async fn ack(&self, lease: &Lease) -> StoreResult<()> {
+        self.op("ack", json!({ "lease": lease })).await
+    }
+    async fn nack(&self, lease: &Lease, retry_at: Option<DateTime<Utc>>) -> StoreResult<()> {
+        self.op("nack", json!({ "lease": lease, "retry_at": retry_at })).await
+    }
+    async fn pending(&self, pool: &str) -> StoreResult<usize> {
+        self.op("pending", json!({ "pool": pool })).await
+    }
+    async fn live_pools(&self, within: Duration) -> StoreResult<Vec<String>> {
+        self.op("live_pools", json!({ "within_ms": within.as_millis() as u64 })).await
+    }
+}
+
+#[async_trait]
+impl<T: Transport> RunStore for Client<T> {
+    async fn start(&self, run: NewRun, task: NewTask) -> StoreResult<(RunId, EnqueueOutcome)> {
+        self.op("start", json!({ "run": run, "task": task })).await
+    }
+    async fn claim_runs(&self, pool: &str, worker: &str, n: usize, lease: Duration) -> StoreResult<Vec<(Lease, Task, Epoch)>> {
+        self.op("claim_runs", json!({ "pool": pool, "worker": worker, "n": n, "lease_ms": lease.as_millis() as u64 })).await
+    }
+    async fn renew(&self, run: RunId, epoch: Epoch, lease: Duration) -> StoreResult<bool> {
+        self.op("renew", json!({ "run": run, "epoch": epoch, "lease_ms": lease.as_millis() as u64 })).await
+    }
+    async fn release(&self, run: RunId, epoch: Epoch, phase: RunPhase, outcome: RunOutcome, lease: &Lease) -> StoreResult<()> {
+        self.op("release", json!({ "run": run, "epoch": epoch, "phase": phase, "outcome": outcome, "lease": lease })).await
+    }
+    async fn request(&self, run: RunId, req: RunRequest) -> StoreResult<()> {
+        self.op("request", json!({ "run": run, "req": req })).await
+    }
+    async fn get(&self, run: RunId) -> StoreResult<Option<RunRow>> {
+        self.op("get", json!({ "run": run })).await
+    }
+    async fn list(&self, q: RunQuery) -> StoreResult<Page<RunRow>> {
+        self.op("list", json!({ "q": q })).await
+    }
+    async fn orphaned(&self) -> StoreResult<Vec<RunRow>> {
+        self.op("orphaned", json!({})).await
+    }
+    async fn purge_finished(&self, before: DateTime<Utc>) -> StoreResult<usize> {
+        self.op("purge_finished", json!({ "before": before })).await
+    }
+    async fn open_wait(&self, run: RunId, epoch: Epoch, wait_id: &str, correlation: Value) -> StoreResult<()> {
+        self.op("open_wait", json!({ "run": run, "epoch": epoch, "wait_id": wait_id, "correlation": correlation })).await
+    }
+    async fn close_wait(&self, run: RunId, epoch: Epoch, wait_id: &str) -> StoreResult<bool> {
+        self.op("close_wait", json!({ "run": run, "epoch": epoch, "wait_id": wait_id })).await
+    }
+    async fn deliver_event(&self, namespace: &str, event: Value) -> StoreResult<Vec<RunId>> {
+        self.op("deliver_event", json!({ "namespace": namespace, "event": event })).await
+    }
+    async fn open_approval(&self, run: RunId, epoch: Epoch, wait_id: &str, request: Value) -> StoreResult<()> {
+        self.op("open_approval", json!({ "run": run, "epoch": epoch, "wait_id": wait_id, "request": request })).await
+    }
+    async fn approvals(&self) -> StoreResult<Vec<(RunId, String, Value)>> {
+        self.op("approvals", json!({})).await
+    }
+    async fn decide_approval(&self, wait_id: &str, decision: Value, by: &str) -> StoreResult<bool> {
+        self.op("decide_approval", json!({ "wait_id": wait_id, "decision": decision, "by": by })).await
+    }
+}
+
+#[async_trait]
+impl<T: Transport> Journal for Client<T> {
+    async fn append(&self, run: RunId, epoch: Epoch, records: &[Record]) -> StoreResult<AppendOutcome> {
+        self.op("append", json!({ "run": run, "epoch": epoch, "records": records })).await
+    }
+    async fn read_from(&self, run: RunId, after_seq: u64) -> StoreResult<Vec<JournalEntry>> {
+        self.op("read_from", json!({ "run": run, "after_seq": after_seq })).await
+    }
+    async fn commit_step(&self, run: RunId, epoch: Epoch, c: StepCommit) -> StoreResult<u64> {
+        self.op("commit_step", json!({ "run": run, "epoch": epoch, "commit": c })).await
+    }
+    async fn latest_checkpoint(&self, run: RunId) -> StoreResult<Option<(u64, Vec<u8>)>> {
+        self.op("latest_checkpoint", json!({ "run": run })).await
+    }
+    async fn checkpoints(&self, run: RunId) -> StoreResult<Vec<CheckpointMeta>> {
+        self.op("checkpoints", json!({ "run": run })).await
+    }
+    async fn outbox(&self, limit: usize) -> StoreResult<Vec<OutboxRow>> {
+        self.op("outbox", json!({ "limit": limit })).await
+    }
+    async fn outbox_done(&self, up_to_id: u64) -> StoreResult<()> {
+        self.op("outbox_done", json!({ "up_to_id": up_to_id })).await
+    }
+}
+
+#[async_trait]
+impl<T: Transport> Notifier for Client<T> {
+    async fn publish(&self, topic: &str, msg: Value) -> StoreResult<()> {
+        self.op("publish", json!({ "topic": topic, "msg": msg })).await
+    }
+
+    fn subscribe(&self, topic: &str) -> BoxStream<'static, Value> {
+        self.transport.subscribe(topic)
     }
 }

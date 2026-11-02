@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flowr_ce::engine_remote::{gateway_router, live_pools, RemoteEngineStore};
+use flowr_ce::engine_remote::{gateway_router, live_pools, remote};
 use flowr_storage::engine::{EngineStore, Record, RunPhase, RunQuery, TaskQueue};
 use flowr_storage::engine_memory::MemoryStore;
 use flowr_storage::StorageBackend;
@@ -26,7 +26,7 @@ async fn serve(store: Arc<dyn EngineStore>, token: &str) -> String {
 async fn the_remote_store_passes_the_conformance_suite() {
     flowr_storage::conformance::run_all(|| async {
         let url = serve(Arc::new(MemoryStore::new()), "tok").await;
-        RemoteEngineStore::new(&url, "tok")
+        remote(&url, "tok")
     })
     .await;
 }
@@ -34,7 +34,7 @@ async fn the_remote_store_passes_the_conformance_suite() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wrong_token_is_refused() {
     let url = serve(Arc::new(MemoryStore::new()), "right").await;
-    let r = RemoteEngineStore::new(&url, "wrong").pending("default").await;
+    let r = remote(&url, "wrong").pending("default").await;
     assert!(r.unwrap_err().to_string().contains("refused"));
 }
 
@@ -53,7 +53,7 @@ async fn a_runtime_runs_what_the_console_queues() {
     // the console's engine store over the gateway, working pool rt1.
     let rt_dir = tempfile::tempdir().unwrap();
     let runtime = flowr_ce::flowr_ce_storage::LanceStorage::new(rt_dir.path().join("rt.lance")).await.unwrap()
-        .with_engine(Arc::new(RemoteEngineStore::new(&url, "tok")));
+        .with_engine(Arc::new(remote(&url, "tok")));
     let runtime: Arc<dyn StorageBackend> = Arc::new(runtime);
     runtime.init().await.unwrap();
     runtime.workflows().register(WorkflowRecord::from_yaml(FLOW).unwrap()).await.unwrap();
@@ -94,7 +94,7 @@ async fn a_cancel_on_the_console_stops_a_run_on_a_runtime() {
     let url = serve(console.engine().unwrap(), "tok").await;
     let rt_dir = tempfile::tempdir().unwrap();
     let runtime = flowr_ce::flowr_ce_storage::LanceStorage::new(rt_dir.path().join("rt.lance")).await.unwrap()
-        .with_engine(Arc::new(RemoteEngineStore::new(&url, "tok")));
+        .with_engine(Arc::new(remote(&url, "tok")));
     let runtime: Arc<dyn StorageBackend> = Arc::new(runtime);
     runtime.init().await.unwrap();
     runtime.workflows().register(WorkflowRecord::from_yaml(NAP).unwrap()).await.unwrap();
