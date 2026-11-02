@@ -96,14 +96,6 @@
     const r = await putTrigger(it.id, { ...rest, targets: [...(rest.targets ?? []), { type: 'workflow', namespace: doc.ref.project, name: doc.ref.name }] });
     message = r.ok ? `Trigger ${it.name} now starts this flow too.` : r.error;
   }
-  // A click in the step palette asks for a step.
-  $effect(() => {
-    const req = doc.ui.addStep as { id: string; n: number } | undefined;
-    if (!req) return;
-    doc.ui.addStep = undefined;
-    const s = paletteStep(req.id);
-    if (s) addStep(s.base, s.task());
-  });
 
   /// Deploy: the pushed flow onto a runtime, where its canvas places it.
   let deployNote = $state('');
