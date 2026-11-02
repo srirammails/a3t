@@ -1,7 +1,8 @@
 import type { Item } from '../items';
 import type { ItemKind } from './types';
 import { flowKind } from './flow';
-import { agentKind, resourceKind, templateKind, triggerKind } from './registryItems';
+import { resourceKind, triggerKind } from './registryItems';
+import { agentKind, templateKind } from './agents';
 import { canvasKind, runtimeKind } from './operate';
 import { databaseKind } from './database';
 import { llmKind, mcpKind } from './act';

@@ -14,4 +14,6 @@ export { history, remember, saved, saveQuery, forget, type HistoryEntry, type Sa
 export { Workspace, emptyWorkspace, type Doc, type WorkspaceState } from './workspace';
 export { maskedPaths, getAt, setAt, removeAt, pathKey, fromText, toText, type Path } from './config';
 export { TYPES_BY_CATEGORY, startingConfig, categoryOf, typesLike } from './resourceTypes';
+export * as agentModel from './agent/model';
+export type { Visibility, AgentField } from './agent/model';
 export { loadInventory, namesIn, type Inventory, type TreeNode } from './inventory';

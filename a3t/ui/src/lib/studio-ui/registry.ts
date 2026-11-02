@@ -12,6 +12,9 @@ import ChatView from './views/ChatView.svelte';
 import ToolsView from './views/ToolsView.svelte';
 import TriggerView from './views/TriggerView.svelte';
 import CanvasView from './views/CanvasView.svelte';
+import AgentView from './views/AgentView.svelte';
+import AgentFormPanel from './panels/AgentFormPanel.svelte';
+import TemplateFieldsPanel from './panels/TemplateFieldsPanel.svelte';
 import RuntimeView from './views/RuntimeView.svelte';
 import FlowAssistPanel from './panels/FlowAssistPanel.svelte';
 import RunsPanel from './panels/RunsPanel.svelte';
@@ -30,6 +33,7 @@ export const VIEWS: Record<string, Component<any>> = {
   tools: ToolsView,
   trigger: TriggerView,
   canvas: CanvasView,
+  agent: AgentView,
   runtime: RuntimeView,
 };
 
@@ -37,6 +41,8 @@ export const PANELS: Record<string, Component<any>> = {
   'flow-form': FlowAssistPanel,
   ai: AiPanel,
   config: ConfigPanel,
+  'agent-form': AgentFormPanel,
+  'template-fields': TemplateFieldsPanel,
   runs: RunsPanel,
   problems: ProblemsPanel,
   results: ResultsPanel,

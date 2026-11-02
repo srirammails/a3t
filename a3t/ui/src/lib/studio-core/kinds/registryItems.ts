@@ -119,41 +119,6 @@ export const triggerKind: ItemKind = {
   remove: (it) => (it.id ? registry.removeTrigger(it.id) : Promise.resolve(fail('This trigger has no id'))),
 };
 
-/// Shown read-only here: saving a template changes the agents built from it,
-/// which its Console page (and later its own Studio view) handles.
-export const templateKind: ItemKind = {
-  id: 'template', label: 'Template', icon: '▤',
-  match: (it) => it.kind === 'template',
-  capabilities: ['delete'],
-  /// Its spec in the center, its other fields in the Form panel.
-  views: { center: 'template', code: 'code', right: FORM },
-  console: { section: 'templates', title: 'Templates' },
-  async load(doc) {
-    const r = doc.ref.id ? await config.getTemplate(doc.ref.id) : fail('This template has no id');
-    if (!r.ok) { doc.error = r.error; return; }
-    const { spec_yaml: _spec, ...rest } = r.data;
-    loaded(doc, toText(rest), r.data);
-  },
-  remove: (it) => (it.id ? registry.removeTemplate(it.id) : Promise.resolve(fail('This template has no id'))),
-};
-
-/// An agent: a template with its bindings. Read-only here; its Console page
-/// configures it.
-export const agentKind: ItemKind = {
-  id: 'agent', label: 'Agent', icon: '◉',
-  match: (it) => it.kind === 'agent',
-  capabilities: [],
-  views: configViews,
-  console: { section: 'agents', title: 'Agents' },
-  async load(doc) {
-    const r = await registry.listAgents();
-    if (!r.ok) { doc.error = r.error; return; }
-    const a = r.data.find((x: any) => x.id === doc.ref.id);
-    if (!a) { doc.error = 'The agent is no longer listed'; return; }
-    loaded(doc, toText(a), a);
-  },
-};
-
 /// Any resource no more specific kind claims.
 export const resourceKind: ItemKind = {
   id: 'resource', label: 'Resource', icon: '◆',

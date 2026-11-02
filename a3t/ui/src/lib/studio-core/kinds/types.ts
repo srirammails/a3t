@@ -34,6 +34,9 @@ export interface ItemKind {
   /// A new, unsaved item in `project` (the n-th this session); `type` picks the
   /// resource type for kinds that cover several.
   create?(project: string, n: number, type?: string): { ref: ItemRef; text: string; type?: string };
+  /// Asked before saving: a question to confirm with the user (e.g. "this
+  /// template is used by 3 agents"), or null to save without asking.
+  beforeSave?(doc: Doc): Promise<string | null>;
   /// Persist the document; answers where it now lives.
   save?(doc: Doc): Promise<Result<ItemRef>>;
   dirty?(doc: Doc): boolean;

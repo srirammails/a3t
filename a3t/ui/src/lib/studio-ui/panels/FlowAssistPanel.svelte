@@ -1,11 +1,13 @@
 <script lang="ts">
-  /// A flow's Form or AI panel (right region): the same document as the graph /
-  /// code view, edited through FlowEditorPane's form or designer chat.
+  /// The Form panel (right region) of a workflow document — a flow, or an agent
+  /// template, whose form is the agent template editor: the same text as the
+  /// graph / code view, edited through FlowEditorPane's form.
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
   import type { Doc } from '$lib/studio-core';
 
   let { id, doc }: { id: string; doc: Doc | null } = $props();
-  const flow = $derived(doc?.kind === 'flow' && (doc.loaded || doc.isNew) ? doc : null);
+  /// Only kinds whose documents are workflow YAML list this panel.
+  const flow = $derived(doc && (doc.loaded || doc.isNew) && !doc.error ? doc : null);
 </script>
 
 {#if flow}

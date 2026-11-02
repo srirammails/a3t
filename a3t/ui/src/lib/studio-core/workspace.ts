@@ -133,6 +133,8 @@ export class Workspace {
   async save(doc: Doc) {
     const kind = this.kindOf(doc);
     if (!kind.save) return { ok: false as const, error: `${kind.label} cannot be saved here` };
+    const ask = await kind.beforeSave?.(doc);
+    if (ask && !(await this.host.confirm(ask))) return { ok: false as const, error: 'Not saved.' };
     const r = await kind.save(doc);
     if (r.ok) this.retarget(doc, r.data);
     return r;
