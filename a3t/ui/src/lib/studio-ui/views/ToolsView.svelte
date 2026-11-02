@@ -2,6 +2,7 @@
   /// An MCP server's Tools view: the tools it offers (listed on open), and
   /// calling one with arguments — a form from the tool's input schema, or JSON.
   /// A call runs the tool for real on that server.
+  import EditButton from '../parts/EditButton.svelte';
   import ConfigForm from '../parts/ConfigForm.svelte';
   import { fromText, toText, type Doc, type Tool, type Workspace } from '$lib/studio-core';
 
@@ -54,6 +55,7 @@
     <span class="kind">{kind.label}</span>
     <span class="mono">{doc.ref.project}/{doc.ref.name}</span>
     <span class="grow"></span>
+    <EditButton {doc} {workspace} />
     <button class="btn ghost sm" disabled={doc.ui.listing} onclick={list}>{doc.ui.listing ? 'Listing…' : '↻ List tools'}</button>
   </div>
 

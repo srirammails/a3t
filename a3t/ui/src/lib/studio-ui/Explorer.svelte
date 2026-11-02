@@ -69,7 +69,7 @@
   const isActive = (it: Item) => !!activeRef && address(activeRef) === address(it);
 
   // ── Context menu: an item's actions, or a folder's ──
-  type Menu = { x: number; y: number; item?: Item; folder?: { project: string; label: string; create?: string } };
+  type Menu = { x: number; y: number; item?: Item; folder?: { project: string; label: string; create?: TreeNode['create'] } };
   let menu = $state<Menu | null>(null);
   /// The outcome of the last action, shown under the tools.
   let notice = $state<{ ok: boolean; text: string } | null>(null);
@@ -84,7 +84,10 @@
     if (e.key === 'F2' && kind.rename) { e.preventDefault(); askName('rename', it); }
     else if (e.key === 'Delete' && kind.remove) { e.preventDefault(); delTarget = it; }
   }
-  const newIn = (project: string, kindId: string) => workspace.create(kindId, project);
+  const newIn = (project: string, c: NonNullable<TreeNode['create']>) => workspace.create(c.kind, project, c.type);
+  /// Click: the item's own view. Double-click / Edit: the item as code.
+  const openIt = (it: Item) => workspace.open(it, { view: 'action' });
+  const editIt = (it: Item) => workspace.open(it, { view: 'code' });
 
   /// Items drag as their address and the item itself (a flow onto a canvas…).
   function drag(e: DragEvent, it: Item) {
@@ -178,7 +181,7 @@
       {#if n.item}
         {@const it = n.item}
         {@const kind = kindFor(it)}
-        <button class="row leaf" class:on={isActive(it)} style="padding-left: {10 + depth * 14}px" onclick={() => workspace.open(it)} title="{kind.label} {it.project}/{n.label}"
+        <button class="row leaf" class:on={isActive(it)} style="padding-left: {10 + depth * 14}px" onclick={() => openIt(it)} ondblclick={() => editIt(it)} title="{kind.label} {it.project}/{n.label} — double-click to edit"
           draggable="true" ondragstart={(e) => drag(e, it)}
           oncontextmenu={(e) => openMenu(e, { item: it })} onkeydown={(e) => rowKey(e, it)}>
           <span class="ic {it.kind}">{kind.icon}</span><span class="nm">{n.label}</span>
@@ -190,7 +193,7 @@
           <button class="row folder" onclick={() => toggle(n.key, def)}>
             <span class="tw">{isOpen ? '▾' : '▸'}</span><span class="nm">{n.label}</span><span class="ct">{n.count ?? ''}</span>
           </button>
-          {#if n.create}{@const c = n.create}<button class="add" title="New {c}" onclick={() => newIn(project, c)}>+</button>{/if}
+          {#if n.create}{@const c = n.create}<button class="add" title="New in {n.label}" onclick={() => newIn(project, c)}>+</button>{/if}
         </div>
         {#if isOpen}
           <ul>
@@ -210,7 +213,8 @@
     {#if it}
       {@const kind = kindFor(it)}
       <div class="cm-head"><span>{it.name}</span><code>{kind.label.toLowerCase()} · {it.project}</code></div>
-      <button role="menuitem" onclick={() => act(() => workspace.open(it))}><span class="cm-ic">✎</span>{can(kind, 'edit') ? 'Edit' : 'Open'}</button>
+      <button role="menuitem" onclick={() => act(() => openIt(it))}><span class="cm-ic">▸</span>Open</button>
+      <button role="menuitem" onclick={() => act(() => editIt(it))}><span class="cm-ic">✎</span>{can(kind, 'edit') ? 'Edit' : 'View as code'}</button>
       {#if kind.console}
         {@const c = kind.console}
         <button role="menuitem" onclick={() => act(() => workspace.host.openConsole(c.section, c.title))}><span class="cm-ic">↗</span>Edit in {c.title}</button>
@@ -230,7 +234,7 @@
       {@const f = menu.folder}
       {#if f.create}
         {@const c = f.create}
-        <button role="menuitem" onclick={() => act(() => newIn(f.project, c))}><span class="cm-ic">+</span>New {c}</button>
+        <button role="menuitem" onclick={() => act(() => newIn(f.project, c))}><span class="cm-ic">+</span>New in {f.label}</button>
       {/if}
       <button role="menuitem" onclick={() => act(() => load())}><span class="cm-ic">↻</span>Refresh</button>
     {/if}

@@ -10,8 +10,8 @@ const LLM_TYPES = new Set(['llm', 'openai', 'anthropic', 'ollama', 'groq']);
 export const llmKind: ItemKind = {
   id: 'llm', label: 'LLM', icon: '✦',
   match: (it) => it.kind === 'resource' && LLM_TYPES.has(it.type ?? ''),
-  capabilities: ['edit', 'delete', 'chat'],
-  views: { center: 'chat', right: FORM },
+  capabilities: ['edit', 'create', 'delete', 'chat'],
+  views: { center: 'chat', code: 'code', right: FORM },
   console: { section: 'resources', title: 'Resources' },
   initialUi: () => ({ messages: [], draft: '', sending: false, error: '' }),
   ...resourceConfig,
@@ -22,8 +22,8 @@ export const llmKind: ItemKind = {
 export const mcpKind: ItemKind = {
   id: 'mcp', label: 'MCP server', icon: '⚙',
   match: (it) => it.kind === 'resource' && it.type === 'mcp',
-  capabilities: ['edit', 'delete', 'tools'],
-  views: { center: 'tools', right: FORM },
+  capabilities: ['edit', 'create', 'delete', 'tools'],
+  views: { center: 'tools', code: 'code', right: FORM },
   console: { section: 'resources', title: 'Resources' },
   initialUi: () => ({ tools: null, listing: false, error: '', tool: '', args: '{}', calling: false, result: null }),
   ...resourceConfig,

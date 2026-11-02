@@ -1,22 +1,25 @@
 <script lang="ts">
   /// The Studio's frame: the shell's regions with the Explorer on the left, open
   /// documents in tabs in the middle, and the right and bottom panels of the
-  /// active document's kind.
-  import type { Snippet } from 'svelte';
+  /// active document's kind. Any panel can be dragged to another region or into
+  /// the editor area as a tab; closing it there sends it home, minimized. The
+  /// Studio has its own context menu everywhere instead of the browser's.
+  import { untrack, type Snippet } from 'svelte';
   import StudioShell from './StudioShell.svelte';
   import Explorer from './Explorer.svelte';
   import DocTabs from './DocTabs.svelte';
+  import ContextMenu, { type MenuItem } from './parts/ContextMenu.svelte';
   import { VIEWS, PANELS } from './registry';
-  import type { Studio } from './layout.svelte.ts';
-  import { kindById, type Workspace } from '$lib/studio-core';
+  import type { RegionId, Studio } from './layout.svelte.ts';
+  import { kindById, type PanelDef, type Workspace } from '$lib/studio-core';
 
   let { studio, workspace, homeKind, create = [], home, lead, pin }: {
     studio: Studio;
     workspace: Workspace;
     /// The kind whose panels show while no document (or one without panels) is active.
     homeKind: string;
-    /// Kinds the tab bar offers "+ New …" for.
-    create?: string[];
+    /// What the tab bar's "+ New" offers (the first as its button, all in its menu).
+    create?: { kind: string; type?: string; label: string }[];
     /// Shown in the editor area with nothing open.
     home?: Snippet;
     /// The host's controls at the start of the tab bar.
@@ -28,54 +31,201 @@
   const active = $derived(workspace.active);
   const kind = $derived(active ? workspace.kindOf(active) : null);
   const fallback = $derived(kindById(homeKind));
-  const right = $derived(kind?.views.right ?? fallback.views.right ?? []);
-  const bottom = $derived(kind?.views.bottom ?? fallback.views.bottom ?? []);
 
-  const tabs = $derived(workspace.state.docs.map((d) => {
+  // ── Panels: each has a home region; the user may have moved it ──
+  type Placed = PanelDef & { home: RegionId };
+  const panels = $derived<Placed[]>([
+    { id: 'explorer', title: 'Explorer', home: 'left' },
+    // An open item's own panels; the home kind's only while nothing is open.
+    ...((kind ? kind.views.right : fallback.views.right) ?? []).map((p) => ({ ...p, home: 'right' as const })),
+    ...((kind ? kind.views.bottom : fallback.views.bottom) ?? []).map((p) => ({ ...p, home: 'bottom' as const })),
+  ]);
+  const where = (p: Placed) => studio.state.placement[p.id] ?? p.home;
+  const inRegion = (r: RegionId | 'center') => panels.filter((p) => where(p) === r);
+  const left = $derived(inRegion('left'));
+  const right = $derived(inRegion('right'));
+  const bottom = $derived(inRegion('bottom'));
+  const centered = $derived(inRegion('center'));
+  /// The panel shown in the editor area instead of the document, if any.
+  const centerPanel = $derived(centered.find((p) => p.id === studio.state.centerPanel) ?? null);
+  const badge = (id: string) => (active ? kind?.badge?.(active, id) ?? null : null);
+
+  const tabs = $derived([
+    ...workspace.state.docs.map((d) => {
+      const k = workspace.kindOf(d);
+      return { id: d.address, title: k.title?.(d) ?? d.ref.name, icon: k.icon, hint: `${k.label} ${d.ref.project}/${d.ref.name}`, dirty: workspace.isDirty(d) };
+    }),
+    ...centered.map((p) => ({ id: `panel:${p.id}`, title: p.title, icon: '▤', hint: `${p.title} panel — close to send it back` })),
+  ]);
+  const activeTab = $derived(centerPanel ? `panel:${centerPanel.id}` : workspace.state.active);
+  // Opening or switching documents (Explorer, Recent, a link) brings documents back to the front.
+  let lastActive = untrack(() => workspace.state.active);
+  $effect(() => {
+    const now = workspace.state.active;
+    if (now !== lastActive) { lastActive = now; studio.state.centerPanel = null; }
+  });
+
+  function selectTab(id: string) {
+    if (id.startsWith('panel:')) { studio.state.centerPanel = id.slice(6); return; }
+    studio.state.centerPanel = null;
+    workspace.select(id);
+  }
+  function closeTab(id: string) {
+    if (id.startsWith('panel:')) {
+      const p = panels.find((x) => x.id === id.slice(6));
+      if (p) studio.unplace(p.id, p.home);
+      return;
+    }
+    void workspace.close(id);
+  }
+
+  const project = () => workspace.host.scope.current() ?? workspace.host.scope.projects()[0] ?? 'a3t';
+  const newDoc = (c: { kind: string; type?: string }) => { newMenu = false; studio.state.centerPanel = null; workspace.create(c.kind, project(), c.type); };
+  let newMenu = $state(false);
+
+  // ── Context menu: the Studio's own, wherever the user right-clicks ──
+  let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+  function oncontextmenu(e: MouseEvent) {
+    // Parts with their own menu (Explorer rows, the flow graph) handle it first.
+    if (e.defaultPrevented) return;
+    e.preventDefault();
+    const el = e.target as HTMLElement;
+    const items: MenuItem[] = [];
+    const field = el.closest('input, textarea, .cm-editor') as HTMLElement | null;
+    if (field) items.push(...editItems(field), 'sep');
+    const tab = (el.closest('[data-tab]') as HTMLElement | null)?.dataset.tab;
+    const panel = (el.closest('[data-panel]') as HTMLElement | null)?.dataset.panel;
+    if (tab) items.push(...tabItems(tab));
+    else if (panel) items.push(...panelItems(panel));
+    else if (el.closest('.center-body')) items.push(...(centerPanel ? panelItems(centerPanel.id) : docItems()));
+    if (items.length) menu = { x: e.clientX, y: e.clientY, items };
+  }
+
+  function docItems(): MenuItem[] {
+    const d = active;
+    if (!d || !kind) return [];
+    const code = d.ui.view === 'code';
+    return [
+      ...(kind.views.code && kind.views.code !== kind.views.center
+        ? [code ? { label: 'Back to its view', icon: '←', run: () => workspace.view(d, 'action') } : { label: 'Edit as code', icon: '</>', run: () => workspace.view(d, 'code') }]
+        : []),
+      { label: 'Save', icon: '⤓', kbd: 'Ctrl+S', disabled: !kind.save || !workspace.isDirty(d), run: () => void workspace.save(d) },
+      'sep',
+      { label: 'Copy name', icon: '⎘', run: () => void workspace.host.clipboard(d.ref.name) },
+      { label: 'Close', icon: '×', run: () => void workspace.close(d.address) },
+    ];
+  }
+
+  function tabItems(id: string): MenuItem[] {
+    if (id.startsWith('panel:')) return panelItems(id.slice(6));
+    const d = workspace.find(id);
+    if (!d) return [];
     const k = workspace.kindOf(d);
-    return { id: d.address, title: k.title?.(d) ?? d.ref.name, icon: k.icon, hint: `${k.label} ${d.ref.project}/${d.ref.name}`, dirty: workspace.isDirty(d) };
-  }));
+    const others = workspace.state.docs.filter((x) => x.address !== id).map((x) => x.address);
+    return [
+      { label: 'Open', icon: '▸', run: () => { studio.state.centerPanel = null; workspace.open({ ...d.ref, type: d.type }, { view: 'action' }); } },
+      ...(k.views.code ? [{ label: 'Edit as code', icon: '</>', run: () => { studio.state.centerPanel = null; workspace.open({ ...d.ref, type: d.type }, { view: 'code' }); } }] : []),
+      { label: 'Save', icon: '⤓', disabled: !k.save || !workspace.isDirty(d), run: () => void workspace.save(d) },
+      'sep',
+      { label: 'Copy name', icon: '⎘', run: () => void workspace.host.clipboard(d.ref.name) },
+      'sep',
+      { label: 'Close', icon: '×', run: () => void workspace.close(id) },
+      { label: 'Close others', disabled: !others.length, run: () => void closeAll(others) },
+      { label: 'Close all', run: () => void closeAll(workspace.state.docs.map((x) => x.address)) },
+    ];
+  }
+  async function closeAll(ids: string[]) {
+    for (const id of ids) if (!(await workspace.close(id))) break;
+  }
 
-  const newDoc = (kindId: string) => workspace.create(kindId, workspace.host.scope.current() ?? workspace.host.scope.projects()[0] ?? 'a3t');
+  function panelItems(id: string): MenuItem[] {
+    const p = panels.find((x) => x.id === id);
+    if (!p) return [];
+    const at = where(p);
+    const to = (r: RegionId | 'center', label: string): MenuItem => ({ label, icon: '↦', disabled: at === r, run: () => studio.place(id, r) });
+    return [
+      to('left', 'Move to the left'), to('right', 'Move to the right'), to('bottom', 'Move to the bottom'), to('center', 'Open in the editor area'),
+      { label: `Back to the ${p.home}`, icon: '↺', disabled: at === p.home, run: () => studio.unplace(id, p.home) },
+      'sep',
+      ...(at === 'center' ? [] : [
+        { label: 'Minimize', icon: '⇲', run: () => studio.minimize(at as RegionId) },
+        { label: studio.state.maximized === id ? 'Restore' : 'Maximize', icon: '⤢', run: () => studio.toggleMaximize(id) },
+      ]),
+    ];
+  }
+
+  /// Cut / copy / paste / select all for text fields and code editors.
+  function editItems(field: HTMLElement): MenuItem[] {
+    const input = field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement ? field : null;
+    const editor = field.closest('.cm-editor')?.querySelector('.cm-content') as HTMLElement | null;
+    const target = input ?? editor;
+    const selected = () => (input ? input.value.slice(input.selectionStart ?? 0, input.selectionEnd ?? 0) : window.getSelection()?.toString() ?? '');
+    const readonly = input ? input.readOnly || input.disabled : editor?.getAttribute('contenteditable') !== 'true';
+    const focus = () => target?.focus();
+    return [
+      { label: 'Cut', icon: '✂', disabled: readonly || !selected(), run: () => { focus(); void workspace.host.clipboard(selected()); document.execCommand('delete'); } },
+      { label: 'Copy', icon: '⎘', disabled: !selected(), run: () => void workspace.host.clipboard(selected()) },
+      { label: 'Paste', icon: '⎀', disabled: readonly, run: async () => { const t = await navigator.clipboard?.readText?.(); focus(); if (t) document.execCommand('insertText', false, t); } },
+      { label: 'Select all', icon: '⬚', run: () => { focus(); if (input) input.select(); else document.execCommand('selectAll'); } },
+    ];
+  }
 </script>
 
-<div class="wb">
+<div class="wb" {oncontextmenu} role="presentation">
   <StudioShell
     {studio}
-    left={{ panels: [{ id: 'explorer', title: 'Explorer' }], panel: leftPanel }}
-    right={right.length ? { panels: right, panel: sidePanel } : undefined}
-    bottom={bottom.length ? { panels: bottom, panel: sidePanel, badge: (id) => (active ? kind?.badge?.(active, id) ?? null : null) } : undefined}
+    left={left.length ? { panels: left, panel: panelBody, badge } : undefined}
+    right={right.length ? { panels: right, panel: panelBody, badge } : undefined}
+    bottom={bottom.length ? { panels: bottom, panel: panelBody, badge } : undefined}
     center={centerArea}
   />
 </div>
 
-{#snippet leftPanel(_id: string)}
-  <Explorer {workspace} {pin} />
-{/snippet}
+{#if menu}<ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />{/if}
 
-{#snippet sidePanel(id: string)}
-  {@const def = [...right, ...bottom].find((p) => p.id === id)}
-  {@const P = PANELS[def?.component ?? id]}
-  {#if P}<P {id} doc={active} {workspace} {studio} />{/if}
+{#snippet panelBody(id: string)}
+  {#if id === 'explorer'}
+    <Explorer {workspace} {pin} />
+  {:else}
+    {@const def = panels.find((p) => p.id === id)}
+    {@const P = PANELS[def?.component ?? id]}
+    {#if P}<P {id} doc={active} {workspace} {studio} />{/if}
+  {/if}
 {/snippet}
 
 {#snippet centerArea()}
   <div class="center-head">
     {@render lead?.()}
-    <DocTabs {studio} {tabs} active={workspace.state.active} onselect={(id) => workspace.select(id)} onclose={(id) => void workspace.close(id)}>
+    <DocTabs {studio} {tabs} active={activeTab} onselect={selectTab} onclose={closeTab}>
       {#snippet actions()}
-        {#each create as c (c)}
-          <button class="new" onclick={() => newDoc(c)} title="New {kindById(c).label.toLowerCase()}">+ New {kindById(c).label.toLowerCase()}</button>
-        {/each}
+        {#if create.length}
+          <span class="newwrap">
+            <button class="new" onclick={() => newDoc(create[0])} title="New {create[0].label}">+ New {create[0].label}</button>
+            {#if create.length > 1}
+              <button class="new caret" onclick={() => (newMenu = !newMenu)} aria-label="New…" aria-haspopup="menu" aria-expanded={newMenu}>▾</button>
+              {#if newMenu}
+                <div class="nm-overlay" role="presentation" onclick={() => (newMenu = false)}></div>
+                <div class="nm" role="menu">
+                  {#each create as c (`${c.kind}/${c.type ?? ''}`)}
+                    <button role="menuitem" onclick={() => newDoc(c)}><span class="ic">{kindById(c.kind).icon}</span>{c.label}</button>
+                  {/each}
+                </div>
+              {/if}
+            {/if}
+          </span>
+        {/if}
       {/snippet}
     </DocTabs>
   </div>
   <div class="center-body">
-    {#if !active || !kind}
+    {#if centerPanel}
+      <div class="center-panel" data-panel={centerPanel.id}>{@render panelBody(centerPanel.id)}</div>
+    {:else if !active || !kind}
       {@render home?.()}
     {:else}
       {#key active.address}
-        {@const V = VIEWS[kind.views.center]}
+        {@const V = VIEWS[active.ui.view === 'code' && kind.views.code ? kind.views.code : kind.views.center]}
         {#if V}<V doc={active} {workspace} {studio} />{/if}
       {/key}
     {/if}
@@ -88,6 +238,15 @@
   .center-head :global(.tabs) { flex: 1; border-bottom: 0; }
   .center-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .center-body > :global(*) { flex: 1; min-height: 0; }
+  .center-panel { display: flex; flex-direction: column; overflow: auto; }
   .new { border: 0; background: transparent; color: var(--spec); font-size: 12px; padding: 0 10px; cursor: pointer; white-space: nowrap; }
   .new:hover { background: var(--bg-subtle); }
+  .newwrap { position: relative; display: inline-flex; align-self: stretch; }
+  .new.caret { padding: 0 6px; }
+  .nm-overlay { position: fixed; inset: 0; z-index: 90; }
+  .nm { position: absolute; right: 0; top: 100%; z-index: 91; min-width: 200px; display: flex; flex-direction: column; padding: 4px;
+        background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); }
+  .nm button { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 6px 10px; border-radius: 4px; cursor: pointer; text-align: left; font-size: 12.5px; color: var(--text-1); }
+  .nm button:hover { background: var(--bg-subtle); }
+  .nm .ic { width: 16px; text-align: center; color: var(--text-3); }
 </style>

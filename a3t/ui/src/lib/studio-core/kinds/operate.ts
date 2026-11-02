@@ -17,7 +17,7 @@ export const canvasKind: ItemKind = {
   capabilities: ['edit', 'create', 'delete'],
   /// Attach a flow and deploy it in the center; its placement, lifecycle and
   /// health in the Form panel.
-  views: { center: 'canvas', right: FORM },
+  views: { center: 'canvas', code: 'code', right: FORM },
   console: { section: 'canvas', title: 'Canvas' },
   load: resourceConfig.load,
   masked: resourceConfig.masked,
@@ -44,9 +44,9 @@ export const canvasKind: ItemKind = {
 export const runtimeKind: ItemKind = {
   id: 'runtime', label: 'Runtime', icon: '▣',
   match: (it) => it.kind === 'resource' && it.type === 'runtime',
-  capabilities: ['edit', 'delete'],
+  capabilities: ['edit', 'create', 'delete'],
   /// What is deployed on it and its state in the center; its pool config (labels…) in the Form panel.
-  views: { center: 'runtime', right: FORM },
+  views: { center: 'runtime', code: 'code', right: FORM },
   console: { section: 'runtime', title: 'Runtimes' },
   ...resourceConfig,
   remove: (it) => removeResource(it.project, it.name),

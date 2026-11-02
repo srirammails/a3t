@@ -39,6 +39,7 @@
     onrun,
     onshowrun,
     toolbar,
+    showCode,
   }: {
     initialYaml: string;
     onchange?: (val: string) => void;
@@ -68,6 +69,8 @@
     /// Context menu → Run / Debug, and → show a step in the Runs panel.
     onrun?: (debug: boolean) => void;
     onshowrun?: () => void;
+    /// Bump to switch the main view to Code (the Studio's Edit / double-click).
+    showCode?: number;
     /// Host content for the Graph | Code toolbar (`main` only), after the tabs —
     /// the studio puts the flow's name and Run/Deploy here instead of a bar of its own.
     toolbar?: Snippet;
@@ -80,11 +83,12 @@
     control: ControlNode, join: JoinNode, flowMarker: FlowMarkerNode,
   };
 
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import DesignerChat from '$lib/components/editor/DesignerChat.svelte';
 
   // ── Internal state ──
-  let leftMode = $state<'graph' | 'code'>('graph');
+  let leftMode = $state<'graph' | 'code'>(untrack(() => (showCode ? 'code' : 'graph')));
+  $effect(() => { if (showCode) leftMode = 'code'; });
   let rightMode = $state<'form' | 'ai'>('form');
   // Single-column hosts drive one selection across all three views.
   let soloMode = $state<'graph' | 'code' | 'form'>('graph');

@@ -35,7 +35,10 @@
         <div class="err">The settings are not a JSON object{parsed.error ? `: ${parsed.error}` : ''} — fix them in the code view.</div>
       {:else}
         {#if !kind.save}<div class="ro">Read-only here{kind.console ? ` — edit in ${kind.console.title}` : ''}.</div>{/if}
-        <ConfigForm value={parsed.value} readonly={!kind.save} {masked} stack onchange={(v) => (doc.text = toText(v))} />
+        <!-- A fresh form per item: nothing half-typed carries over. -->
+        {#key doc.address}
+          <ConfigForm value={parsed.value} readonly={!kind.save} {masked} stack onchange={(v) => (doc.text = toText(v))} />
+        {/key}
       {/if}
     </div>
   </div>

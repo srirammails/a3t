@@ -1,14 +1,28 @@
 <script lang="ts">
-  /// The center view for items with no action of their own yet: their config
-  /// as code (JSON), beside the Form panel's form of the same document.
+  /// An item as code: its config as JSON, edited beside the Form panel's form of
+  /// the same document. Items with no action of their own show here; others come
+  /// here with Edit (or a double-click) and go back with ←. A new item is named
+  /// (and, for resources, typed) here before its first save.
   import YamlEditor from '$lib/components/editor/YamlEditor.svelte';
   import SaveBar from '../parts/SaveBar.svelte';
-  import { fromText, type Doc, type Workspace } from '$lib/studio-core';
+  import EditButton from '../parts/EditButton.svelte';
+  import { fromText, startingConfig, toText, typesLike, type Doc, type Workspace } from '$lib/studio-core';
 
   let { doc, workspace }: { doc: Doc; workspace: Workspace } = $props();
 
   const kind = $derived(workspace.kindOf(doc));
   const parsed = $derived(fromText(doc.text));
+  /// A new resource or canvas is named here (kinds named in their text are not).
+  const namedHere = $derived(!!doc.isNew && !kind.nameInText);
+  const nameProblem = $derived(namedHere ? kind.checkName?.(doc.ref.name) ?? '' : '');
+  const types = $derived(doc.isNew && doc.type ? typesLike(doc.type) : []);
+
+  /// Another type for a new resource; its starting config too, unless edited.
+  function retype(t: string) {
+    const untouched = (doc.text ?? '') === toText(startingConfig(doc.type ?? ''));
+    doc.type = t;
+    if (untouched) doc.text = toText(startingConfig(t));
+  }
 
   $effect(() => {
     if (!doc.loaded) void workspace.load(doc);
@@ -17,14 +31,25 @@
 
 <div class="cd">
   <div class="head">
-    <span class="kind">{kind.label}{doc.type ? ` · ${doc.type}` : ''}</span>
-    <span class="mono">{doc.ref.project}/{doc.ref.name}</span>
+    <span class="kind">{doc.isNew ? `New ${kind.label.toLowerCase()}` : kind.label}{doc.type && !types.length ? ` · ${doc.type}` : ''}</span>
+    {#if types.length > 1}
+      <select class="type" value={doc.type} onchange={(e) => retype(e.currentTarget.value)} title="Type">
+        {#each types as t (t.type)}<option value={t.type}>{t.label}</option>{/each}
+      </select>
+    {/if}
+    {#if namedHere}
+      <span class="mono dim">{doc.ref.project}/</span><input class="name" bind:value={doc.ref.name} spellcheck="false" title="Name" />
+      {#if nameProblem}<span class="bad">{nameProblem}</span>{/if}
+    {:else}
+      <span class="mono">{doc.ref.project}/{doc.ref.name}</span>
+    {/if}
     <span class="grow"></span>
+    <EditButton {doc} {workspace} />
     {#if kind.console}
       {@const c = kind.console}
       <button class="btn ghost sm" onclick={() => workspace.host.openConsole(c.section, c.title)}>Open in {c.title}</button>
     {/if}
-    <SaveBar {doc} {workspace} valid={!parsed.error} />
+    <SaveBar {doc} {workspace} valid={!parsed.error && !nameProblem} />
   </div>
   {#if !doc.loaded}
     <div class="note">Loading {doc.ref.name}…</div>
@@ -42,6 +67,10 @@
   .kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
   .mono { font-family: var(--font-mono); font-size: 12.5px; }
   .grow { flex: 1; }
+  .dim { color: var(--text-4); }
+  .name { font-family: var(--font-mono); font-size: 12.5px; padding: 4px 8px; width: 200px; flex: 0 1 200px; min-width: 120px; }
+  .type { font-size: 12px; padding: 3px 24px 3px 6px; width: auto; flex: 0 0 auto; }
+  .bad { color: var(--err, #b42318); font-size: 11.5px; }
   .code { flex: 1; min-height: 0; display: flex; }
   .code > :global(*) { flex: 1; }
   .note { padding: 14px; color: var(--text-4); font-size: 12.5px; }

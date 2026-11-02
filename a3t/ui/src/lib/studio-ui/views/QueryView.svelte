@@ -2,6 +2,7 @@
   /// A database's Query view: write a statement in the database's language and
   /// run it (Run or Ctrl/⌘+Enter); the answer shows in the Results panel. The
   /// draft is kept per database; runs go to History; Save keeps a query by name.
+  import EditButton from '../parts/EditButton.svelte';
   import SqlEditor from '$lib/components/editor/SqlEditor.svelte';
   import { languagesOf, type Doc, type Workspace } from '$lib/studio-core';
   import type { Studio } from '../layout.svelte.ts';
@@ -67,6 +68,7 @@
       <span class="lang">{lang.label}</span>
     {/if}
     <span class="grow"></span>
+    <EditButton {doc} {workspace} />
     {#if naming !== null}
       <!-- svelte-ignore a11y_autofocus -->
       <input class="name" placeholder="name this query" bind:value={naming} autofocus

@@ -16,6 +16,12 @@ export const getResource = (project: string, name: string): Promise<Result<Resou
     return ok({ ...r.data, type: r.data.type ?? r.data.type_ref ?? '', config: r.data.config ?? {} });
   });
 
+export const createResource = (project: string, name: string, type: string, config: unknown): Promise<Result> =>
+  safely(`create ${name}`, async () => {
+    const r = result(await mcpCall('create_resource', { name, namespace: project, type_ref: type, config }), `Create ${name}`);
+    return r.ok ? ok(undefined) : r;
+  });
+
 /// The registry replaces the config; masked values sent back unchanged keep what is stored.
 export const putResource = (project: string, name: string, config: unknown): Promise<Result> =>
   safely(`save ${name}`, async () => {

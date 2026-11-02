@@ -19,10 +19,11 @@ export interface ItemKind {
   icon: string;
   match(item: Item): boolean;
   capabilities: Capability[];
-  /// Where it shows: `center` names the studio-ui view for acting on it (edit
-  /// code, run, query, chat, fire…); `right` holds its Form (config) and helpers;
+  /// Where it shows: `center` names the studio-ui view for acting on it (run,
+  /// query, chat, fire, design…); `code` the view for editing it as code (Edit,
+  /// double-click; `doc.ui.view = 'code'`); `right` holds its Form and AI;
   /// `bottom` what acting produces (runs, results…).
-  views: { center: string; right?: PanelDef[]; bottom?: PanelDef[] };
+  views: { center: string; code?: string; right?: PanelDef[]; bottom?: PanelDef[] };
   /// The Console section where this kind is managed in full, if any.
   console?: { section: string; title: string };
 
@@ -30,8 +31,9 @@ export interface ItemKind {
   initialUi?(): Record<string, unknown>;
   /// Fill an opened document from the platform (text, data).
   load?(doc: Doc): Promise<void>;
-  /// A new, unsaved item in `project` (the n-th this session).
-  create?(project: string, n: number): { ref: ItemRef; text: string };
+  /// A new, unsaved item in `project` (the n-th this session); `type` picks the
+  /// resource type for kinds that cover several.
+  create?(project: string, n: number, type?: string): { ref: ItemRef; text: string; type?: string };
   /// Persist the document; answers where it now lives.
   save?(doc: Doc): Promise<Result<ItemRef>>;
   dirty?(doc: Doc): boolean;
@@ -55,6 +57,9 @@ export interface ItemKind {
   remove?(item: Item): Promise<Result>;
   rename?(item: Item, to: string): Promise<Result>;
   duplicate?(item: Item, to: string): Promise<Result>;
+  /// The item's name is a field of its text (flows' `document.name`, a
+  /// trigger's `name`), not typed separately when it is new.
+  nameInText?: boolean;
   /// Why a name is not acceptable, or '' when it is.
   checkName?(name: string): string;
   /// Shown when renaming: what a rename does and does not carry over.

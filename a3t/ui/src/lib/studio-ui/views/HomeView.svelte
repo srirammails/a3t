@@ -2,7 +2,7 @@
   /// The Studio with nothing open: what it is for (the banner, like the Console's
   /// section pages), "+ New …", and the items opened lately.
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
-  import { kindById, kindFor, type Workspace } from '$lib/studio-core';
+  import { kindFor, type Workspace } from '$lib/studio-core';
   import type { StudioConfig } from '../studios';
 
   let { config, workspace }: { config: StudioConfig; workspace: Workspace } = $props();
@@ -17,8 +17,8 @@
 
   {#if config.create.length}
     <div class="actions">
-      {#each config.create as c (c)}
-        <button class="btn spec sm" onclick={() => workspace.create(c, project())}>+ New {kindById(c).label.toLowerCase()}</button>
+      {#each config.create as c, i (`${c.kind}/${c.type ?? ''}`)}
+        <button class="btn {i === 0 ? 'spec' : 'ghost'} sm" onclick={() => workspace.create(c.kind, project(), c.type)}>+ {c.label}</button>
       {/each}
     </div>
   {/if}
@@ -44,7 +44,7 @@
 
 <style>
   .home { overflow-y: auto; padding: 20px 32px 40px; }
-  .actions { margin: -8px 0 20px; display: flex; gap: 8px; }
+  .actions { margin: -8px 0 20px; display: flex; gap: 8px; flex-wrap: wrap; }
   h3 { font-family: var(--font-serif); font-size: 16px; font-weight: 500; color: var(--text-2); margin: 0 0 8px; }
   .recent { list-style: none; margin: 0; padding: 0; max-width: 720px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-surface); }
   .recent li + li { border-top: 1px solid var(--border); }

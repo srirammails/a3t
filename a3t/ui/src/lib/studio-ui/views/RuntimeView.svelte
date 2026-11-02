@@ -3,6 +3,7 @@
   /// on it — each deployment's serving state and runs, with pause / resume /
   /// restart / undeploy. Runtime-wide pause / resume / hibernate for admins. Its
   /// pool config (labels, default, url) is in the Form panel.
+  import EditButton from '../parts/EditButton.svelte';
   import KeyValues from '../parts/KeyValues.svelte';
   import { ops, type DeploymentAction, type DeploymentRow, type Doc, type RuntimeAction, type RuntimeEntry, type Workspace } from '$lib/studio-core';
 
@@ -62,6 +63,7 @@
     {#if entry}<span class="pill {entry.state}">{entry.state}</span>{/if}
     {#if entry?.runtime.default}<span class="pill">default</span>{/if}
     <span class="grow"></span>
+    <EditButton {doc} {workspace} />
     {#if entry?.canControl}
       {#if entry.state === 'active'}
         <button class="btn ghost sm" disabled={!!busy} onclick={() => runtimeAct('pause')}>Pause runtime</button>

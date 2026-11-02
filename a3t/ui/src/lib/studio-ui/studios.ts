@@ -7,8 +7,8 @@ export type StudioConfig = {
   app: string;
   /// The kind whose panels show while nothing (or a kind without panels) is open.
   homeKind: string;
-  /// Kinds "+ New" creates.
-  create: string[];
+  /// What "+ New" creates: a kind (and resource type), with its label.
+  create: { kind: string; type?: string; label: string }[];
   layout?: Partial<StudioLayout>;
   /// A resource category the Explorer shows first, open (e.g. `database`).
   pin?: string;
@@ -23,11 +23,23 @@ export type StudioConfig = {
   };
 };
 
+/// Everything the Studio can create, for its "+ New" menu.
+const NEW_ANYTHING: StudioConfig['create'] = [
+  { kind: 'flow', label: 'workflow' },
+  { kind: 'database', type: 'postgres', label: 'database' },
+  { kind: 'llm', type: 'openai', label: 'LLM' },
+  { kind: 'mcp', type: 'mcp', label: 'MCP server' },
+  { kind: 'resource', type: 'secret', label: 'secret' },
+  { kind: 'trigger', label: 'trigger' },
+  { kind: 'canvas', label: 'canvas' },
+  { kind: 'runtime', type: 'runtime', label: 'runtime pool' },
+];
+
 export const STUDIOS = {
   flows: {
     app: 'flows',
     homeKind: 'flow',
-    create: ['flow'],
+    create: NEW_ANYTHING,
     layout: {
       left: { size: 280, minimized: false, active: 'explorer' },
       right: { size: 380, minimized: false, active: 'form' },
@@ -45,7 +57,7 @@ export const STUDIOS = {
   db: {
     app: 'db',
     homeKind: 'database',
-    create: [],
+    create: [{ kind: 'database', type: 'postgres', label: 'database' }],
     pin: 'database',
     layout: {
       left: { size: 280, minimized: false, active: 'explorer' },

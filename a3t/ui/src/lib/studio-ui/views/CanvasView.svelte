@@ -3,6 +3,7 @@
   /// where that flow would be placed, its live deployment, and Deploy / Pause /
   /// Resume / Restart / Undeploy. Placement, lifecycle and health are in the Form
   /// panel. Deploy uses the canvas as saved.
+  import EditButton from '../parts/EditButton.svelte';
   import SaveBar from '../parts/SaveBar.svelte';
   import KeyValues from '../parts/KeyValues.svelte';
   import { flows, fromText, ITEM_MIME, ops, setAt, toText, type DeploymentAction, type DeploymentRow, type Doc, type Workspace } from '$lib/studio-core';
@@ -95,6 +96,7 @@
     {/if}
     {#if live}<span class="pill {live.serving}">{live.serving.replace('-', ' ')}</span>{/if}
     <span class="grow"></span>
+    <EditButton {doc} {workspace} />
     {#if live}
       {#if live.deployment.state === 'paused'}
         <button class="btn ghost sm" disabled={!!busy} onclick={() => act('resume')}>Resume</button>
@@ -168,7 +170,7 @@
   .head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-surface); flex-wrap: wrap; }
   .kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
   .mono { font-family: var(--font-mono); font-size: 12.5px; }
-  .name { font-family: var(--font-mono); font-size: 12.5px; padding: 4px 8px; width: 200px; }
+  .name { font-family: var(--font-mono); font-size: 12.5px; padding: 4px 8px; width: 200px; flex: 0 1 200px; min-width: 120px; }
   .grow { flex: 1; }
   .pill { font-size: 10.5px; padding: 1px 7px; border-radius: 10px; background: var(--bg-subtle); color: var(--text-2); }
   .pill.serving { background: var(--runtime-bg, #e3f4ef); color: var(--runtime, #1a7158); }

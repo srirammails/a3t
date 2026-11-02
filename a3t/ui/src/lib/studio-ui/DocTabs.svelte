@@ -2,7 +2,7 @@
   /// Editor-area tabs for a studio: open documents with close buttons; double-
   /// click (or ⤢) maximizes the editor area. `actions` adds buttons on the right.
   import type { Snippet } from 'svelte';
-  import type { Studio, Tab } from './layout.svelte.ts';
+  import { PANEL_MIME, type Studio, type Tab } from './layout.svelte.ts';
 
   let { studio, tabs, active, onselect, onclose, actions }: {
     studio: Studio;
@@ -13,13 +13,26 @@
     actions?: Snippet;
   } = $props();
 
+  // A panel dropped on the tab bar opens in the editor area as a tab.
+  let over = $state(false);
+  function dragover(e: DragEvent) {
+    if (e.dataTransfer?.types.includes(PANEL_MIME)) { e.preventDefault(); over = true; }
+  }
+  function drop(e: DragEvent) {
+    over = false;
+    const id = e.dataTransfer?.getData(PANEL_MIME);
+    if (!id) return;
+    e.preventDefault();
+    studio.place(id, 'center');
+  }
+
   const max = $derived(studio.state.maximized === 'editor');
 </script>
 
-<div class="tabs" role="tablist">
+<div class="tabs" class:over role="tablist" tabindex="-1" ondragover={dragover} ondragleave={() => (over = false)} ondrop={drop}>
   <div class="scroll">
     {#each tabs as t (t.id)}
-      <div class="tab" class:on={t.id === active} role="tab" tabindex="0" aria-selected={t.id === active} title={t.hint ?? t.title}
+      <div class="tab" class:on={t.id === active} role="tab" tabindex="0" aria-selected={t.id === active} title={t.hint ?? t.title} data-tab={t.id}
         onclick={() => onselect(t.id)} ondblclick={() => studio.toggleMaximize('editor')}
         onauxclick={(e) => { if (e.button === 1) onclose(t.id); }}
         onkeydown={(e) => { if (e.key === 'Enter') onselect(t.id); }}>
@@ -38,6 +51,7 @@
 <style>
   .tabs { display: flex; align-items: stretch; height: 34px; flex-shrink: 0; border-bottom: 1px solid var(--border); background: var(--bg-page); }
   .scroll { flex: 1; display: flex; overflow-x: auto; min-width: 0; }
+  .tabs.over { background: var(--spec-bg); box-shadow: inset 0 0 0 2px var(--spec); }
   .tab { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 12px; border-right: 1px solid var(--border); font-size: 12.5px; color: var(--text-3); cursor: pointer; white-space: nowrap; max-width: 220px; }
   .tab.on { background: var(--bg-surface); color: var(--text-1); box-shadow: inset 0 2px 0 var(--spec); }
   .nm { overflow: hidden; text-overflow: ellipsis; }

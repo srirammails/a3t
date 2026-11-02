@@ -2,6 +2,7 @@
   /// A template's spec, read-only here (its other fields are in the Form
   /// panel). Saving a template changes the agents built from it; until the
   /// Studio has a template editor, that happens in the Templates page.
+  import EditButton from '../parts/EditButton.svelte';
   import YamlEditor from '$lib/components/editor/YamlEditor.svelte';
   import type { Doc, Workspace } from '$lib/studio-core';
 
@@ -20,6 +21,7 @@
     <span class="mono">{doc.ref.project}/{doc.ref.name}</span>
     {#if doc.data?.version}<span class="ver">v{doc.data.version}</span>{/if}
     <span class="grow"></span>
+    <EditButton {doc} {workspace} />
     <span class="ro">read-only</span>
     {#if kind.console}
       {@const c = kind.console}

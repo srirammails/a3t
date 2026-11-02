@@ -1,6 +1,7 @@
 <script lang="ts">
   /// An LLM's Chat view: talk to the model behind the resource. The
   /// conversation lives on the document (not saved); Clear starts over.
+  import EditButton from '../parts/EditButton.svelte';
   import type { ChatMessage, Doc, Workspace } from '$lib/studio-core';
 
   let { doc, workspace }: { doc: Doc; workspace: Workspace } = $props();
@@ -40,6 +41,7 @@
     <span class="mono">{doc.ref.project}/{doc.ref.name}</span>
     {#if model}<span class="model" title="Model">{model}</span>{/if}
     <span class="grow"></span>
+    <EditButton {doc} {workspace} />
     <button class="btn ghost sm" disabled={!messages.length || doc.ui.sending} onclick={() => { doc.ui.messages = []; doc.ui.error = ''; }}>Clear</button>
   </div>
 

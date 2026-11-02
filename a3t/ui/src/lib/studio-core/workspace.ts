@@ -68,8 +68,9 @@ export class Workspace {
     return () => this.listeners.delete(fn);
   }
 
-  /// Open an item (or bring its tab forward).
-  open(item: Item): Doc {
+  /// Open an item (or bring its tab forward). `view: 'code'` opens it for
+  /// editing as code (Edit, double-click); `'action'` in its own view.
+  open(item: Item, opts: { view?: 'action' | 'code' } = {}): Doc {
     const addr = address(item);
     const { data: _data, ...light } = item;
     this.state.recent = [light, ...this.state.recent.filter((r) => address(r) !== addr)].slice(0, RECENT);
@@ -78,7 +79,18 @@ export class Workspace {
       const { type, data, ...ref } = item;
       this.state.docs.push({ address: addr, ref, kind: kind.id, type, data, loaded: !kind.load, ui: kind.initialUi?.() ?? {} });
     }
-    return this.select(addr)!;
+    const doc = this.select(addr)!;
+    if (opts.view) this.view(doc, opts.view);
+    return doc;
+  }
+
+  /// Show a document in its own view or as code. A code request carries a new
+  /// stamp each time, so views that keep their own mode (a flow's Graph | Code)
+  /// switch even when it was asked for before.
+  view(doc: Doc, view: 'action' | 'code') {
+    doc.ui.view = view === 'code' ? 'code' : null;
+    if (view === 'code') doc.ui.codeAsked = Date.now();
+    this.changed();
   }
 
   select(addr: string): Doc | null {
@@ -96,14 +108,16 @@ export class Workspace {
     return true;
   }
 
-  /// A new, unsaved item of `kindId` in `project`.
-  create(kindId: string, project: string): Doc | null {
+  /// A new, unsaved item of `kindId` (and resource `type`) in `project`. It opens
+  /// as code where its kind has a code view, so it can be named and filled in.
+  create(kindId: string, project: string, type?: string): Doc | null {
     const kind = kindById(kindId);
     if (!kind.create) return null;
     this.created += 1;
-    const { ref, text } = kind.create(project, this.created);
-    const addr = `${address(ref)}#new-${this.created}`;
-    this.state.docs.push({ address: addr, ref, kind: kind.id, text, saved: '', loaded: true, isNew: true, ui: kind.initialUi?.() ?? {} });
+    const made = kind.create(project, this.created, type);
+    const addr = `${address(made.ref)}#new-${this.created}`;
+    const ui = { ...(kind.initialUi?.() ?? {}), view: kind.views.code ? 'code' : null };
+    this.state.docs.push({ address: addr, ref: made.ref, kind: kind.id, type: made.type, text: made.text, saved: '', loaded: true, isNew: true, ui });
     return this.select(addr);
   }
 

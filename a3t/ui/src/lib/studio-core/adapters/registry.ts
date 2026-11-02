@@ -35,6 +35,12 @@ export const listTemplates = (): Promise<Result<any[]>> =>
     return r.ok ? ok(rows(r.data, 'rows')) : r;
   });
 
+export const listAgents = (): Promise<Result<any[]>> =>
+  safely('agents', async () => {
+    const r = result(await execFlow('a3t-agents-list', 'a3t', { org_id: 'org-default' }, { silent: true }), 'agents');
+    return r.ok ? ok(rows(r.data, 'rows', 'output')) : r;
+  });
+
 /// The server refuses while agents are built from the template.
 export const removeTemplate = (id: string): Promise<Result> =>
   safely('delete template', async () => {

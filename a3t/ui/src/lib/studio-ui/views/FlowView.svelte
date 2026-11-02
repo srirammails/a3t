@@ -51,7 +51,7 @@
 <div class="fd">
   <div class="fd-body">
     {#if doc.loaded || doc.isNew}
-      <FlowEditorPane part="main" aiKind="flow" aiName={`${doc.ref.project}/${doc.ref.name}`} initialYaml={doc.text ?? ''} onchange={(v: string) => (doc.text = v)}
+      <FlowEditorPane part="main" aiKind="flow" aiName={`${doc.ref.project}/${doc.ref.name}`} initialYaml={doc.text ?? ''} onchange={(v: string) => (doc.text = v)} showCode={doc.ui.codeAsked}
         {debug} onrun={blocked ? undefined : onrun} {onshowrun}>
         {#snippet toolbar()}
           <!-- Name centred on the Graph | Code bar, actions at its right end:

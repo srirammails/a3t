@@ -323,6 +323,27 @@ Views are registered by id and receive `{ doc, workspace, host }`:
 `RuntimeView`, `RunView` (today's RunView), `MemoryView`, `ConfigView`,
 `TemplateView` (AgentTemplateEditor).
 
+**Feedback round, 2 Nov 2026** (decided by the user, built on `a3t-studio`):
+- *Explorer* per project: Agent templates, Agents, **Resources → Workflows** (flows
+  live under Resources), Databases, LLM, MCP Servers, Secrets, Functions, Scripts,
+  Variables, then Triggers, Canvases, Runtimes. Every folder that can create has `+`.
+- *Open vs edit:* click opens an item's own view; **double-click or Edit opens it
+  as code** in the center (`views.code`, `doc.ui.view = 'code'`), "← back" returns.
+  The Form panel is rebuilt per item.
+- *New everything:* "+ New ▾" and folder `+` create any kind; a new item opens as
+  code (named, and typed for resources) with its Form, and is created on Save.
+  Starting configs per resource type: `studio-core/resourceTypes.ts`.
+- *AI* is a right-region tab for every kind (the document's text).
+- *Context menu:* the Studio's own everywhere (tabs, panels, the center, text
+  fields); no browser menu inside the Studio.
+- *Panels move:* drag a panel's tab to another region or onto the editor tabs (it
+  becomes a tab there); closing it there sends it home, minimized. Kept per Studio
+  (`layout.placement`).
+- *Triggers* open a **designer** (adopted from the Triggers page): identity,
+  channel, the target flows as a graph (drop flows from its list or the Explorer),
+  and a Test area that fires it; runs below.
+- Agents and templates are read-only in the Studio until their editors move in.
+
 ### 6.3 Shared parts
 
 - **ConfigForm** — built from the config's own keys and values, no per-type field

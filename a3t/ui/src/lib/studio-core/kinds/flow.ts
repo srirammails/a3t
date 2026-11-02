@@ -9,9 +9,10 @@ export const flowKind: ItemKind = {
   icon: 'ƒ',
   match: (it) => it.kind === 'flow',
   capabilities: ['edit', 'run', 'debug', 'create', 'delete', 'rename', 'duplicate'],
+  nameInText: true,
   views: {
     center: 'flow',
-    right: [{ id: 'form', title: 'Form', component: 'flow-form' }, { id: 'ai', title: 'AI', component: 'flow-ai' }],
+    right: [{ id: 'form', title: 'Form', component: 'flow-form' }, { id: 'ai', title: 'AI', component: 'ai' }],
     bottom: [{ id: 'runs', title: 'Runs' }, { id: 'problems', title: 'Problems' }],
   },
 

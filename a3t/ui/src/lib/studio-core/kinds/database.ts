@@ -22,9 +22,10 @@ export const languagesOf = (type: string | undefined) => LANGUAGES[type ?? ''] ?
 export const databaseKind: ItemKind = {
   id: 'database', label: 'Database', icon: '⛁',
   match: (it) => it.kind === 'resource' && !!it.type && it.type in LANGUAGES,
-  capabilities: ['edit', 'delete', 'query'],
+  capabilities: ['edit', 'create', 'delete', 'query'],
   views: {
     center: 'query',
+    code: 'code',
     right: FORM,
     bottom: [{ id: 'results', title: 'Results' }, { id: 'history', title: 'History' }, { id: 'saved', title: 'Saved' }],
   },

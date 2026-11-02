@@ -7,7 +7,7 @@
 /// trigger, template, canvas, run…); which behaviour module handles it is decided by
 /// the kinds registry (`kinds/`), which may look at `type` too.
 
-export type ItemSort = 'flow' | 'resource' | 'trigger' | 'template' | 'canvas' | 'run';
+export type ItemSort = 'flow' | 'resource' | 'trigger' | 'template' | 'canvas' | 'run' | 'agent';
 
 export type ItemRef = {
   project: string;
