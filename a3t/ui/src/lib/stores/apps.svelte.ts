@@ -62,7 +62,7 @@ export const APP_CONTEXT: Record<string, { label: string; source: string; focuse
   // Resources lists its FIXED subtype categories, not instances: the page is a
   // per-category browser, so the pane offers exactly the categories it filters to.
   resources: { label: 'Resource Types', source: 'resource-categories', focuses: true },
-  triggers: { label: 'Triggers', source: 'triggers', focuses: false },
+  triggers: { label: 'Triggers', source: 'triggers', focuses: true },
   executions: { label: 'Executions', source: 'executions', focuses: false },
   runtime: { label: 'Hosts & Runtimes', source: 'runtimes', focuses: true },
   canvas: { label: 'Canvases', source: 'canvases', focuses: true },

@@ -5,6 +5,7 @@
   import FoldSection from '$lib/components/shared/FoldSection.svelte';
   import ProjectPill from '$lib/components/shared/ProjectPill.svelte';
   import { contextRev_ } from '$lib/stores/apps.svelte.ts';
+  import { getActivePanel } from '$lib/stores/panels.svelte.ts';
   import SubmenuToggle from '$lib/components/shared/SubmenuToggle.svelte';
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { API_BASE } from '$lib/config';
@@ -19,7 +20,7 @@
   import PageBanner from '$lib/components/shared/PageBanner.svelte';
   import AppHome from '$lib/shell/AppHome.svelte';
   import DeleteConfirm from '$lib/components/shared/DeleteConfirm.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
 
   interface TriggerTarget { type: string; namespace?: string; name?: string; agent_id?: string; url?: string }
   interface Trigger {
@@ -234,6 +235,18 @@
   }
 
   function closeEditor() { view = 'list'; saveError = ''; }
+
+  // A trigger picked in the app's list (/triggers/<id>) opens in the editor —
+  // once the list is in, and again on each pick (a new panel, even the same id).
+  let focusedPanel = '';
+  $effect(() => {
+    const panel = getActivePanel();
+    const id = panel?.props?.selectedId as string | undefined;
+    if (!panel || !id || loading || panel.id === focusedPanel) return;
+    focusedPanel = panel.id;
+    const t = triggers.find((x) => x.id === id) ?? triggers.find((x) => x.name === id);
+    if (t) untrack(() => openEdit(t));
+  });
 
   let saveError = $state('');
   async function saveTrigger() {
