@@ -60,6 +60,18 @@ another carries on".
 | CA-42 | Changing the controller's runtime env does not recreate existing runtime pods | A token change needs the runtime pods deleted by hand | Controller hashes the runtime env into the pod spec and replaces pods on change | open |
 | CA-43 | Every worker runs run-retention (`purge_finished`) when idle; with a pool token ADB refuses it | One warning per maintenance interval on runtimes | Run retention only where the engine token is (the platform pool) | open |
 
+**Basic gateway + router (G1–G3, 3 Nov 2026, flowr-ce `router.rs`, `gateway.rs`):** runtimes with `FLOWR_GATEWAY=pool` send `call:http`, `call:mcp` and `call:llm` to pool `gateway` as runs of `system-gateway/call`; the gateway verifies (caller named), resolves (always A3T), decides (placeholder: allow; `FLOWR_GATEWAY_DENY` for tests), acts as the caller and records. ADB `tests/cluster-gateway.mjs` (single node and `--raft`): a runtime with no direct egress completes its calls through the gateway, each once per key; a denied call fails its step with the reason and never leaves; a gateway killed mid-call is replaced by the other, which retries under the same idempotency key (and on `--raft` through an ADB leader kill too).
+
+| # | What | Effect | Plan | Status |
+|---|---|---|---|---|
+| CA-44 | A gateway that dies mid-call is replaced and the call runs again. HTTP carries the caller step's Idempotency-Key; MCP and LLM calls carry none | An MCP tool with side effects can run twice after a gateway crash (a model call can be repeated) | Idempotency keys for MCP calls (`_meta`), and the in-doubt step class per call type | open |
+| CA-45 | Resolve is a placeholder: every org uses A3T's gateway; `orgs.settings.gateway` is not read; external gateways are not supported | — | AC-12 | open |
+| CA-46 | Decide is a placeholder (allow; `FLOWR_GATEWAY_DENY` substring rules for tests); Verify checks only that the caller is named | No real policy at the gateway yet; runtimes still apply their own Cedar choke point to the original task | Policy layer: Cedar + identity (AC-10, AC-11) | open (by design) |
+| CA-47 | The agent's own LLM call inside `call:a3t:agent` (token streaming) does not go through the gateway; only `call:llm` steps and tool flows do | Model traffic from agents bypasses the gateway | G6 | open |
+| CA-48 | Each gateway call is a durable run (start, claim, journal, release): several Raft writes per outbound call | Adds tens of ms per call and Raft load | Transient flows (AC-7) for reads; group commit (CA-24) | open |
+| CA-49 | Decision rows go to the platform database of the gateway process (`gateway_decisions`), best effort | On a gateway without the platform DB on ADB they stay local | Gateway processes use the ADB platform tables (as the console does on vc-dev) | open |
+| CA-50 | "Gateway" also names the console's engine endpoint on port 3003 (`engine_remote`, `FLOWR_ENGINE_URL`) | Confusing names in code and logs | Rename the old one (engine relay) when it is retired | accepted |
+
 ## Deviations from the design doc
 
 | # | Design | Built | Why | Status |

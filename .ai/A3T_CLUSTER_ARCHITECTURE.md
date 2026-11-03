@@ -304,6 +304,9 @@ once per idempotency key, through a gateway kill and an ADB leader kill; a deny 
 the placeholder (`FLOWR_GATEWAY_DENY`, for tests) fails the step with the reason; the
 decision rows exist. Then the same on vc-dev.
 
+**Status (3 Nov 2026):** G1–G3 and G5 (local, single node and Raft) done; G4 (vc-dev) next.
+Resolve does not read `orgs.settings.gateway` yet (CA-45).
+
 **G6** the agent's LLM call through the gateway (streamed tokens keep going to
 `stream:<session>`).
 

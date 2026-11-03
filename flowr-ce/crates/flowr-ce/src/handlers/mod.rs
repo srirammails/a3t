@@ -45,4 +45,6 @@ pub fn register_clawdflow_handlers(executor: &mut WorkflowExecutor) {
     executor.register_handler(Arc::new(call_agent::AgentHandler));
     executor.register_handler(Arc::new(events::EmitHandler));
     executor.register_handler(Arc::new(events::ListenHandler));
+    // Last: with FLOWR_GATEWAY=pool it replaces the outbound handlers above.
+    crate::gateway::register(executor);
 }

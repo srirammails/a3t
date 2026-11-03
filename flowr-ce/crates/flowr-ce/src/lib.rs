@@ -24,6 +24,8 @@ pub mod handlers;
 pub mod registry;
 pub mod topic_triggers;
 pub mod platform_db;
+pub mod router;
+pub mod gateway;
 pub mod shared_registry;
 
 use std::sync::Arc;
@@ -446,6 +448,10 @@ pub fn spawn_worker(storage: Arc<dyn StorageBackend>) {
 /// runtime pod does (and what tests use to stand one up).
 pub fn spawn_pool_worker(storage: Arc<dyn StorageBackend>, pools: Vec<String>) {
     if let Some(engine) = storage.engine() {
+        if pools.iter().any(|p| p == router::GATEWAY_POOL) {
+            let s = storage.clone();
+            tokio::spawn(async move { gateway::seed(s.as_ref()).await });
+        }
         tokio::spawn(engine_worker::run(storage, engine, pools));
     }
 }
@@ -2464,12 +2470,15 @@ async fn run_worker(storage: Arc<dyn StorageBackend>) {
     // or a paused deployment would serve whatever was queued at startup.
     ops::load(storage.as_ref()).await;
     mark_interrupted(storage.as_ref()).await;
+    if gateway::serves_gateway() {
+        gateway::seed(storage.as_ref()).await;
+    }
     if let Some(engine) = storage.engine() {
         // The process that holds the store serves it to runtimes and decides
         // where runs go; a runtime (remote store) only works its pools.
         if !engine_remote_enabled() {
             engine_remote::spawn_gateway(engine.clone());
-            flowr_storage::engine::set_pool_router(engine_worker::route);
+            flowr_storage::engine::set_pool_router(router::route);
         }
         return engine_worker::run(storage, engine, engine_worker::worker_pools()).await;
     }
