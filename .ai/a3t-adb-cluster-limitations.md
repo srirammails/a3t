@@ -28,6 +28,11 @@ another carries on".
 | CA-12 | The Cedar policy set is loaded per process; `POST /security/policies/reload` reloaded only the pod that got the request | `flowr-server/src/main.rs` | Other replicas enforce the old policies until restarted | The reload publishes `cluster:policies` through ADB; every FlowR reloads on it (explicit-reload semantics kept) | fixed |
 | CA-13 | The deployment ledger (`ops.rs`) is an in-memory copy of registry resources, reloaded on most reads | `ops.rs` `ledger`, `cached` | A few reads (`cached`, `deployments_of_flow`) can be stale for a moment after another replica's change | Acceptable: the source is the shared registry and the next `load` corrects it | accepted |
 
+| CA-14 | MCP over SSE keeps the session (`/sse` → `POST /message?sessionId=…`) in one pod's memory | With 2+ console replicas an SSE client (Claude Desktop) whose follow-up lands on the other pod loses its session; stateless JSON-RPC `POST /message` (UI, scripts) is unaffected | Session affinity on the ingress, or session state in ADB | open |
+| CA-15 | The A3T platform database was local LanceDB on the console's volume | Two replicas would write the same files | vc-dev switched to ADB platform tables with the built-in switch (`POST /registry/platform-db/switch`, 19 tables / 130 rows, 3 Nov); console volumes are now `emptyDir` | fixed (vc-dev) |
+
+**Stage 1 on vc-dev (3 Nov 2026):** console at 2 replicas on per-pod storage (backup of the old volumes in `/data/a3t-dev/backup-20261103-stage1`). Killing the replica holding a run: the replacement took it over at epoch 2 without repeating the finished wait, the other replica finished it (25.6 s for 24 s of waits). 3 events → 3 runs. A policy reload through one replica applied on both within 52 ms. Not exercised on vc-dev: topic-trigger dedupe (no topic trigger there), chat streaming across replicas (needs a chat), SSE MCP clients (CA-14).
+
 ## ADB
 
 | # | What | Effect | Plan | Status |
