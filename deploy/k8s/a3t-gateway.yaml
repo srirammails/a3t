@@ -1,0 +1,63 @@
+# A3T gateway pool (.ai/A3T_CLUSTER_ARCHITECTURE.md §10, G4): FlowR EE processes that
+# claim pool `gateway` only. Runtimes with FLOWR_GATEWAY=pool send their outbound calls
+# (call:http, call:mcp, call:llm) here as runs of system-gateway/call; the gateway
+# decides (policy placeholder for now), makes the call as the caller and records it.
+#
+# No Service: nothing calls the gateway directly — its work arrives through ADB.
+# Stateless: registry, platform tables and engine are on ADB; local disk is scratch.
+#
+# Needs Secrets: adb-auth (registry/platform token), adb-pool-gateway (the gateway pool's
+# engine token, also listed in adb-pool-tokens), registry-credentials.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: a3t
+  labels: { app: gateway, a3t.io/role: gateway }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: gateway }
+  template:
+    metadata:
+      labels: { app: gateway, a3t.io/role: gateway }
+    spec:
+      imagePullSecrets: [{ name: registry-credentials }]
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: flowr
+          image: ghcr.io/srirammails/flowr:2026-11-03-ee32
+          ports:
+            - { name: http, containerPort: 3002 }
+          env:
+            - { name: FLOWR_WORKER_POOLS, value: gateway }
+            - { name: CLAWDFLOW_DATA_DIR, value: /data/clawdflow }
+            - { name: RUST_LOG, value: "info,lance=warn" }
+            # Engine: the gateway pool's own token (claims pool gateway only).
+            - { name: FLOWR_ENGINE_ADB_URL, value: "http://adb.a3t.svc.cluster.local:3001" }
+            - name: FLOWR_ENGINE_ADB_TOKEN
+              valueFrom: { secretKeyRef: { name: adb-pool-gateway, key: token } }
+            # Registry and platform tables on ADB (decision rows go to gateway_decisions).
+            - { name: FLOWR_REGISTRY_ADB, value: "http://adb.a3t.svc.cluster.local:3000" }
+            - { name: ADB_AUTH_URLS, value: "http://adb.a3t.svc.cluster.local:3000,http://adb.a3t.svc.cluster.local:3001,http://adb.a3t:3000,http://adb.a3t:3001,http://adb:3000,http://adb:3001" }
+            - name: ADB_AUTH_TOKEN
+              valueFrom: { secretKeyRef: { name: adb-auth, key: token } }
+            # Its HTTP port is not exposed, but still requires a user token, as runtimes do.
+            - { name: FLOWR_SECURITY_AUTHN, value: oidc }
+            - { name: FLOWR_SECURITY_OIDC_ISSUER, value: "https://keycloak.dev.a3t.io/realms/a3t" }
+            # Decisions are the gateway step's (placeholder); no Cedar hook on top for now.
+            - { name: FLOWR_SECURITY_POLICY_HOOK, value: allow_all }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 20
+            initialDelaySeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          volumeMounts:
+            - { name: scratch, mountPath: /data/clawdflow }
+      volumes:
+        - { name: scratch, emptyDir: {} }
