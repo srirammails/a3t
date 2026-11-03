@@ -49,6 +49,17 @@ another carries on".
 | CA-34 | The new leader opens the engine after it wins (`durable_on`), and the time grows with the record count (debug build: ~3 s at 2,600 records; release on vc-dev: within the 2.6 s failover at 26,500) | Failover time grows with data | Keep the engine warm on followers (the Replica already applies it) and hand it over instead of reopening | open |
 | CA-28 | W5 erasure (`rewrite_closed`) runs on the leader's WAL only; followers keep a forgotten record's payload in their WAL until it is purged there | Payload lingers on followers for up to `ADB_LOG_RETAIN` records | Replicate the erasure as its own record | open |
 
+## Gateway (stage 2)
+
+**Step 1 on vc-dev (3 Nov 2026):** ADB reads `ADB_ENGINE_POOL_TOKENS` from Secret `adb-pool-tokens`; the controller gives runtimes `FLOWR_ENGINE_ADB_TOKEN` from `adb-pool-worker` (pool `worker`). `rt-worker` claims and completes runs with it; ADB refuses its `purge_finished`. A FlowR holding the worker token and assigned to pool `default` is refused on every claim ("claims from worker only, not default") and the run stays pending (local reproduction; on vc-dev a bare one-off pod stalled before its first claim).
+
+| # | What | Effect | Plan | Status |
+|---|---|---|---|---|
+| CA-40 | Pool tokens cover the engine only; runtimes also hold `ADB_AUTH_TOKEN` (`adb-auth`), the registry / platform-table token, with full access | A compromised runtime can still read and write the registry and platform tables | Per-pool scopes for registry and platform actions in ADB (AC-8 continued) | open |
+| CA-41 | The controller has one set of runtime secrets (`A3T_RUNTIME_SECRET_ENV_*`) for every runtime | Every runtime pool gets the same pool token: fine with one pool (`worker`), wrong with more | Per-pool secret mapping on the Runtime CR (`spec.pool` → Secret) | open |
+| CA-42 | Changing the controller's runtime env does not recreate existing runtime pods | A token change needs the runtime pods deleted by hand | Controller hashes the runtime env into the pod spec and replaces pods on change | open |
+| CA-43 | Every worker runs run-retention (`purge_finished`) when idle; with a pool token ADB refuses it | One warning per maintenance interval on runtimes | Run retention only where the engine token is (the platform pool) | open |
+
 ## Deviations from the design doc
 
 | # | Design | Built | Why | Status |
