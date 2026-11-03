@@ -75,7 +75,7 @@
     resSaving = false;
   }
   import { can, canAny, currentUser } from '$lib/stores/auth';
-  import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
+  import { navigateTo, navigateToDetail, getActivePanel, openInStudio } from '$lib/stores/panels.svelte.ts';
   import { onMount } from 'svelte';
   import { contextRev_ } from '$lib/stores/apps.svelte.ts';
 
@@ -485,7 +485,7 @@ do:
           <div class="sp-main">
             <div class="sp-close-bar">
               <div class="sp-btn-wrap">
-                <button class="sp-action-btn" onclick={() => navigateTo('flow-editor', 'Studio')}>
+                <button class="sp-action-btn" onclick={() => template && !draftTemplate ? openInStudio('template', template.namespace ?? 'a3t', template.name, template.id) : navigateTo('flow-editor', 'Studio')}>
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 1h6v6M9 7L15 1M7 3H2a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1V9"/></svg>
                 </button>
                 <span class="sp-tooltip">Open in Studio</span>

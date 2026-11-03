@@ -5,15 +5,21 @@
   import { Studio, STUDIOS } from '$lib/studio-ui';
   import { webHost } from '$lib/host/web.svelte.ts';
   import { getActivePanel } from '$lib/stores/panels.svelte.ts';
-  import type { Item } from '$lib/studio-core';
+  import { parseStudioItem } from '$lib/stores/panels.svelte.ts';
 
-  // A flow named in the address (/flow-editor/<ns>~<name>) opens on arrival.
-  const sel = getActivePanel()?.props?.selectedId as string | undefined;
-  const initial: Item[] = sel?.includes('~') ? [{ project: sel.split('~')[0], kind: 'flow', name: sel.split('~')[1] }] : [];
+  // An item named in the address (/studio/<kind>:<project>~<name>, or the older
+  // /studio/<project>~<name> for a flow) opens on arrival, and again whenever an
+  // "Open in Studio" elsewhere names one (each navigation is a new panel id).
+  const request = $derived.by(() => {
+    const p = getActivePanel();
+    if (p?.type !== 'flow-editor') return null;
+    const item = parseStudioItem(p.props?.selectedId);
+    return item ? { item, at: p.id } : null;
+  });
 </script>
 
 <div class="page">
-  <Studio host={webHost} config={STUDIOS.flows} {initial}>
+  <Studio host={webHost} config={STUDIOS.flows} {request}>
     {#snippet lead()}<SubmenuToggle appType="flow-editor" />{/snippet}
   </Studio>
 </div>

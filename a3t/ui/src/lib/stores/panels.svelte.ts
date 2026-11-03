@@ -94,6 +94,22 @@ export function navigateToDetail(type: string, title: string, itemId: string, pr
   updateUrl(type, fullProps);
 }
 
+/// Open an item in the Studio, from anywhere in the Console (the chat, a list's
+/// detail panel). The item travels in the address — /studio/<kind>:<project>~<name>
+/// (+ ~<id> for id-keyed items) — so the link can be shared and reloaded.
+export type StudioItemKind = 'flow' | 'resource' | 'trigger' | 'template' | 'canvas' | 'agent';
+export function openInStudio(kind: StudioItemKind, project: string, name: string, id?: string) {
+  const sel = `${kind}:${project}~${name}${id ? `~${id}` : ''}`;
+  navigateToDetail('flow-editor', name || 'Studio', sel);
+}
+/// The item an address names (see openInStudio); `<project>~<name>` alone is a flow.
+export function parseStudioItem(sel: unknown): { project: string; kind: StudioItemKind; name: string; id?: string } | null {
+  if (typeof sel !== 'string' || !sel.includes('~')) return null;
+  const m = sel.match(/^(?:(flow|resource|trigger|template|canvas|agent):)?([^~]+)~([^~]+)(?:~(.+))?$/);
+  if (!m) return null;
+  return { kind: (m[1] ?? 'flow') as StudioItemKind, project: m[2], name: m[3], ...(m[4] ? { id: m[4] } : {}) };
+}
+
 /// Point the CURRENT panel at a different item, without replacing it.
 ///
 /// `navigateToDetail` builds a new panel, which remounts the page — wrong when a

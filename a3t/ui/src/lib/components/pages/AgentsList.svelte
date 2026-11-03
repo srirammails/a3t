@@ -5,7 +5,7 @@
   import NewButton from '$lib/components/shared/NewButton.svelte';
   import { execFlow, mcpCall, canvasApi } from '$lib/services/api';
   import { discoverServerTools, allToolNames, toolSections, isDestructive, serverRef, type ServerTools } from '$lib/services/mcpTools';
-  import { navigateTo, navigateToDetail, getActivePanel } from '$lib/stores/panels.svelte.ts';
+  import { navigateTo, navigateToDetail, getActivePanel, openInStudio } from '$lib/stores/panels.svelte.ts';
   import { can } from '$lib/stores/auth';
   import { onMount } from 'svelte';
   import * as YAML from 'yaml';
@@ -500,7 +500,7 @@
 </script>
 
 <!-- Slide Panel -->
-<SlidePanel open={!!agent} onclose={closePanel} onsave={() => creatingNew ? createAgent() : saveBindings()} onopenineditor={() => navigateTo('flow-editor', 'Studio')}>
+<SlidePanel open={!!agent} onclose={closePanel} onsave={() => creatingNew ? createAgent() : saveBindings()} onopenineditor={() => agent && !creatingNew ? openInStudio('agent', agent.namespace ?? 'a3t', agent.name ?? agent.id, agent.id) : navigateTo('flow-editor', 'Studio')}>
   {#if agent}
     <div class="panel-layout">
       <PropertiesTree

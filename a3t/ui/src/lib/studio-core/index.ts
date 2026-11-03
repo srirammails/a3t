@@ -20,6 +20,6 @@ export { outline, setAt as setSchemaAt, removeAt as removeSchemaAt, appendAt, ad
 export { getTrigger, putTrigger } from './adapters/config';
 export { listTemplates } from './adapters/registry';
 export type { Visibility, AgentField } from './agent/model';
-export { loadInventory, namesIn, type Inventory, type TreeNode } from './inventory';
+export { loadInventory, namesIn, resolveItem, type Inventory, type TreeNode } from './inventory';
 export { merge3, type Conflict, type Merged } from './merge';
 export { versionOf, withVersion, bumpVersion, sortVersions } from './flow/model';

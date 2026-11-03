@@ -105,3 +105,30 @@ export function namesIn(inv: Inventory, project: string, kind: Item['kind']): Se
   inv.tree.forEach(walk);
   return out;
 }
+
+/// An item named from outside the Studio (the chat, a Console page) as the
+/// Explorer would list it: templates and agents are opened by their registry id,
+/// and their project is the one the Explorer shows them under, so the tab is the
+/// same one the Explorer opens. Other sorts are already complete by name.
+export async function resolveItem(item: Item): Promise<Item> {
+  if (item.kind === 'resource' && !item.type) {
+    const r = await registry.listResources(item.project);
+    const res = r.ok ? r.data.find((x: any) => x.name === item.name) : null;
+    return res ? { ...item, type: res.type ?? res.type_ref ?? '', data: res } : item;
+  }
+  if (item.kind !== 'template' && item.kind !== 'agent') return item;
+  if (item.kind === 'template') {
+    const r = await registry.listTemplates();
+    if (!r.ok) return item;
+    const byId = item.id ? r.data.filter((t: any) => t.id === item.id) : [];
+    const all = byId.length ? byId : r.data.filter((t: any) => t.name === item.name);
+    const t = all.find((x: any) => nsOfSpec(x.spec_yaml) === item.project) ?? all[0];
+    return t ? { project: nsOfSpec(t.spec_yaml) || item.project, kind: 'template', name: t.name, id: t.id, data: t } : item;
+  }
+  const r = await registry.listAgents();
+  if (!r.ok) return item;
+  const byId = item.id ? r.data.filter((a: any) => a.id === item.id) : [];
+  const all = byId.length ? byId : r.data.filter((a: any) => (a.name ?? a.id) === item.name);
+  const a = all.find((x: any) => (x.namespace ?? 'a3t') === item.project) ?? all[0];
+  return a ? { project: a.namespace ?? 'a3t', kind: 'agent', name: a.name ?? a.id, id: a.id, data: a } : item;
+}

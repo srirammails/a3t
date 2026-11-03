@@ -7,14 +7,17 @@
   import HomeView from './views/HomeView.svelte';
   import { Studio as Layout } from './layout.svelte.ts';
   import { useWorkspace } from './workspace.svelte.ts';
-  import type { Item, StudioHost } from '$lib/studio-core';
+  import { resolveItem, type Item, type StudioHost } from '$lib/studio-core';
   import type { StudioConfig } from './studios';
 
-  let { host, config, initial = [], lead }: {
+  let { host, config, initial = [], request = null, lead }: {
     host: StudioHost;
     config: StudioConfig;
     /// Items to open on arrival (e.g. named in the address).
     initial?: Item[];
+    /// An item to open now, from the host's navigation ("Open in Studio"). A new
+    /// `at` opens it again (it is shown even when its tab is already open).
+    request?: { item: Item; at: string | number } | null;
     lead?: Snippet;
   } = $props();
 
@@ -25,10 +28,19 @@
     return { studio: new Layout(config.app, config.layout), workspace: ws };
   });
 
-  /// Open an item (hosts call this, e.g. from their own navigation).
-  export function open(item: Item) {
-    workspace.open(item);
+  /// Open an item (hosts call this, e.g. from their own navigation). Templates
+  /// and agents named without their id are looked up first.
+  export async function open(item: Item) {
+    workspace.open(await resolveItem(item));
   }
+
+  let lastAt: string | number | null = null;
+  $effect(() => {
+    const r = request;
+    if (!r || r.at === lastAt) return;
+    lastAt = r.at;
+    untrack(() => void open(r.item));
+  });
 </script>
 
 <Workbench {studio} {workspace} homeKind={config.homeKind} pin={config.pin} {lead}>
