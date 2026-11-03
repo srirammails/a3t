@@ -18,6 +18,7 @@ license = "Apache-2.0"
 # ADB's engine, embedded (stage H: FlowR's engine store is ADB; CE runs it
 # in-process). The sibling ADB checkout, like AQL.
 adb-executor = { path = "../../ADB/crates/adb-executor" }
+adb-core = { path = "../../ADB/crates/adb-core" }
 # CNCF SWF crates (new)
 swf-parser = { path = "../shared/swf-parser" }
 swf-runtime = { path = "../shared/swf-runtime" }

@@ -7,7 +7,8 @@
 //! without being called, so the agent continues from the first unrecorded one.
 //!
 //! The executor sets the scope around every task (empty when the run has no
-//! journal), so a nested flow's steps never record under an outer step.
+//! journal). A nested flow records under its calling step only when its
+//! handler gives it a hook for that ([`current_step`]).
 
 use std::future::Future;
 use std::sync::Arc;
@@ -71,6 +72,12 @@ fn current() -> Option<EffectScope> {
 /// on every attempt (an `emit` names its event after it).
 pub fn step_key() -> Option<String> {
     current().map(|s| s.key)
+}
+
+/// The hook and path of the current step, when it is journaled: a handler
+/// that runs a nested flow journals the flow's steps under this one (L2).
+pub fn current_step() -> Option<(Arc<dyn StepHook>, String)> {
+    current().map(|s| (s.hook, s.key))
 }
 
 /// Whether the current step is journaled (effects are recorded, waits durable).

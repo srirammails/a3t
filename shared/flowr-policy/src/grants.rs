@@ -98,6 +98,44 @@ fn store() -> &'static Mutex<HashMap<String, Session>> {
     STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Where a session's answers are kept beyond this process (L39): called with
+/// the session's whole ledger after every change (empty: cleared), in order.
+pub type Persist = Box<dyn Fn(&str, Vec<Decision>) + Send + Sync>;
+
+fn persist_hook() -> &'static OnceLock<Persist> {
+    static HOOK: OnceLock<Persist> = OnceLock::new();
+    &HOOK
+}
+
+/// Keep every session's answers somewhere shared (set once, at startup).
+pub fn set_persist(f: Persist) {
+    let _ = persist_hook().set(f);
+}
+
+fn persist(session_id: &str, decisions: Option<Vec<Decision>>) {
+    if let (Some(f), Some(d)) = (persist_hook().get(), decisions) {
+        f(session_id, d);
+    }
+}
+
+fn snapshot(map: &HashMap<String, Session>, session_id: &str) -> Vec<Decision> {
+    map.get(session_id).map(|s| s.decisions.values().cloned().collect()).unwrap_or_default()
+}
+
+/// Load a session's answers as they were kept (replacing what this process
+/// holds): another process may have answered since.
+pub fn hydrate(session_id: &str, decisions: Vec<Decision>) {
+    let Ok(mut map) = store().lock() else { return };
+    if decisions.is_empty() {
+        map.remove(session_id);
+        return;
+    }
+    map.insert(
+        session_id.to_string(),
+        Session { decisions: decisions.into_iter().map(|d| (d.key.clone(), d)).collect(), touched_ms: now_ms() },
+    );
+}
+
 fn sweep(map: &mut HashMap<String, Session>) {
     let cutoff = now_ms().saturating_sub(IDLE_TTL_MS);
     map.retain(|_, s| s.touched_ms >= cutoff);
@@ -114,6 +152,9 @@ pub fn record(session_id: &str, decision: Decision) {
     });
     entry.touched_ms = now_ms();
     entry.decisions.insert(decision.key.clone(), decision);
+    let snap = snapshot(&map, session_id);
+    drop(map);
+    persist(session_id, Some(snap));
 }
 
 /// What was already answered for this question, if anything.
@@ -123,9 +164,18 @@ pub fn record(session_id: &str, decision: Decision) {
 /// atomic with the lookup, so two concurrent tool calls cannot both spend it.
 pub fn consult(session_id: &str, key: &str) -> Option<Decision> {
     let Ok(mut map) = store().lock() else { return None };
-    let session = map.get_mut(session_id)?;
+    let (out, spent) = consult_in(&mut map, session_id, key);
+    let snap = spent.then(|| snapshot(&map, session_id));
+    drop(map);
+    persist(session_id, snap);
+    out
+}
+
+/// (the decision, whether a one-time grant was used or dropped)
+fn consult_in(map: &mut HashMap<String, Session>, session_id: &str, key: &str) -> (Option<Decision>, bool) {
+    let Some(session) = map.get_mut(session_id) else { return (None, false) };
     session.touched_ms = now_ms();
-    let decision = session.decisions.get_mut(key)?;
+    let Some(decision) = session.decisions.get_mut(key) else { return (None, false) };
 
     if decision.verdict == Verdict::Granted {
         if let Some(left) = decision.remaining_uses {
@@ -134,12 +184,13 @@ pub fn consult(session_id: &str, key: &str) -> Option<Decision> {
                 // lingering as a permanent "no" — a one-time grant decaying into
                 // a silent denial is a downgrade the user never chose.
                 session.decisions.remove(key);
-                return None;
+                return (None, true);
             }
             decision.remaining_uses = Some(left - 1);
+            return (Some(decision.clone()), true);
         }
     }
-    Some(decision.clone())
+    (Some(decision.clone()), false)
 }
 
 /// Every answer given in this session, newest first. Backs "what have I denied?"
@@ -170,7 +221,11 @@ pub fn forget(session_id: &str, key: &str) -> bool {
     let Ok(mut map) = store().lock() else { return false };
     let Some(session) = map.get_mut(session_id) else { return false };
     session.touched_ms = now_ms();
-    session.decisions.remove(key).is_some()
+    let gone = session.decisions.remove(key).is_some();
+    let snap = gone.then(|| snapshot(&map, session_id));
+    drop(map);
+    persist(session_id, snap);
+    gone
 }
 
 /// Forget a decision only if it is a refusal. Kept for the denial-specific path.
@@ -181,6 +236,9 @@ pub fn lift_denial(session_id: &str, key: &str) -> bool {
     match session.decisions.get(key) {
         Some(d) if d.verdict == Verdict::Denied => {
             session.decisions.remove(key);
+            let snap = snapshot(&map, session_id);
+            drop(map);
+            persist(session_id, Some(snap));
             true
         }
         _ => false,
@@ -193,6 +251,7 @@ pub fn clear(session_id: &str) {
     if let Ok(mut map) = store().lock() {
         map.remove(session_id);
     }
+    persist(session_id, Some(Vec::new()));
 }
 
 /// Build a decision from an answered `Ask`.
@@ -246,6 +305,33 @@ mod tests {
             "mcp:call", "Tool", "delete_flow",
             Verdict::Denied, GrantScope::Session, "user refused", "usr-sriram",
         )
+    }
+
+    #[test]
+    fn answers_are_kept_beyond_the_process_and_load_back() {
+        use std::sync::{Arc, Mutex as M};
+        let kept: Arc<M<HashMap<String, Vec<Decision>>>> = Arc::default();
+        let k = kept.clone();
+        set_persist(Box::new(move |s, d| {
+            k.lock().unwrap().insert(s.to_string(), d);
+        }));
+        let s = sess("kept");
+        let key = || decision_key("mcp:call", "Tool", "delete_flow");
+        record(&s, grant(GrantScope::Once));
+        let saved = kept.lock().unwrap().get(&s).cloned().unwrap();
+        assert_eq!(saved.len(), 1);
+        // Another process: nothing in memory until it loads the kept answers.
+        clear_memory_only(&s);
+        assert!(consult(&s, &key()).is_none());
+        hydrate(&s, saved);
+        assert!(consult(&s, &key()).is_some(), "the one use, here");
+        assert_eq!(kept.lock().unwrap()[&s][0].remaining_uses, Some(0), "its use is kept too");
+        clear(&s);
+        assert!(kept.lock().unwrap()[&s].is_empty());
+    }
+
+    fn clear_memory_only(session_id: &str) {
+        store().lock().unwrap().remove(session_id);
     }
 
     #[test]

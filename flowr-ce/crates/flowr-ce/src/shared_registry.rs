@@ -91,7 +91,7 @@ impl SharedRegistryStorage {
         Self {
             workflows: SharedWorkflows { db: Arc::clone(&db) },
             resources: SharedResources { db: Arc::clone(&db) },
-            state: SplitState { local: Arc::clone(&inner), shared: SharedState { db: Arc::clone(&db) }, aliases },
+            state: SplitState { local: Arc::clone(&inner), shared: SharedState { db: Arc::clone(&db) }, aliases, all: false },
             inner,
             db,
         }
@@ -99,6 +99,13 @@ impl SharedRegistryStorage {
 
     pub fn describe(&self) -> String {
         self.db.describe()
+    }
+
+    /// Every state key on `db`, not only `agent:*` (CE on its embedded ADB:
+    /// one process, nothing to keep apart).
+    pub fn all_state(mut self) -> Self {
+        self.state.all = true;
+        self
     }
 }
 
@@ -164,6 +171,11 @@ impl StorageBackend for SharedRegistryStorage {
 /// rows copied per table; empty when the shared registry already had data (a
 /// runtime, or a console that seeded before).
 pub async fn seed(db: &dyn PlatformDb, local_path: &str) -> Result<Vec<(String, usize)>, String> {
+    seed_with(db, local_path, false).await
+}
+
+/// [`seed`]; `all_state`: every state key, not only `agent:*`.
+pub async fn seed_with(db: &dyn PlatformDb, local_path: &str, all_state: bool) -> Result<Vec<(String, usize)>, String> {
     let has = |t: &'static str| async move { db.query(t, None, 1).await.map(|b| b.iter().any(|b| b.num_rows() > 0)) };
     if has(WORKFLOWS).await? || has(RESOURCES).await? {
         return Ok(Vec::new());
@@ -175,7 +187,7 @@ pub async fn seed(db: &dyn PlatformDb, local_path: &str) -> Result<Vec<(String, 
         ("workflows", WORKFLOWS, WORKFLOW_COLUMNS, None),
         ("resource_types", RESOURCE_TYPES, RESOURCE_TYPE_COLUMNS, None),
         ("resources", RESOURCES, RESOURCE_COLUMNS, None),
-        ("state", STATE, STATE_COLUMNS, Some(format!("key LIKE '{SHARED_STATE_PREFIX}%'"))),
+        ("state", STATE, STATE_COLUMNS, (!all_state).then(|| format!("key LIKE '{SHARED_STATE_PREFIX}%'"))),
     ] {
         if !tables.iter().any(|t| t == from) {
             continue;
@@ -412,11 +424,16 @@ struct SplitState {
     local: Arc<dyn StorageBackend>,
     shared: SharedState,
     aliases: Vec<(String, String)>,
+    /// Every key is shared.
+    all: bool,
 }
 
 impl SplitState {
     /// The shared key for `key`, or `None` when it stays local.
     fn shared_key(&self, key: &str) -> Option<String> {
+        if self.all {
+            return Some(key.to_string());
+        }
         if let Some((_, to)) = self.aliases.iter().find(|(from, _)| from == key) {
             return Some(to.clone());
         }
@@ -449,6 +466,9 @@ impl StateStore for SplitState {
 
     /// Both sides; shared keys only when the pattern could match `agent:*`.
     async fn keys(&self, pattern: &str) -> FlowResult<Vec<String>> {
+        if self.all {
+            return self.shared.keys(pattern).await;
+        }
         let mut keys = self.local.state().keys(pattern).await?;
         let lead: String = pattern.chars().take_while(|c| *c != '*' && *c != '?').collect();
         if lead.starts_with(SHARED_STATE_PREFIX) || SHARED_STATE_PREFIX.starts_with(&lead) {
@@ -568,7 +588,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let yaml = "document:\n  dsl: 1.0.0\n  namespace: t\n  name: hello\n  version: 1.0.0\ndo:\n- a:\n    set:\n      x: 1\n";
         // A local registry with one flow, then a shared one seeded from it.
-        let local = crate::init_storage(dir.path().join("local").to_str().unwrap()).await.unwrap();
+        // LanceDB only (no engine, so no registry on the embedded ADB either).
+        let local = crate::init_storage_with(dir.path().join("local").to_str().unwrap(), false).await.unwrap();
         local.workflows().register(WorkflowRecord::from_yaml(yaml).unwrap()).await.unwrap();
         let db: Arc<dyn PlatformDb> = Arc::new(LanceDbPlatform::new(dir.path().join("shared.lance").to_string_lossy()));
         let s = SharedRegistryStorage::new(Arc::clone(&local), Arc::clone(&db), Vec::new());

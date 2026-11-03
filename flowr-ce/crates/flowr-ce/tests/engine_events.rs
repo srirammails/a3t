@@ -70,9 +70,24 @@ do:
                 set: { timed_out: true }
 "#;
 
+const LATE: &str = r#"
+document: { dsl: '1.0.3', namespace: e, name: late, version: '1.0.0' }
+do:
+  - busy:
+      wait: { seconds: 2 }
+  - hear:
+      listen:
+        to:
+          one:
+            with: { type: early }
+  - done:
+      set:
+        got: ${ .[0].n }
+"#;
+
 async fn storage(dir: &std::path::Path, worker: bool) -> Arc<dyn StorageBackend> {
     let s = flowr_ce::init_storage_with(dir.to_str().unwrap(), true).await.unwrap();
-    for y in [ORDER, PAY, BOTH, PATIENT] {
+    for y in [ORDER, PAY, BOTH, PATIENT, LATE] {
         s.workflows().register(WorkflowRecord::from_yaml(y).unwrap()).await.unwrap();
     }
     if worker {
@@ -145,6 +160,21 @@ async fn all_waits_for_every_event_and_reads_envelopes() {
     let st = finished(s.as_ref(), id).await;
     assert_eq!(st.status, ExecutionStatus::Completed, "{:?}", st.error);
     assert_eq!(st.output.unwrap()["types"], json!(["a", "b"]), "in filter order, whole events");
+}
+
+/// L38: an event sent after the run started but before it reached `listen`
+/// still completes the step.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_event_sent_before_the_listen_step_is_not_missed() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = storage(dir.path(), true).await;
+    let id = start(s.as_ref(), "late", json!({})).await;
+    phase_is(s.as_ref(), id, RunPhase::Running).await;
+    let e = s.engine().unwrap();
+    assert!(e.deliver_event("e", json!({ "type": "early", "id": "x1", "data": { "n": 42 } })).await.unwrap().is_empty(), "nobody listens yet");
+    let st = finished(s.as_ref(), id).await;
+    assert_eq!(st.status, ExecutionStatus::Completed, "{:?}", st.error);
+    assert_eq!(st.output.unwrap()["got"], 42);
 }
 
 #[tokio::test(flavor = "multi_thread")]

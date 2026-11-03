@@ -520,6 +520,8 @@ impl TaskHandler for AgentHandler {
             state.messages.extend(messages_from_session(&session));
             debug!(restored_messages = state.messages.len(), "session restored");
         }
+        // Approvals given in this conversation on another process (L39).
+        crate::grants_store::load(storage.as_ref(), &config.session_id).await;
         ctx.context = state.to_context_value(&config);
         fire_after(self, ctx, "load_session", "call:state:get").await;
 
@@ -742,9 +744,15 @@ impl TaskHandler for AgentHandler {
 
                         // Recorded (fine mode): a resumed turn replays it, and a
                         // call that started but never finished is not repeated.
+                        // A tool flow journals its own steps (L2): running it
+                        // again continues it, so it needs no in-doubt guard.
+                        let kind = match config.config.tool_flows.contains_key(tool_name) && swf_runtime::effects::journaled() {
+                            true => swf_runtime::effects::EffectKind::Read,
+                            false => swf_runtime::effects::EffectKind::Effect,
+                        };
                         let (tool_result, replayed) = swf_runtime::effects::effect(
                             &format!("tool/{}.{call_no}", state.iteration),
-                            swf_runtime::effects::EffectKind::Effect,
+                            kind,
                             || async {
                                 info!(tool = %tool_name, "dispatching tool call");
                                 // Faithful tool part for the UI stream: the SDK protocol
@@ -776,6 +784,9 @@ impl TaskHandler for AgentHandler {
                                 }
                             },
                         ).await?;
+                        if let Some(r) = tool_result.as_ref().err().and_then(|e| e.strip_prefix(TOOL_FLOW_HALTED)) {
+                            return Err(RuntimeError::Halted(r.to_string()));
+                        }
 
                         let tool_ok = tool_result.is_ok();
                         // Text for widgets: a tool returning a JSON *string* (get_flow
@@ -1084,15 +1095,24 @@ impl TaskHandler for AgentHandler {
         ctx.context = state.to_context_value(&config);
         fire_before(self, ctx, "store_memory", "call:adb").await;
         if let Some(m) = &memory {
-            m.store_turn(
-                &config.config.memory_config,
-                config.config.ttl,
-                &config.message,
-                state.agent_response.as_deref().unwrap_or_default(),
-                state.tool_calls_made,
-                state.iteration,
-            )
-            .await;
+            // Journaled (L39): a turn that runs again after a crash doesn't
+            // write its episode twice (an interrupted write is not repeated).
+            let (stored, _) = swf_runtime::effects::effect("memory/turn", swf_runtime::effects::EffectKind::Effect, || async {
+                m.store_turn(
+                    &config.config.memory_config,
+                    config.config.ttl,
+                    &config.message,
+                    state.agent_response.as_deref().unwrap_or_default(),
+                    state.tool_calls_made,
+                    state.iteration,
+                )
+                .await;
+                Ok(Value::Null)
+            })
+            .await?;
+            if let Err(e) = stored {
+                warn!(error = %e, "episodic memory for this turn not written again");
+            }
             // F-L3: the exchange's lasting facts into SEMANTIC, after the turn (the
             // reply doesn't wait for it).
             let reply = state.agent_response.clone().unwrap_or_default();
@@ -1110,6 +1130,9 @@ impl TaskHandler for AgentHandler {
                 let input = reflection_input(context, &config.message, &reply, &known);
                 let (m, client, storage) = (m.clone(), http_client.clone(), storage.clone());
                 let llm = config.config.llm_resource.clone().unwrap_or_else(|| "default-llm".to_string());
+                // Started once per turn (L39): a turn run again doesn't reflect
+                // again; a reflection cut off by a crash is lost (best effort).
+                let _ = swf_runtime::effects::effect("memory/reflect", swf_runtime::effects::EffectKind::Effect, || async move {
                 tokio::spawn(async move {
                     let msgs = [Message { role: "user".to_string(), content: input, tool_call_id: None, tool_calls: None }];
                     match call_llm(&client, &storage, &llm, REFLECT_PROMPT, &msgs, &[], 1024, 0.0, None).await {
@@ -1121,6 +1144,9 @@ impl TaskHandler for AgentHandler {
                         Err(e) => warn!(error = %e, "memory reflection failed; the turn's facts are not remembered"),
                     }
                 });
+                Ok(Value::Null)
+                })
+                .await?;
             }
         }
         fire_after(self, ctx, "store_memory", "call:adb").await;
@@ -1976,6 +2002,9 @@ async fn execute_tool_flow(
     let mut child_executor = swf_runtime::WorkflowExecutor::new();
     swf_runtime::handlers::register_builtin_handlers(&mut child_executor);
     crate::handlers::register_clawdflow_handlers(&mut child_executor);
+    // L2: journaled under the tool call's effect, so a resumed turn continues
+    // the tool flow rather than reporting it in doubt.
+    crate::subflow::attach(&mut child_executor, namespace, name);
 
     let expr_engine = flowr_core::ExpressionEngine::new();
     child_executor.set_eval_fn(move |input, expr, context| {
@@ -2003,8 +2032,15 @@ async fn execute_tool_flow(
     };
 
     child_executor.execute(&swf_workflow, input, &mut child_ctx).await
-        .map_err(|e| format!("Tool workflow failed: {}", e))
+        .map_err(|e| match e {
+            RuntimeError::Halted(r) => format!("{TOOL_FLOW_HALTED}{r}"),
+            e => format!("Tool workflow failed: {}", e),
+        })
 }
+
+/// A tool flow's error that is really its run stopping (a durable wait inside
+/// it, a pause, a lost lease): the agent stops too instead of telling the model.
+const TOOL_FLOW_HALTED: &str = "\u{0}flowr-halted:";
 
 #[cfg(test)]
 mod tests {

@@ -85,6 +85,8 @@ impl TaskHandler for RunWorkflowHandler {
         let mut child_executor = swf_runtime::WorkflowExecutor::new();
         swf_runtime::handlers::register_builtin_handlers(&mut child_executor);
         crate::handlers::register_clawdflow_handlers(&mut child_executor);
+        // L2: on a journaled run, the subflow's steps are journaled under this step.
+        crate::subflow::attach(&mut child_executor, &namespace, &name);
 
         // Wire expression engine
         let expr_engine = flowr_core::ExpressionEngine::new();
@@ -122,8 +124,13 @@ impl TaskHandler for RunWorkflowHandler {
         };
 
         // Execute
+        // A halt inside the subflow (a durable wait, a pause, a lost lease) stops
+        // the run; it is not this step's failure.
         let output = child_executor.execute(&swf_workflow, wf_input, &mut child_ctx).await
-            .map_err(|e| RuntimeError::task_failed(&task.name, format!("Nested workflow failed: {}", e)))?;
+            .map_err(|e| match e {
+                RuntimeError::Halted(_) => e,
+                e => RuntimeError::task_failed(&task.name, format!("Nested workflow failed: {}", e)),
+            })?;
 
         Ok(TaskResult::new(output))
     }

@@ -314,7 +314,13 @@ fn correlation_of(listen: &swf_parser::ListenTask, input: &Value, context: &Valu
             resolved(&engine, &scope, &with, input)
         })
         .collect::<std::result::Result<Vec<_>, String>>()?;
-    Ok(json!({ "mode": mode, "filters": filters }))
+    let mut correlation = json!({ "mode": mode, "filters": filters });
+    // L38: events sent since the run started, before it reached this step,
+    // count too (unless FLOWR_LISTEN_SINCE=open: only after the wait opens).
+    if std::env::var("FLOWR_LISTEN_SINCE").map_or(true, |v| v != "open") {
+        correlation["since"] = json!("run");
+    }
+    Ok(correlation)
 }
 
 fn resolved(engine: &flowr_core::ExpressionEngine, scope: &flowr_core::Scope, v: &Value, input: &Value) -> std::result::Result<Value, String> {
@@ -690,6 +696,9 @@ impl StepHook for JournalHook {
                     // An agent records its own calls (fine mode): running it
                     // again replays them and repeats none.
                     || is_agent(task)
+                    // A subflow journals its own steps (L2): running it again
+                    // replays them and continues.
+                    || matches!(task.task, Task::Run(swf_parser::RunTask::Workflow(_)))
                     || matches!(task.task, Task::Emit(_));
                 if !rerun {
                     let error = format!(

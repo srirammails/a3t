@@ -41,6 +41,14 @@ pub fn space(data_dir: &str) -> String {
 /// ADB's engine in this process, for `data_dir` (shared by every storage the
 /// process opens on that directory).
 pub async fn embedded(data_dir: &str) -> anyhow::Result<Arc<dyn EngineStore>> {
+    let (engine, key) = local(data_dir).await?;
+    let store = engine.engine_store(&space(data_dir)).ok_or_else(|| anyhow::anyhow!("ADB engine at {key} has no engine store"))?;
+    Ok(Arc::new(store))
+}
+
+/// The ADB engine in this process for `data_dir` (`<data_dir>/adb`), opened
+/// once: runs, and in CE the registry and state (platform tables), share it.
+pub async fn local(data_dir: &str) -> anyhow::Result<(Arc<adb_executor::LocalEngine>, String)> {
     static ENGINES: OnceLock<tokio::sync::Mutex<HashMap<String, Arc<adb_executor::LocalEngine>>>> = OnceLock::new();
     let dir = std::path::Path::new(data_dir).join("adb");
     let key = dir.to_string_lossy().to_string();
@@ -55,8 +63,7 @@ pub async fn embedded(data_dir: &str) -> anyhow::Result<Arc<dyn EngineStore>> {
             e
         }
     };
-    let store = engine.engine_store(&space(data_dir)).ok_or_else(|| anyhow::anyhow!("ADB engine at {key} has no engine store"))?;
-    Ok(Arc::new(store))
+    Ok((engine, key))
 }
 
 /// The ADB server's engine store, if `FLOWR_ENGINE_ADB_URL` is set.

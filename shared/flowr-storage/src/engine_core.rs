@@ -72,6 +72,9 @@ pub enum Change {
     JournalEvicted { run: RunId },
     Wait { run: RunId, wait_id: String, row: Option<WaitRow> },
     EventSeen { key: String, at: DateTime<Utc> },
+    /// An event kept for waits opened later (L38); older ones in its namespace
+    /// past [`RECENT_EVENTS_FOR`] or [`RECENT_EVENTS_MAX`] go.
+    EventKept { namespace: String, at: DateTime<Utc>, event: Value },
     EventsPruned { before: DateTime<Utc> },
     Checkpoint { run: RunId, seq: u64, snapshot: Vec<u8>, at: DateTime<Utc> },
     Outbox { row: OutboxRow },
@@ -115,6 +118,9 @@ pub struct EngineCore {
     waits: Vec<WaitRow>,
     /// `namespace \n id` → when first delivered.
     events_seen: HashMap<String, DateTime<Utc>>,
+    /// Recent events with an id, oldest first: (namespace, delivered at, event).
+    #[serde(default)]
+    recent: Vec<(String, DateTime<Utc>, Value)>,
     /// Last claim per pool (not durable: a pool is live if it claimed lately).
     #[serde(skip)]
     live: HashMap<String, DateTime<Utc>>,
@@ -123,6 +129,11 @@ pub struct EngineCore {
     #[serde(skip)]
     fx: Effects,
 }
+
+/// How long a delivered event is kept for a `listen` that opens later (L38).
+pub const RECENT_EVENTS_FOR: std::time::Duration = std::time::Duration::from_secs(3600);
+/// The most events kept per namespace.
+pub const RECENT_EVENTS_MAX: usize = 1000;
 
 fn span(d: std::time::Duration) -> chrono::Duration {
     chrono::Duration::from_std(d).unwrap_or(chrono::Duration::MAX)
@@ -244,7 +255,21 @@ impl EngineCore {
             Change::EventSeen { key, at } => {
                 self.events_seen.insert(key.clone(), *at);
             }
-            Change::EventsPruned { before } => self.events_seen.retain(|_, at| *at >= *before),
+            Change::EventsPruned { before } => {
+                self.events_seen.retain(|_, at| *at >= *before);
+                self.recent.retain(|(_, at, _)| *at >= *before);
+            }
+            Change::EventKept { namespace, at, event } => {
+                let horizon = *at - span(RECENT_EVENTS_FOR);
+                self.recent.retain(|(ns, t, _)| ns != namespace || *t >= horizon);
+                let mut n = self.recent.iter().filter(|(ns, ..)| ns == namespace).count();
+                while n >= RECENT_EVENTS_MAX {
+                    let i = self.recent.iter().position(|(ns, ..)| ns == namespace).unwrap();
+                    self.recent.remove(i);
+                    n -= 1;
+                }
+                self.recent.push((namespace.clone(), *at, event.clone()));
+            }
             Change::Checkpoint { run, seq, snapshot, at } => {
                 self.checkpoints.entry(*run).or_default().push((*seq, snapshot.clone(), *at));
             }
@@ -771,12 +796,67 @@ impl EngineCore {
         }
         let namespace = self.runs[&run].row.namespace.clone();
         self.push(run, epoch, &[record], now);
-        self.emit(Change::Wait {
-            run,
-            wait_id: wait_id.to_string(),
-            row: Some(WaitRow { kind: kind.into(), wait_id: wait_id.to_string(), run, namespace, correlation, received: Vec::new() }),
-        });
+        let mut row = WaitRow { kind: kind.into(), wait_id: wait_id.to_string(), run, namespace, correlation, received: Vec::new() };
+        self.emit(Change::Wait { run, wait_id: wait_id.to_string(), row: Some(row.clone()) });
+        // L38: events that came before the wait opened, if it asks for them.
+        if let Some(since) = (kind == "event").then(|| self.replay_since(&row)).flatten() {
+            let taken = self.taken_events(run);
+            let earlier: Vec<Value> = self
+                .recent
+                .iter()
+                .filter(|(ns, at, ev)| *ns == row.namespace && *at >= since && event_id(ev).is_some_and(|id| !taken.contains(id)))
+                .map(|(.., ev)| ev.clone())
+                .collect();
+            for ev in earlier {
+                let (took, done) = offer_event(&row.correlation, &mut row.received, &ev);
+                if done {
+                    self.complete_wait(now, row, epoch);
+                    break;
+                }
+                if took {
+                    self.emit(Change::Wait { run, wait_id: wait_id.to_string(), row: Some(row.clone()) });
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// From when a new event wait takes events already delivered: its
+    /// correlation's `since` — `"run"` (the run's start) or a time; none
+    /// without it.
+    fn replay_since(&self, w: &WaitRow) -> Option<DateTime<Utc>> {
+        match w.correlation.get("since")? {
+            Value::String(s) if s == "run" => self.runs.get(&w.run).map(|r| r.row.created_at),
+            Value::String(s) => DateTime::parse_from_rfc3339(s).ok().map(|t| t.with_timezone(&Utc)),
+            _ => None,
+        }
+    }
+
+    /// Ids of the events a run's waits already received (its journal and its
+    /// open waits): a later wait is not offered them again.
+    fn taken_events(&self, run: RunId) -> HashSet<String> {
+        let mut ids = HashSet::new();
+        for e in self.journal.get(&run).into_iter().flatten() {
+            if let Record::EventReceived { events, .. } = &e.record {
+                ids.extend(events.as_array().into_iter().flatten().filter_map(|ev| event_id(ev).map(str::to_string)));
+            }
+        }
+        for w in self.waits.iter().filter(|w| w.run == run) {
+            ids.extend(w.received.iter().filter_map(|ev| event_id(ev).map(str::to_string)));
+        }
+        ids
+    }
+
+    /// A wait has its events: close it, journal them and wake the run.
+    fn complete_wait(&mut self, now: DateTime<Utc>, w: WaitRow, epoch: Epoch) {
+        let run = w.run;
+        self.emit(Change::Wait { run, wait_id: w.wait_id.clone(), row: None });
+        self.push(run, epoch, &[Record::EventReceived { wait_id: w.wait_id.clone(), events: received_events(&w.received) }], now);
+        if !self.owned_now(run, now) {
+            self.set_phase(run, |r| r.phase = RunPhase::Pending);
+        }
+        self.wake(run, wait_wake_key(run, &w.wait_id), now);
+        self.notice(run_topic(run), json!({ "event": true }));
     }
 
     pub fn open_wait(&mut self, now: DateTime<Utc>, run: RunId, epoch: Epoch, wait_id: &str, correlation: Value) -> StoreResult<()> {
@@ -832,6 +912,7 @@ impl EngineCore {
                 return Ok(Vec::new());
             }
             self.emit(Change::EventSeen { key, at: now });
+            self.emit(Change::EventKept { namespace: namespace.to_string(), at: now, event: event.clone() });
         }
         let candidates: Vec<WaitRow> = self.waits.iter().filter(|w| w.namespace == namespace && w.kind == "event").cloned().collect();
         let mut woke = Vec::new();
@@ -849,13 +930,7 @@ impl EngineCore {
                 self.emit(Change::Wait { run, wait_id: w.wait_id.clone(), row: Some(w) });
                 continue;
             }
-            self.emit(Change::Wait { run, wait_id: w.wait_id.clone(), row: None });
-            self.push(run, s.row.epoch, &[Record::EventReceived { wait_id: w.wait_id.clone(), events: received_events(&w.received) }], now);
-            if !self.owned_now(run, now) {
-                self.set_phase(run, |r| r.phase = RunPhase::Pending);
-            }
-            self.wake(run, wait_wake_key(run, &w.wait_id), now);
-            self.notice(run_topic(run), json!({ "event": true }));
+            self.complete_wait(now, w, s.row.epoch);
             woke.push(run);
         }
         Ok(woke)
@@ -1195,4 +1270,8 @@ mod tests {
         assert_eq!(follower.read_from(id, 0), None);
         assert_eq!(follower.durable_view(), core.durable_view());
     }
+}
+
+fn event_id(ev: &Value) -> Option<&str> {
+    ev.get("id").and_then(Value::as_str)
 }

@@ -394,3 +394,103 @@ impl PlatformDb for AdbPlatform {
         crate::handlers::call_adb::flight_put(&self.ep, table, batch, true).await.map(|_| ())
     }
 }
+
+// ---------------------------------------------------------------- ADB (embedded)
+
+/// Platform tables on the ADB engine in this process (CE: `<data_dir>/adb`, the
+/// same engine as the run store), written through its log like the server's.
+pub struct EmbeddedAdbPlatform {
+    engine: Arc<adb_executor::LocalEngine>,
+    path: String,
+}
+
+impl EmbeddedAdbPlatform {
+    pub fn new(engine: Arc<adb_executor::LocalEngine>, path: impl Into<String>) -> Self {
+        Self { engine, path: path.into() }
+    }
+
+    async fn write(&self, effect: adb_core::log::Effect) -> Result<u64, String> {
+        use adb_executor::Engine;
+        self.engine.platform_write(effect).await
+    }
+}
+
+/// A row for ADB's platform tables: every value as text, nulls left out
+/// (what ADB's Flight `do_put` makes of a batch).
+fn text_row(r: &Value, only: Option<&[String]>) -> Map<String, Value> {
+    let mut o = Map::new();
+    if let Some(m) = r.as_object() {
+        for (k, v) in m {
+            if only.is_some_and(|cols| !cols.iter().any(|c| c == k)) {
+                continue;
+            }
+            match v {
+                Value::Null => {}
+                Value::String(s) => {
+                    o.insert(k.clone(), Value::String(s.clone()));
+                }
+                other => {
+                    o.insert(k.clone(), Value::String(other.to_string()));
+                }
+            }
+        }
+    }
+    o
+}
+
+#[async_trait]
+impl PlatformDb for EmbeddedAdbPlatform {
+    fn describe(&self) -> String {
+        format!("adb (embedded):{}", self.path)
+    }
+
+    async fn list_tables(&self) -> Result<Vec<String>, String> {
+        use adb_executor::Engine;
+        let p = self.engine.platform().ok_or_else(|| "platform tables need a durable ADB engine".to_string())?;
+        p.list_tables().map_err(|e| e.to_string())
+    }
+
+    async fn query(&self, table: &str, filter: Option<&str>, limit: usize) -> Result<Vec<RecordBatch>, String> {
+        let filter = filter.map(flowr_storage::filter::compat);
+        use adb_executor::Engine;
+        let p = self.engine.platform().ok_or_else(|| "platform tables need a durable ADB engine".to_string())?;
+        p.query(table, filter.as_deref(), limit).await.map_err(|e| e.to_string())
+    }
+
+    async fn insert(&self, table: &str, records: &[Value]) -> Result<usize, String> {
+        if records.is_empty() {
+            return Ok(0);
+        }
+        let rows: Vec<Map<String, Value>> = records.iter().map(|r| text_row(r, None)).collect();
+        self.write(adb_core::log::Effect::TableInsert { table: table.to_string(), rows }).await?;
+        Ok(records.len())
+    }
+
+    async fn create_table(&self, table: &str, schema: Option<&Map<String, Value>>, _mode: &str) -> Result<Value, String> {
+        if self.list_tables().await?.iter().any(|t| t == table) {
+            return Ok(json!({"created": false, "exists": true}));
+        }
+        let columns: Vec<String> = schema.map(|s| s.keys().cloned().collect()).unwrap_or_default();
+        self.write(adb_core::log::Effect::TableCreate { table: table.to_string(), columns }).await?;
+        Ok(json!({"created": true, "table": table}))
+    }
+
+    async fn update(&self, table: &str, filter: &str, values: &Map<String, Value>) -> Result<(), String> {
+        let values = values.iter().map(|(k, v)| (k.clone(), sql_literal(v))).collect();
+        self.write(adb_core::log::Effect::TableUpdate { table: table.to_string(), filter: flowr_storage::filter::compat(filter), values })
+            .await
+            .map(|_| ())
+    }
+
+    async fn delete(&self, table: &str, filter: &str) -> Result<(), String> {
+        self.write(adb_core::log::Effect::TableDelete { table: table.to_string(), filter: flowr_storage::filter::compat(filter) })
+            .await
+            .map(|_| ())
+    }
+
+    async fn replace_table(&self, table: &str, columns: &[String], rows: &[Value]) -> Result<(), String> {
+        let cols: Vec<String> = if columns.is_empty() && !rows.is_empty() { vec!["id".into()] } else { columns.to_vec() };
+        let rows = rows.iter().map(|r| text_row(r, Some(&cols))).collect();
+        self.write(adb_core::log::Effect::TableReplace { table: table.to_string(), columns: cols, rows }).await.map(|_| ())
+    }
+}

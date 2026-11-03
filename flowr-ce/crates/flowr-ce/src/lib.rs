@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! ClawdFlow Server Library
 //!
 //! Reusable server components for both `clawdflow` CE and `flowr` EE binaries.
@@ -14,6 +15,8 @@ pub mod ops;
 mod engine_worker;
 pub mod engine_adb;
 pub mod events;
+mod grants_store;
+pub(crate) mod subflow;
 pub mod engine_remote;
 mod journal_hook;
 pub mod integrity;
@@ -110,6 +113,7 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
     // console's store through its gateway (FLOWR_ENGINE_URL), which also
     // carries its chat and agent streams to the console either way.
     let gateway = engine_remote::remote_from_env().filter(|_| engine);
+    let mut embedded = false;
     if let Some(g) = &gateway {
         g.transport().forward_streams();
     }
@@ -121,6 +125,7 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
         info!(url = %std::env::var("FLOWR_ENGINE_URL").unwrap_or_default(), "engine store: remote (console gateway)");
         storage.with_engine(Arc::new(remote))
     } else if engine {
+        embedded = true;
         storage.with_engine(engine_adb::embedded(data_dir).await?)
     } else {
         storage
@@ -131,8 +136,32 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
     info!("Storage initialized successfully");
     match std::env::var("FLOWR_REGISTRY_ADB").ok().filter(|u| !u.is_empty()) {
         Some(url) => shared_registry_storage(storage, &url, &db_path).await,
+        None if embedded && registry_on_adb() => embedded_registry_storage(storage, data_dir, &db_path).await,
         None => Ok(storage),
     }
+}
+
+/// CE keeps its registry and state on its embedded ADB too (one store), unless
+/// `FLOWR_REGISTRY=lance` keeps them in `clawdflow.lance`.
+pub fn registry_on_adb() -> bool {
+    !std::env::var("FLOWR_REGISTRY").map(|v| v.eq_ignore_ascii_case("lance")).unwrap_or(false)
+}
+
+/// Flows, resources and every state key on the ADB engine in this process
+/// (platform tables in `<data_dir>/adb`, beside the runs). The first start
+/// copies them from `clawdflow.lance`, which is left as it was.
+async fn embedded_registry_storage(
+    local: Arc<dyn StorageBackend>,
+    data_dir: &str,
+    local_path: &str,
+) -> anyhow::Result<Arc<dyn StorageBackend>> {
+    let (engine, key) = engine_adb::local(data_dir).await?;
+    let db: Arc<dyn platform_db::PlatformDb> = Arc::new(platform_db::EmbeddedAdbPlatform::new(engine, key));
+    let shared = shared_registry::SharedRegistryStorage::new(local, Arc::clone(&db), Vec::new()).all_state();
+    shared.init().await.map_err(|e| anyhow::anyhow!("registry on ADB ({}): {e}", db.describe()))?;
+    let copied = shared_registry::seed_with(&*db, local_path, true).await.map_err(|e| anyhow::anyhow!("copying the registry into ADB: {e}"))?;
+    info!(registry = %shared.describe(), ?copied, "registry and state: ADB (embedded)");
+    Ok(Arc::new(shared))
 }
 
 /// Whether this process uses the console's engine store over the gateway
@@ -285,6 +314,8 @@ pub fn build_ce_router(storage: Arc<dyn StorageBackend>) -> Router {
     flowr_mcp_core::set_delete_guard(Arc::new(integrity::Guard { storage: storage.clone() }));
     // `send_event` also starts the flows of event triggers.
     events::install_sink();
+    // Approval answers given to agents hold across processes (L39).
+    grants_store::install(storage.clone());
 
     let registry_routes = registry::registry_router(storage.clone());
     let canvas_routes = canvas::canvas_router(storage.clone());
@@ -1130,6 +1161,7 @@ async fn list_permissions_handler(
                                    flowr_policy::actions::session_read()).await {
         return (StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))).into_response();
     }
+    grants_store::load(state.storage.as_ref(), &session_id).await;
     let all = flowr_policy::grants::list(&session_id);
     Json(json!({ "permissions": all, "count": all.len() })).into_response()
 }
@@ -1168,6 +1200,7 @@ async fn lift_permission_handler(
     // Forgets either verdict: a grant is as revocable as a refusal is liftable.
     // Both re-open the question rather than flipping it, so a click in a list
     // never silently grants or silently blocks anything.
+    grants_store::load(state.storage.as_ref(), &session_id).await;
     let lifted = flowr_policy::grants::forget(&session_id, key);
     Json(json!({
         "lifted": lifted,

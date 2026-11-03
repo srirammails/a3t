@@ -41,6 +41,7 @@ where
     outbox_drains_in_order(&make().await).await;
     purge_removes_only_old_finished_runs(&make().await).await;
     event_waits_wake_matching_runs_once(&make().await).await;
+    a_listen_gets_events_sent_since_its_run_started(&make().await).await;
     repeated_event_ids_are_dropped(&make().await).await;
     approvals_are_answered_once(&make().await).await;
     pools_that_claim_are_live(&make().await).await;
@@ -375,6 +376,43 @@ fn kinds<'a>(entries: &'a [JournalEntry]) -> Vec<&'a str> {
             _ => "other",
         })
         .collect()
+}
+
+/// L38: a wait with `since` takes events delivered before it opened — since
+/// its run started (or the time given), each event once per run.
+async fn a_listen_gets_events_sent_since_its_run_started<S: EngineStore>(s: &S) {
+    let ev = |t: &str| json!({ "specversion": "1.0", "id": Uuid::now_v7(), "type": t, "source": "/shop" });
+    let listen = |t: &str| json!({ "mode": "one", "filters": [{ "type": t }], "since": "run" });
+    // Sent before the run started: not for it.
+    s.deliver_event("e", ev("go")).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let id = start(s, new_run("e", "f")).await;
+    let (lease, _, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    // Sent while the run is busy, before it reaches `listen`.
+    let early = ev("go");
+    s.deliver_event("e", early.clone()).await.unwrap();
+    s.deliver_event("other", ev("go")).await.unwrap();
+    s.open_wait(id, epoch, "w1", listen("go")).await.unwrap();
+    let journal = s.read_from(id, 0).await.unwrap();
+    assert_eq!(kinds(&journal), ["wait", "event"], "the early event completes the wait at once");
+    let Record::EventReceived { events, .. } = &journal[1].record else { unreachable!() };
+    assert_eq!(events[0]["id"], early["id"], "the one sent after the run started, in its namespace");
+    s.release(id, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
+    let (lease, task, epoch) = s.claim_runs(DEFAULT_POOL, "w", 1, LEASE).await.unwrap().remove(0);
+    assert_eq!(task.kind, TaskKind::ResumeRun);
+    // A second listen in the same run is not offered the same event again.
+    s.open_wait(id, epoch, "w2", listen("go")).await.unwrap();
+    assert_eq!(kinds(&s.read_from(id, 0).await.unwrap()), ["wait", "event", "wait"], "still waiting");
+    s.release(id, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
+    assert_eq!(s.deliver_event("e", ev("go")).await.unwrap(), vec![id], "a new event wakes it");
+    // Without `since`, a wait takes only what comes after it opens.
+    let id = start(s, new_run("e", "g")).await;
+    let claimed = s.claim_runs(DEFAULT_POOL, "w", 5, LEASE).await.unwrap();
+    let (lease, _, epoch) = claimed.into_iter().find(|(_, t, _)| t.run_id == id).unwrap();
+    s.deliver_event("e", ev("stop")).await.unwrap();
+    s.open_wait(id, epoch, "w3", json!({ "mode": "one", "filters": [{ "type": "stop" }] })).await.unwrap();
+    assert_eq!(kinds(&s.read_from(id, 0).await.unwrap()), ["wait"]);
+    s.release(id, epoch, RunPhase::Waiting, RunOutcome::default(), &lease).await.unwrap();
 }
 
 async fn event_waits_wake_matching_runs_once<S: EngineStore>(s: &S) {
