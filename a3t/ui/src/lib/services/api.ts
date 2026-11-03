@@ -41,7 +41,22 @@ export function onTokenExpired(callback: () => void) {
 
 // ── Core fetch wrapper ──
 
+/// Every request counts in the status bar while in flight (see core/status/activity),
+/// and tells it whether the server answered at all.
 async function request<T = any>(
+  path: string,
+  options: RequestInit = {},
+  requireAuth = true,
+): Promise<ApiResponse<T>> {
+  const span = begin(requestKind(path, options));
+  const res = await send<T>(path, options, requireAuth);
+  if (res.status === 0) reached(false, res.error);
+  else reached(true);
+  end(span, res.ok);
+  return res;
+}
+
+async function send<T = any>(
   path: string,
   options: RequestInit = {},
   requireAuth = true,
@@ -549,17 +564,7 @@ export const idp = {
 
 import { messages } from '$lib/core/status/messages';
 
-function progressStart() {
-  if (typeof window !== 'undefined' && (window as any).__a3t_progress) {
-    (window as any).__a3t_progress.start();
-  }
-}
-
-function progressDone() {
-  if (typeof window !== 'undefined' && (window as any).__a3t_progress) {
-    (window as any).__a3t_progress.done();
-  }
-}
+import { actionKind, begin, end, reached, requestKind } from '$lib/core/status/activity';
 
 // ── Shared exec helper: execute_flow + poll for result ──
 
@@ -586,15 +591,16 @@ export async function execFlow(
     }
   }
 
-  progressStart();
+  // One span over the whole call: the polls in between keep it busy.
+  const span = begin(actionKind(actualInput?.input?.action));
 
   try {
     // Step 1: Execute
     const execRes = await mcpCall('execute_flow', { name: actualFlowName, namespace, input: actualInput });
     if (!execRes.ok) {
-      progressDone();
+      end(span, false);
       const err = execRes.error ?? `Failed to execute ${flowName}`;
-      if (!silent) messages.error(err);
+      if (!silent) messages.error(err, { source: flowName });
       return { ok: false, error: err };
     }
 
@@ -613,7 +619,7 @@ export async function execFlow(
           // A null output used to yield the whole status object (`d.output ?? d`
           // below); keep that by letting it fall through to the poll.
           if (parsed !== null) {
-            progressDone();
+            end(span);
             return { ok: true, data: parsed };
           }
         } catch { /* unexpected shape — fall back to polling below */ }
@@ -623,12 +629,12 @@ export async function execFlow(
     const instanceId = match?.[1];
 
     if (!instanceId) {
-      progressDone();
+      end(span, !!(execRes.data?.rows || execRes.data?.output));
       if (execRes.data?.rows || execRes.data?.output) {
         return { ok: true, data: execRes.data };
       }
       const err = 'No instance ID in response';
-      if (!silent) messages.error(err);
+      if (!silent) messages.error(err, { source: flowName });
       return { ok: false, error: err };
     }
 
@@ -641,27 +647,27 @@ export async function execFlow(
       if (!statusRes.ok) continue;
       const d = statusRes.data;
       if (d?.status === 'Completed' || d?.status === 'completed') {
-        progressDone();
+        end(span);
         return { ok: true, data: d.output ?? d };
       }
       if (d?.status === 'Failed' || d?.status === 'failed') {
-        progressDone();
+        end(span, false);
         const err = d.error ?? `${flowName} failed`;
-        if (!silent) messages.error(err);
+        if (!silent) messages.error(err, { source: flowName });
         return { ok: false, error: err };
       }
     }
 
-    progressDone();
+    end(span, false);
     console.log(`[execFlow] ${flowName} TIMED OUT after ${maxPolls} polls`);
     const err = `${flowName} timed out`;
-    if (!silent) messages.error(err);
+    if (!silent) messages.error(err, { source: flowName });
     return { ok: false, error: err };
 
   } catch (e) {
-    progressDone();
+    end(span, false);
     const err = String(e);
-    if (!silent) messages.error(err);
+    if (!silent) messages.error(err, { source: flowName });
     return { ok: false, error: err };
   }
 }
@@ -920,7 +926,7 @@ export async function webhookChat(
 ): Promise<{ ok: boolean; data?: any; error?: string }> {
   const maxPolls = opts.maxPolls ?? 90;
   const pollInterval = opts.pollInterval ?? 1000;
-  progressStart();
+  const span = begin('running');
   try {
     // Clean path form: /webhook/agent/{id}/chat (epPath begins with "/")
     const url = epPath.startsWith('/') ? `/webhook${epPath}` : `/webhook/${epPath}`;
@@ -928,25 +934,25 @@ export async function webhookChat(
       method: 'POST',
       body: JSON.stringify(body),
     });
-    if (!post.ok) { progressDone(); return { ok: false, error: post.error ?? `Webhook ${epPath} failed` }; }
+    if (!post.ok) { end(span, false); return { ok: false, error: post.error ?? `Webhook ${epPath} failed` }; }
 
     const targets: string[] = post.data?.targets ?? [];
     const m = (targets[0] || '').match(/\(([0-9a-f-]+)\)/);
     const instanceId = m?.[1];
-    if (!instanceId) { progressDone(); return { ok: false, error: `No trigger/endpoint for ${epPath}` }; }
+    if (!instanceId) { end(span, false); return { ok: false, error: `No trigger/endpoint for ${epPath}` }; }
 
     for (let i = 0; i < maxPolls; i++) {
       await new Promise(r => setTimeout(r, pollInterval));
       const st = await mcpCall('get_execution_status', { instance_id: instanceId });
       if (!st.ok) continue;
       const d = st.data;
-      if (d?.status === 'Completed' || d?.status === 'completed') { progressDone(); return { ok: true, data: d.output ?? d }; }
-      if (d?.status === 'Failed' || d?.status === 'failed') { progressDone(); return { ok: false, error: d.error ?? 'agent run failed' }; }
+      if (d?.status === 'Completed' || d?.status === 'completed') { end(span); return { ok: true, data: d.output ?? d }; }
+      if (d?.status === 'Failed' || d?.status === 'failed') { end(span, false); return { ok: false, error: d.error ?? 'agent run failed' }; }
     }
-    progressDone();
+    end(span, false);
     return { ok: false, error: 'agent run timed out' };
   } catch (e) {
-    progressDone();
+    end(span, false);
     return { ok: false, error: String(e) };
   }
 }

@@ -2,6 +2,17 @@
   import { currentUser, signOut } from '$lib/stores/auth';
   import { goto } from '$app/navigation';
   import ProfileModal from './ProfileModal.svelte';
+  import NotificationsModal from './NotificationsModal.svelte';
+  import { notifications, openNotifications } from '$lib/core/status/messages';
+
+  // The bell: unread warnings and errors (red when any is an error).
+  let unread = $state(0);
+  let unreadError = $state(false);
+  $effect(() => notifications.subscribe((l) => {
+    const u = l.filter((m) => !m.read);
+    unread = u.length;
+    unreadError = u.some((m) => m.type === 'error');
+  }));
 
   let menuOpen = $state(false);
   let profileOpen = $state(false);
@@ -47,6 +58,11 @@
 
   <span style="flex: 1;"></span>
 
+  <button class="bell" class:has={unread > 0} onclick={() => openNotifications()} aria-label={unread ? `${unread} unread notification${unread === 1 ? '' : 's'}` : 'Notifications'} title="Notifications — warnings and errors">
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 11V7a4 4 0 018 0v4l1.5 1.5h-11zM6.5 14a1.5 1.5 0 003 0" /></svg>
+    {#if unread > 0}<span class="badge" class:err={unreadError}>{unread > 99 ? '99+' : unread}</span>{/if}
+  </button>
+
   <!-- User menu -->
   <div class="user-area">
     <button class="avatar-btn" onclick={() => menuOpen = !menuOpen}>
@@ -84,6 +100,7 @@
 {/if}
 
 <ProfileModal bind:open={profileOpen} />
+<NotificationsModal />
 
 <style>
   .header {
@@ -117,6 +134,12 @@
   }
 
   .hdr-menus { display: flex; align-items: center; gap: 8px; margin-left: 6px; }
+
+  .bell { position: relative; display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 50%; background: none; color: var(--text-3); cursor: pointer; transition: background 0.12s, color 0.12s; }
+  .bell:hover { background: var(--bg-subtle); color: var(--text-1); }
+  .bell .badge { position: absolute; top: 3px; right: 2px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; background: var(--warn); color: #fff;
+                 font: 600 9.5px/15px var(--font-sans); text-align: center; box-shadow: 0 0 0 2px var(--bg-surface); }
+  .bell .badge.err { background: var(--err); }
 
   .user-area { position: relative; }
   .avatar-btn {
