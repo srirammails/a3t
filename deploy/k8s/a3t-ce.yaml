@@ -1,0 +1,84 @@
+# A3T CE on vc-dev: FlowR CE with ADB embedded in the process (runs, registry
+# and state in /data/clawdflow/adb; FlowR CE's default since flowr 5bb84bc).
+# No ADB server, no runtimes, no Cedar (policy hook allow_all).
+#
+# Before applying, the namespace needs two secrets (copy them from a3t):
+#   registry-credentials  (image pull from ghcr.io)
+#   a3t-superadmin        (email, password; optional — CE starts without it)
+#
+# Same namespace and Service name as the CE before it (a3t-ce / flowr), so the
+# host cluster's ingress for the CE console reaches it again.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: a3t-ce
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flowr
+  namespace: a3t-ce
+  labels: { app: flowr }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: flowr }
+  template:
+    metadata:
+      labels: { app: flowr }
+    spec:
+      imagePullSecrets: [{ name: registry-credentials }]
+      initContainers:
+        - name: fix-perms
+          image: ghcr.io/srirammails/flowr:2026-11-03-ce
+          command: [sh, -c, "chown -R 1000:1000 /data/clawdflow /data/a3t"]
+          securityContext: { runAsUser: 0 }
+          volumeMounts:
+            - { name: clawdflow-data, mountPath: /data/clawdflow }
+            - { name: a3t-data, mountPath: /data/a3t }
+      containers:
+        - name: flowr
+          image: ghcr.io/srirammails/flowr:2026-11-03-ce
+          args: [--mode, http, --port, "3002"]
+          env:
+            - { name: CLAWDFLOW_DATA_DIR, value: /data/clawdflow }
+            - { name: A3T_DB_PATH, value: /data/a3t/a3t-platform.lance }
+            - { name: FLOWR_SECURITY_POLICY_HOOK, value: allow_all }
+            - { name: RUST_LOG, value: "info,lance=warn,datafusion=warn" }
+            - name: FLOWR_CORS_ORIGINS
+              value: "http://localhost:5173,https://dash.dev.a3t.io,https://console.dev.a3t.io,https://dash.a3t.io,https://a3t-console.b-cdn.net"
+            - name: A3T_SUPERADMIN_EMAIL
+              valueFrom: { secretKeyRef: { name: a3t-superadmin, key: email, optional: true } }
+            - name: A3T_SUPERADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: a3t-superadmin, key: password, optional: true } }
+          ports:
+            - { name: http, containerPort: 3002 }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 2Gi }
+          volumeMounts:
+            - { name: clawdflow-data, mountPath: /data/clawdflow }
+            - { name: a3t-data, mountPath: /data/a3t }
+      volumes:
+        - name: clawdflow-data
+          hostPath: { path: /data/a3t-dev-ce/clawdflow, type: DirectoryOrCreate }
+        - name: a3t-data
+          hostPath: { path: /data/a3t-dev-ce/a3t, type: DirectoryOrCreate }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flowr
+  namespace: a3t-ce
+spec:
+  selector: { app: flowr }
+  ports:
+    - { name: http, port: 3002, targetPort: http }
