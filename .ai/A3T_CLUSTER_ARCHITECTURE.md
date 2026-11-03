@@ -265,3 +265,48 @@ Numbered **AC-n** (A3T cluster). Related limitation numbers in brackets.
   gateway spec).
 - The controller is a Kubernetes operator with its own leader election. Keep it, or move
   its reconcile loop to an ADB singleton?
+
+## 10. Build: basic gateway + router, policy placeholder, Raft (3 Nov 2026)
+
+User, 3 Nov: "basic routing gateway for now; policy layer later; focus on Gateway+Router
+with policy placeholder and Raft." Identity (AC-11), the vault (AC-9) and Cedar in the
+gateway (AC-10 decide) come later; this step gives every outbound call one path through
+a `gateway` pool, with a decision point that allows everything and records it.
+
+**G1 Router.** One `router` module replaces `engine_worker::route`. Rules, first match:
+platform namespaces (`a3t*`, `system*`) → `default` (the platform pool, CA-32); the
+gateway flow → `gateway`; canvas sandbox → deployment runtime → `FLOWR_DEFAULT_POOL` →
+`default` (as today). Every decision is a `Route {pool, rule}` so it can be logged and
+tested.
+
+**G2 Gateway client (runtimes).** With `FLOWR_GATEWAY=pool`, the outbound handlers
+(`call:http`, `call:openapi`, `call:grpc`, `call:a2a`, `call:mcp`, `call:llm`) are wrapped:
+the step starts a run of `system-gateway/call` in pool `gateway` with the resolved task,
+the step input and the caller (run, step, namespace, flow, principal), dedupe key =
+the step's idempotency key (a retried step reuses the same gateway run, nothing is
+called twice), and waits on `run:<id>` for its outcome. Agent tool flows are made of these
+steps, so agent tool calls go through too. Not yet: the agent's own LLM call inside
+`call:a3t:agent` (it streams tokens) — G6.
+
+**G3 Gateway (pool `gateway`).** `system-gateway/call` is one step, `call:a3t:gateway`:
+Verify (caller present; placeholder) → Resolve (the org's `settings.gateway`: `a3t`, or
+`external` → not yet, refused with a clear error) → Decide (`GatewayPolicy` trait; the
+placeholder allows and says so) → Act (the real handler, in this process — the only
+place with downstream credentials) → Record (a `gateway_decisions` row: time, caller,
+target, decision, reason, outcome, duration). The flow is seeded into the registry by
+gateway processes.
+
+**G4 vc-dev.** Deployment `gateway` (FlowR EE, `FLOWR_WORKER_POOLS=gateway`, 2 replicas,
+its own pool token); runtimes get `FLOWR_GATEWAY=pool`.
+
+**G5 Tests.** Local: a runtime's `call:http` reaches the target from the gateway process,
+once per idempotency key, through a gateway kill and an ADB leader kill; a deny rule in
+the placeholder (`FLOWR_GATEWAY_DENY`, for tests) fails the step with the reason; the
+decision rows exist. Then the same on vc-dev.
+
+**G6** the agent's LLM call through the gateway (streamed tokens keep going to
+`stream:<session>`).
+
+**Raft, alongside:** R1 transaction-id dedupe across a failover (CA-27); R2 faster
+failover — keep the engine warm on followers instead of reopening it (CA-34); R3 group
+commit (CA-24): every gateway call adds Raft writes, so throughput starts to matter.
