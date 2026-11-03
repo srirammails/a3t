@@ -114,12 +114,22 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
     // carries its chat and agent streams to the console either way.
     let gateway = engine_remote::remote_from_env().filter(|_| engine);
     let mut embedded = false;
-    if let Some(g) = &gateway {
+    let adb = engine_adb::remote_from_env(data_dir).filter(|_| engine);
+    // Chat and agent output: through ADB to whichever FlowR holds the viewer
+    // (cluster mode), else forwarded to the console over its gateway.
+    if let (Some(g), None) = (&gateway, &adb) {
         g.transport().forward_streams();
     }
-    let storage = if let Some(adb) = engine_adb::remote_from_env(data_dir).filter(|_| engine) {
+    let storage = if let Some(adb) = adb {
         info!(url = %std::env::var("FLOWR_ENGINE_ADB_URL").unwrap_or_default(), space = %engine_adb::space(data_dir), "engine store: ADB (remote)");
-        storage.with_engine(Arc::new(adb))
+        let adb: Arc<dyn flowr_storage::engine::EngineStore> = Arc::new(adb);
+        if stream_through_adb() {
+            token_stream::cluster(Arc::clone(&adb));
+            info!("chat and agent streams: through ADB (cluster)");
+        } else if let Some(g) = &gateway {
+            g.transport().forward_streams();
+        }
+        storage.with_engine(adb)
     } else if let Some(remote) = gateway {
         // A runtime: the console holds the queue, runs and journals.
         info!(url = %std::env::var("FLOWR_ENGINE_URL").unwrap_or_default(), "engine store: remote (console gateway)");
@@ -139,6 +149,20 @@ pub async fn init_storage_with(data_dir: &str, engine: bool) -> anyhow::Result<A
         None if embedded && registry_on_adb() => embedded_registry_storage(storage, data_dir, &db_path).await,
         None => Ok(storage),
     }
+}
+
+/// With a remote ADB engine store, chat and agent output goes through ADB
+/// (`FLOWR_STREAMS=gateway` keeps the previous forwarding to the console).
+pub fn stream_through_adb() -> bool {
+    !std::env::var("FLOWR_STREAMS").map(|v| v.eq_ignore_ascii_case("gateway")).unwrap_or(false)
+}
+
+/// EE with a shared registry: every state key, the settings and the triggers are
+/// shared, so any FlowR in the cluster can take over from another (stage 1 of
+/// `.ai/A3T_CLUSTER_ARCHITECTURE.md`). `FLOWR_SHARED_STATE=agent` keeps the
+/// previous split: only `agent:*` keys shared, the rest on the pod's disk.
+pub fn shared_state_all() -> bool {
+    !std::env::var("FLOWR_SHARED_STATE").map(|v| v.eq_ignore_ascii_case("agent")).unwrap_or(false)
 }
 
 /// CE keeps its registry and state on its embedded ADB too (one store), unless
@@ -214,7 +238,11 @@ async fn shared_registry_storage(
         .iter()
         .map(|(ns, name)| ("_triggers".to_string(), format!("runtime:{ns}/{name}:triggers")))
         .collect();
-    let shared = shared_registry::SharedRegistryStorage::new(local, Arc::clone(&db), aliases);
+    let mut shared = shared_registry::SharedRegistryStorage::new(local, Arc::clone(&db), aliases);
+    let all = shared_state_all();
+    if all {
+        shared = shared.all_state();
+    }
     let mut tries = 0;
     loop {
         match shared.init().await {
@@ -229,8 +257,11 @@ async fn shared_registry_storage(
     }
     if runtime.is_none() {
         shared_registry::seed(&*db, local_path).await.map_err(|e| anyhow::anyhow!("seeding the shared registry: {e}"))?;
+        if all {
+            shared_registry::migrate_local(&*db, local_path).await.map_err(|e| anyhow::anyhow!("copying local state to the shared registry: {e}"))?;
+        }
     }
-    info!(registry = %shared.describe(), runtime = ?runtime, "registry and agent state on ADB (shared)");
+    info!(registry = %shared.describe(), runtime = ?runtime, all_state = all, "registry and agent state on ADB (shared)");
     Ok(Arc::new(shared))
 }
 
@@ -245,6 +276,20 @@ pub async fn restore_triggers(storage: &Arc<dyn StorageBackend>) {
     }
     runtime_trigger(storage).await;
     topic_triggers::spawn(Arc::clone(storage));
+    // Shared triggers: another FlowR may change them; follow (the trigger store
+    // reloads the set from the shared state on every read).
+    if std::env::var("FLOWR_REGISTRY_ADB").map(|u| !u.is_empty()).unwrap_or(false) && shared_state_all() {
+        let storage = Arc::clone(storage);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
+            loop {
+                tick.tick().await;
+                if let Err(e) = storage.triggers().list(None).await {
+                    tracing::debug!(error = %e, "trigger reload failed");
+                }
+            }
+        });
+    }
 }
 
 /// A runtime pod (ADB MVP W2b): make sure its deployment has the `adb_topic`
@@ -783,6 +828,15 @@ impl flowr_ce_agents::triggers::WorkflowExecutor for TriggerWorkflowAdapter {
                     run.dedupe_key = Some(format!("cron:{id}:{namespace}/{name}:{minute}"));
                     run.trigger = format!("cron:{id}");
                 }
+            }
+            // One run per topic message and target, however many FlowRs read the
+            // topic (the offset is ADB's log offset: the same for every reader).
+            if let (Some(topic), Some(offset)) = (
+                request.input.get("_topic").and_then(|v| v.as_str()),
+                request.input.get("_offset").and_then(|v| v.as_u64()),
+            ) {
+                run.dedupe_key = Some(format!("topic:{topic}:{offset}:{namespace}/{name}"));
+                run.trigger = format!("topic:{topic}");
             }
             // One run per event and target, however often the event is sent.
             if let (Some(_), Some(id), Some(kind)) = (

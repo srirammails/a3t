@@ -1,0 +1,44 @@
+# A3T on an ADB cluster — limitations and deviations
+
+Companion to [A3T_CLUSTER_ARCHITECTURE.md](A3T_CLUSTER_ARCHITECTURE.md). Records what the
+clustering work finds in the code that blocks or bends the design, and every place the
+build deviates from the design doc. Started 3 Nov 2026.
+
+Status: **open** (not yet handled), **fixed** (with commit), **accepted** (a deliberate
+deviation, with the reason).
+
+## Process-local state found in FlowR (stage 1)
+
+Found while mapping the console for stage 1. Each of these breaks "any pod can die and
+another carries on".
+
+| # | What | Where | Effect with 2+ replicas | Plan | Status |
+|---|---|---|---|---|---|
+| CA-1 | Triggers are one state key `_triggers` holding the whole set (`trigger_manager().export_all()`), rewritten on every change | `lib.rs` `persist_triggers`, `restore_triggers` | Two replicas editing triggers overwrite each other (last write wins). In EE with a remote registry the key is not shared at all: only `agent:*` keys and runtime aliases go to ADB | EE in a cluster now shares every state key, the settings and the trigger set (`FLOWR_SHARED_STATE=agent` keeps the old split); the trigger manager reloads from the shared key on every trigger read and every 10 s. Still one blob: two simultaneous trigger edits race (needs CA-8) | partly fixed |
+| CA-2 | The trigger manager is a per-process cache; its cron scheduler would fire on every replica | `flowr-ce-agents/src/triggers/mod.rs` | Duplicate fires | **Accepted deviation from AC-2:** no singleton lease for triggers. Engine starts are deduplicated per cron tick (`cron:<id>:<target>:<minute>`) and per event id, so N replicas firing give one run. Agent targets of a cron trigger are not deduplicated (see CA-3). | accepted |
+| CA-9 | `start_cron_scheduler` is never called anywhere: cron triggers on the trigger manager do not fire in CE or EE today | `flowr-ce-agents/src/triggers/mod.rs` | Not a cluster issue; found while mapping | Start it (on every replica: dedupe above makes that safe) | open |
+| CA-10 | `adb_topic` trigger readers run in every process that has the trigger; a run started per message has no dedupe key | `topic_triggers.rs` | With 2 replicas a topic message may start two runs | Dedupe key `topic:<topic>:<offset>:<flow>` on the run start (the offset is ADB's, the same for every reader) | fixed |
+| CA-3 | Agents spawned by the agent manager live in one process's memory (`agent_manager()`: mode, history, health, metrics) | `flowr-ce-agents/src/manager.rs` | An agent exists only on the replica that spawned it; a call landing on another replica finds nothing; lost on restart | Checked: nothing in FlowR CE/EE calls `agent_manager()` any more (the `/agents` REST handlers are stubs; agents run as engine flows). Dead state, not a cluster risk. Retire with the crate cleanup. | accepted |
+| CA-4 | Pending human inputs (`input_manager()`) are in memory | `flowr-ce-agents/src/inputs.rs`, `lib.rs` inputs endpoints | An input request is visible only on the replica that raised it | Engine runs in fine mode use durable approvals (`open_approval` / `decide_approval`), answered from any pod. The in-process path (`approval.rs` → `input_manager`) remains for non-journaled agent steps: the answer must reach the pod holding the waiter. **Accepted:** in a cluster, agents run in fine mode; relay through ADB if coarse mode is still needed. | accepted |
+| CA-5 | The chat token hub is per process, with a per-process replay ring; runtimes forward their tokens to the console over port 3003 | `token_stream.rs`, `engine_remote.rs` `forward_streams` | A viewer connected to one replica sees no tokens produced for another; reconnecting to another replica loses the replay ring | With a remote ADB engine store, chunks go to engine topic `stream:<session>` and every FlowR with a viewer follows it (`FLOWR_STREAMS=gateway` keeps the old forwarding). Not covered by the automated stage-1 test (needs an LLM); verify with a chat on the cluster | fixed |
+| CA-6 | Settings are in the console's local LanceDB | `SharedRegistryStorage::settings` delegates to the local store | Each replica has its own settings | `flowr_settings` table on ADB in cluster mode; console-local settings and state copied once (`migrate_local`) | fixed |
+| CA-7 | Old-style checkpoints (`checkpoints()`) are written by the legacy executor to local LanceDB | `shared/flowr-core/src/executor.rs` | Lost if the pod moves; unused by engine runs | Confirmed: only the old `flowr-core` executor writes them; FlowR CE/EE runs use the engine journal. Nothing to move. | accepted |
+| CA-8 | Registry writes on the shared tables are a delete then an insert, not a transaction | `shared_registry.rs` header | Two replicas writing the same key race; a reader may briefly see it missing | ADB-side upsert (conditional write) | open |
+| CA-11 | Cluster streams: a process follows a session's topic from the moment a viewer subscribes; ADB notices are not retained | `token_stream.rs` cluster mode | Chunks published before the follow is established (a very fast first token) are not seen live; the UI's rehydration still shows the final answer | Retained stream in ADB (episodic) with offsets, replayed on follow | accepted (for now) |
+| CA-12 | The Cedar policy set is loaded per process; `POST /security/policies/reload` reloaded only the pod that got the request | `flowr-server/src/main.rs` | Other replicas enforce the old policies until restarted | The reload publishes `cluster:policies` through ADB; every FlowR reloads on it (explicit-reload semantics kept) | fixed |
+| CA-13 | The deployment ledger (`ops.rs`) is an in-memory copy of registry resources, reloaded on most reads | `ops.rs` `ledger`, `cached` | A few reads (`cached`, `deployments_of_flow`) can be stale for a moment after another replica's change | Acceptable: the source is the shared registry and the next `load` corrects it | accepted |
+
+## ADB
+
+| # | What | Effect | Plan | Status |
+|---|---|---|---|---|
+| CA-20 | Engine notices (`publish` / `subscribe`, used for task wake-ups and run topics) are held in the ADB process's memory | Under Raft, a subscriber on a follower must still get notices published through the leader | Fan notices out across the cluster, or have FlowR subscribe at the leader | open |
+
+## Deviations from the design doc
+
+| # | Design | Built | Why | Status |
+|---|---|---|---|---|
+| CA-30 | AC-2: singleton leases for trigger firing, timers and maintenance | No leases. Cron and event starts are deduplicated per tick / event id, topic starts per offset; timers are delayed tasks in the ADB queue; journal compaction and retention run inside ADB | Same effect (one run per firing) with no leader to fail over; nothing in FlowR needs exactly one runner today | accepted |
+| CA-31 | AC-6: an edge role chosen by `FLOWR_ROLES` | `FLOWR_WORKER_POOLS=` (empty) makes a FlowR claim nothing: an edge. API handlers run inline in the FlowR that receives the request; only flows go through pool queues | API handlers are stateless Rust code over the shared store; the API calls that are flows (`a3t-*`, `system-*`) already run as tasks in the platform pool | accepted |
+| CA-32 | The platform pool is called `platform` | It is still `default` (the pool consoles claim) | Renaming touches the router and runtime configuration; no behaviour change | accepted |
+| CA-33 | AC-7: transient flows with no journal | Not built: every run is journaled | An optimisation; build it if measured latency through the queue is too high | deferred |

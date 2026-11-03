@@ -68,8 +68,96 @@ pub fn forward_to(tx: futures::channel::mpsc::UnboundedSender<(String, String, S
     let _ = FORWARD.set(tx);
 }
 
+/// Cluster mode (`.ai/A3T_CLUSTER_ARCHITECTURE.md` §4.6): chunks go through
+/// the engine store (ADB) on topic `stream:<session>`; every process that has a
+/// viewer for the session follows that topic into its own hub. The process
+/// that produces a chunk does not put it in its hub directly, so a viewer sees
+/// each chunk once wherever it is connected.
+struct Cluster {
+    engine: std::sync::Arc<dyn flowr_storage::engine::EngineStore>,
+    out: futures::channel::mpsc::UnboundedSender<(String, String, String)>,
+    following: Mutex<HashMap<String, tokio::task::AbortHandle>>,
+}
+
+static CLUSTER: OnceLock<Cluster> = OnceLock::new();
+
+/// The engine topic carrying `session_id`'s chunks.
+pub fn stream_topic(session_id: &str) -> String {
+    format!("stream:{session_id}")
+}
+
+/// Turn on cluster mode: publish through `engine`, follow it for viewers.
+/// Chunks are batched per session (up to 256 at a time) to keep the number of
+/// store calls down while tokens stream.
+pub fn cluster(engine: std::sync::Arc<dyn flowr_storage::engine::EngineStore>) {
+    use futures::StreamExt;
+    let (tx, mut rx) = futures::channel::mpsc::unbounded::<(String, String, String)>();
+    if CLUSTER.set(Cluster { engine: std::sync::Arc::clone(&engine), out: tx, following: Mutex::new(HashMap::new()) }).is_err() {
+        return;
+    }
+    tokio::spawn(async move {
+        while let Some(first) = rx.next().await {
+            let mut batch = vec![first];
+            while let Ok(Some(more)) = rx.try_next() {
+                batch.push(more);
+                if batch.len() >= 256 {
+                    break;
+                }
+            }
+            // One message per session, chunks in order.
+            let mut by_session: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
+            for (session, kind, data) in batch {
+                let chunk = serde_json::json!([kind, data]);
+                match by_session.iter_mut().find(|(s, _)| *s == session) {
+                    Some((_, chunks)) => chunks.push(chunk),
+                    None => by_session.push((session, vec![chunk])),
+                }
+            }
+            for (session, chunks) in by_session {
+                if let Err(e) = engine.publish(&stream_topic(&session), serde_json::json!({ "chunks": chunks })).await {
+                    tracing::warn!(session = %session, error = %e, "stream chunks not published to the cluster");
+                }
+            }
+        }
+    });
+}
+
+/// Cluster mode: make sure this process follows `session_id`'s topic.
+fn follow(session_id: &str) {
+    use futures::StreamExt;
+    let Some(c) = CLUSTER.get() else { return };
+    let Ok(mut following) = c.following.lock() else { return };
+    if following.contains_key(session_id) {
+        return;
+    }
+    let mut notices = c.engine.subscribe(&stream_topic(session_id));
+    let session = session_id.to_string();
+    let task = tokio::spawn(async move {
+        while let Some(n) = notices.next().await {
+            for chunk in n.get("chunks").and_then(|c| c.as_array()).into_iter().flatten() {
+                let kind = chunk.get(0).and_then(|k| k.as_str()).unwrap_or("token");
+                let data = chunk.get(1).and_then(|d| d.as_str()).unwrap_or_default();
+                publish_local(&session, kind, data);
+            }
+        }
+    });
+    following.insert(session_id.to_string(), task.abort_handle());
+}
+
+fn unfollow(session_id: &str) {
+    if let Some(c) = CLUSTER.get() {
+        if let Some(task) = c.following.lock().ok().and_then(|mut f| f.remove(session_id)) {
+            task.abort();
+        }
+    }
+}
+
 pub fn publish(session_id: &str, kind: &str, data: impl Into<String>) {
     let data: String = data.into();
+    if let Some(c) = CLUSTER.get() {
+        let _ = c.out.unbounded_send((session_id.to_string(), kind.to_string(), data));
+        return;
+    }
     if let Some(tx) = FORWARD.get() {
         let _ = tx.unbounded_send((session_id.to_string(), kind.to_string(), data.clone()));
     }
@@ -111,6 +199,7 @@ pub fn subscribe(
     session_id: &str,
     after_seq: u64,
 ) -> (Vec<StreamChunk>, broadcast::Receiver<StreamChunk>) {
+    follow(session_id);
     let mut map = match hub().lock() {
         Ok(m) => m,
         Err(_) => return (Vec::new(), broadcast::channel(1).0.subscribe()),
@@ -134,6 +223,7 @@ pub fn subscribe(
 /// retained across turns so `Last-Event-ID` resume keeps working — and the
 /// client would render the last answer again the moment a new message is sent.
 pub fn subscribe_live(session_id: &str) -> broadcast::Receiver<StreamChunk> {
+    follow(session_id);
     let Ok(mut map) = hub().lock() else {
         return broadcast::channel(1).0.subscribe();
     };
@@ -150,6 +240,7 @@ pub fn subscribe_live(session_id: &str) -> broadcast::Receiver<StreamChunk> {
 /// Drop a finished session's buffer. Called after `done`/`error` so a long-lived
 /// process does not accumulate transcripts.
 pub fn close(session_id: &str) {
+    unfollow(session_id);
     if let Ok(mut map) = hub().lock() {
         map.remove(session_id);
     }

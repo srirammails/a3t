@@ -547,6 +547,27 @@ impl TriggerManager {
         json!(list)
     }
 
+    /// Make the set exactly `data` (an [`export_all`](Self::export_all) value):
+    /// another FlowR sharing the store may have added, changed or removed
+    /// triggers. Returns whether anything changed.
+    pub async fn replace_all(&self, data: &Value) -> anyhow::Result<bool> {
+        let list: Vec<Trigger> = serde_json::from_value(data.clone())
+            .map_err(|e| anyhow::anyhow!("Invalid trigger data: {}", e))?;
+        let next: HashMap<String, Trigger> = list
+            .into_iter()
+            .map(|t| (if t.id.is_empty() { Uuid::now_v7().to_string() } else { t.id.clone() }, t))
+            .collect();
+        let mut triggers = self.triggers.write().await;
+        let same = triggers.len() == next.len()
+            && next.iter().all(|(id, t)| {
+                triggers.get(id).map_or(false, |old| serde_json::to_value(old).ok() == serde_json::to_value(t).ok())
+            });
+        if !same {
+            *triggers = next;
+        }
+        Ok(!same)
+    }
+
     /// Import triggers from JSON (for restore on startup)
     pub async fn import_all(&self, data: &Value) -> anyhow::Result<usize> {
         let triggers_list: Vec<Trigger> = serde_json::from_value(data.clone())

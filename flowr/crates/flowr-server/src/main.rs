@@ -241,6 +241,8 @@ async fn main() -> anyhow::Result<()> {
                     policies_dir: policies_dir.clone(),
                     hook_setting: hook_setting.clone(),
                 };
+                #[cfg(feature = "ee")]
+                follow_policy_reloads(policy_admin.clone());
                 // EE IdP-admin surface: connect to Keycloak + create/list users.
                 let idp_admin = IdpAdminState {
                     issuer: oidc_issuer.clone(),
@@ -585,6 +587,55 @@ async fn policies_list_handler(
     axum::Json(serde_json::json!({ "count": policies.len(), "policies": policies })).into_response()
 }
 
+/// Engine topic announcing a policy reload to every FlowR in the cluster.
+const POLICY_TOPIC: &str = "cluster:policies";
+
+/// Re-read the registry's Cedar policies and schema and swap the hook in if
+/// they load cleanly. Returns (policies, schema fragments).
+#[cfg(feature = "ee")]
+async fn reload_policies(state: &PolicyAdminState) -> Result<(usize, usize), String> {
+    let policies = collect_registry_cedar_policies(&state.storage).await;
+    let count = policies.len();
+    let (schema_base, schema_fragments) = collect_registry_schema(&state.storage).await;
+    let frag_count = schema_fragments.len();
+    let loaded = if !state.policies_dir.is_empty() {
+        flowr_aesop::CedarHook::from_dir(&state.policies_dir)
+    } else {
+        flowr_aesop::CedarHook::with_registry_policies(&policies, schema_base.as_deref(), &schema_fragments)
+    };
+    match loaded {
+        Ok(hook) => {
+            let _ = flowr_policy::set_policy_hook(Arc::new(hook));
+            info!(registry_policies = count, schema_fragments = frag_count, "policy hot-reload applied");
+            Ok((count, frag_count))
+        }
+        Err(e) => {
+            warn!(error = %e, "policy hot-reload rejected; keeping current hook");
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Cluster: reload when another FlowR announces a policy reload.
+#[cfg(feature = "ee")]
+fn follow_policy_reloads(state: PolicyAdminState) {
+    use futures::StreamExt;
+    if state.hook_setting != "cedar" {
+        return;
+    }
+    let Some(engine) = state.storage.engine() else { return };
+    let mut notices = engine.subscribe(POLICY_TOPIC);
+    tokio::spawn(async move {
+        while let Some(n) = notices.next().await {
+            let me = std::env::var("HOSTNAME").unwrap_or_default();
+            if n.get("from").and_then(|f| f.as_str()) == Some(me.as_str()) && !me.is_empty() {
+                continue;
+            }
+            let _ = reload_policies(&state).await;
+        }
+    });
+}
+
 /// `POST /security/policies/reload` — hot-reload the Cedar policy set with no
 /// process restart (limitation #1). Re-reads the registry, rebuilds the hook,
 /// and **only swaps it in if it loads cleanly** — a malformed draft leaves the
@@ -605,25 +656,20 @@ async fn policies_reload_handler(
     }
     #[cfg(feature = "ee")]
     {
-        let policies = collect_registry_cedar_policies(&state.storage).await;
-        let count = policies.len();
-        let (schema_base, schema_fragments) = collect_registry_schema(&state.storage).await;
-        let frag_count = schema_fragments.len();
-        let loaded = if !state.policies_dir.is_empty() {
-            flowr_aesop::CedarHook::from_dir(&state.policies_dir)
-        } else {
-            flowr_aesop::CedarHook::with_registry_policies(&policies, schema_base.as_deref(), &schema_fragments)
-        };
-        match loaded {
-            Ok(hook) => {
-                let _ = flowr_policy::set_policy_hook(Arc::new(hook));
-                info!(registry_policies = count, schema_fragments = frag_count, "policy hot-reload applied");
+        match reload_policies(&state).await {
+            Ok((count, frag_count)) => {
+                // Every other FlowR in the cluster reloads too.
+                if let Some(engine) = state.storage.engine() {
+                    let from = std::env::var("HOSTNAME").unwrap_or_default();
+                    if let Err(e) = engine.publish(POLICY_TOPIC, serde_json::json!({ "from": from })).await {
+                        warn!(error = %e, "policy reload not announced to the cluster");
+                    }
+                }
                 axum::Json(serde_json::json!({ "reloaded": true, "registry_policies": count, "schema_fragments": frag_count })).into_response()
             }
             Err(e) => {
                 // Do NOT swap — keep the working hook so a bad policy can't brick
                 // enforcement. Surface the load error for the UI to display.
-                warn!(error = %e, "policy hot-reload rejected; keeping current hook");
                 (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
                     axum::Json(serde_json::json!({ "reloaded": false, "error": e }))).into_response()
             }

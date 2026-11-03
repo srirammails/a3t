@@ -39,12 +39,18 @@ pub const WORKFLOWS: &str = "flowr_workflows";
 pub const RESOURCE_TYPES: &str = "flowr_resource_types";
 pub const RESOURCES: &str = "flowr_resources";
 pub const STATE: &str = "flowr_state";
+pub const SETTINGS: &str = "flowr_settings";
 
 const WORKFLOW_COLUMNS: &[&str] =
     &["namespace", "name", "version", "active_version", "enabled", "definition", "created_at", "updated_at"];
 const RESOURCE_TYPE_COLUMNS: &[&str] = &["name", "definition"];
 const RESOURCE_COLUMNS: &[&str] = &["namespace", "name", "type_ref", "config", "created_at", "updated_at"];
 const STATE_COLUMNS: &[&str] = &["key", "value", "expires_at", "created_at"];
+const SETTINGS_COLUMNS: &[&str] = &["key", "value", "source", "updated_at"];
+
+/// Shared-state marker: this deployment's console-local state and settings have
+/// been copied to the shared tables once ([`migrate_local`]).
+const MIGRATED_KEY: &str = "_cluster:local_state_migrated";
 
 /// State keys that live in the shared table: agent configs, transcripts and the
 /// per-user session index.
@@ -80,6 +86,9 @@ pub struct SharedRegistryStorage {
     workflows: SharedWorkflows,
     resources: SharedResources,
     state: SplitState,
+    triggers: SharedTriggers,
+    /// Settings on `db` too (cluster mode, with every state key shared).
+    settings: Option<SharedSettings>,
     db: Arc<dyn PlatformDb>,
 }
 
@@ -91,7 +100,11 @@ impl SharedRegistryStorage {
         Self {
             workflows: SharedWorkflows { db: Arc::clone(&db) },
             resources: SharedResources { db: Arc::clone(&db) },
-            state: SplitState { local: Arc::clone(&inner), shared: SharedState { db: Arc::clone(&db) }, aliases, all: false },
+            state: SplitState { local: Arc::clone(&inner), shared: SharedState { db: Arc::clone(&db) }, aliases: aliases.clone(), all: false },
+            triggers: SharedTriggers {
+                state: SplitState { local: Arc::clone(&inner), shared: SharedState { db: Arc::clone(&db) }, aliases, all: false },
+            },
+            settings: None,
             inner,
             db,
         }
@@ -101,18 +114,31 @@ impl SharedRegistryStorage {
         self.db.describe()
     }
 
-    /// Every state key on `db`, not only `agent:*` (CE on its embedded ADB:
-    /// one process, nothing to keep apart).
+    /// Every state key on `db`, not only `agent:*`, and the settings and
+    /// triggers with them: CE on its embedded ADB (one process), and EE in a
+    /// cluster, where every FlowR sharing the ADB must see the same state.
+    /// Aliased keys (a runtime's own `_triggers`) still map to their alias.
     pub fn all_state(mut self) -> Self {
         self.state.all = true;
+        self.triggers.state.all = true;
+        self.settings = Some(SharedSettings { db: Arc::clone(&self.db) });
         self
+    }
+
+    /// Reload the trigger set from the shared state (another FlowR may have
+    /// changed it). Returns whether anything changed.
+    pub async fn reload_triggers(&self) -> FlowResult<bool> {
+        self.triggers.reload().await
     }
 }
 
 #[async_trait]
 impl StorageBackend for SharedRegistryStorage {
     fn settings(&self) -> &dyn SettingsStore {
-        self.inner.settings()
+        match &self.settings {
+            Some(s) => s,
+            None => self.inner.settings(),
+        }
     }
     fn workflows(&self) -> &dyn WorkflowStore {
         &self.workflows
@@ -136,7 +162,7 @@ impl StorageBackend for SharedRegistryStorage {
         self.inner.executions()
     }
     fn triggers(&self) -> &dyn TriggerStore {
-        self.inner.triggers()
+        &self.triggers
     }
     fn engine(&self) -> Option<std::sync::Arc<dyn flowr_storage::engine::EngineStore>> {
         self.inner.engine()
@@ -150,6 +176,7 @@ impl StorageBackend for SharedRegistryStorage {
             (RESOURCE_TYPES, RESOURCE_TYPE_COLUMNS),
             (RESOURCES, RESOURCE_COLUMNS),
             (STATE, STATE_COLUMNS),
+            (SETTINGS, SETTINGS_COLUMNS),
         ] {
             let schema: Map<String, Value> = cols.iter().map(|c| (c.to_string(), json!("string"))).collect();
             self.db.create_table(table, Some(&schema), "create_if_not_exists").await.map_err(storage_err)?;
@@ -420,6 +447,7 @@ impl ResourceStore for SharedResources {
 // ---------------------------------------------------------------- state
 
 /// `agent:*` keys (and aliased ones) in the shared table, the rest local.
+#[derive(Clone)]
 struct SplitState {
     local: Arc<dyn StorageBackend>,
     shared: SharedState,
@@ -431,11 +459,11 @@ struct SplitState {
 impl SplitState {
     /// The shared key for `key`, or `None` when it stays local.
     fn shared_key(&self, key: &str) -> Option<String> {
-        if self.all {
-            return Some(key.to_string());
-        }
         if let Some((_, to)) = self.aliases.iter().find(|(from, _)| from == key) {
             return Some(to.clone());
+        }
+        if self.all {
+            return Some(key.to_string());
         }
         key.starts_with(SHARED_STATE_PREFIX).then(|| key.to_string())
     }
@@ -494,6 +522,7 @@ impl StateStore for SplitState {
     }
 }
 
+#[derive(Clone)]
 struct SharedState {
     db: Arc<dyn PlatformDb>,
 }
@@ -540,6 +569,191 @@ impl SharedState {
         let rows = rows(&*self.db, STATE, &format!("key LIKE {}", like(pattern))).await?;
         Ok(column(&rows, "key").map(String::from).collect())
     }
+}
+
+// ---------------------------------------------------------------- triggers
+
+/// The trigger store over the shared state: the set is the `_triggers` key
+/// (or the runtime's alias for it), and this process's trigger manager is a
+/// cache of it, reloaded before every read or change. Two FlowRs changing
+/// triggers at the same moment still race on the one key (last write wins;
+/// limitation CA-1).
+struct SharedTriggers {
+    state: SplitState,
+}
+
+fn trigger_err(e: impl std::fmt::Display) -> FlowError {
+    FlowError::task_failed("trigger", e.to_string())
+}
+
+impl SharedTriggers {
+    async fn reload(&self) -> FlowResult<bool> {
+        let data = self.state.get("_triggers").await?.unwrap_or_else(|| json!([]));
+        flowr_ce_agents::trigger_manager().replace_all(&data).await.map_err(trigger_err)
+    }
+
+    async fn persist(&self) -> FlowResult<()> {
+        let data = flowr_ce_agents::trigger_manager().export_all().await;
+        self.state.set("_triggers", data, None).await
+    }
+}
+
+#[async_trait]
+impl TriggerStore for SharedTriggers {
+    async fn list(&self, namespace: Option<&str>) -> FlowResult<Vec<Value>> {
+        self.reload().await?;
+        Ok(flowr_ce_agents::trigger_manager()
+            .list()
+            .await
+            .into_iter()
+            .filter(|t| namespace.map_or(true, |ns| t.namespace == ns))
+            .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
+            .collect())
+    }
+
+    async fn get(&self, id: &str) -> FlowResult<Option<Value>> {
+        self.reload().await?;
+        Ok(flowr_ce_agents::trigger_manager().get(id).await.map(|t| serde_json::to_value(t).unwrap_or(Value::Null)))
+    }
+
+    async fn create(&self, trigger: Value) -> FlowResult<String> {
+        let trigger: flowr_ce_agents::Trigger =
+            serde_json::from_value(trigger).map_err(|e| trigger_err(format!("Invalid trigger: {e}")))?;
+        self.reload().await?;
+        let id = flowr_ce_agents::trigger_manager().create(trigger).await.map_err(trigger_err)?;
+        self.persist().await?;
+        Ok(id)
+    }
+
+    async fn delete(&self, id: &str) -> FlowResult<()> {
+        self.reload().await?;
+        flowr_ce_agents::trigger_manager().delete(id).await.map_err(trigger_err)?;
+        self.persist().await
+    }
+
+    async fn enable(&self, id: &str) -> FlowResult<()> {
+        self.reload().await?;
+        flowr_ce_agents::trigger_manager().enable(id).await.map_err(trigger_err)?;
+        self.persist().await
+    }
+
+    async fn pause(&self, id: &str) -> FlowResult<()> {
+        self.reload().await?;
+        flowr_ce_agents::trigger_manager().pause(id).await.map_err(trigger_err)?;
+        self.persist().await
+    }
+
+    async fn update(&self, id: &str, trigger: Value) -> FlowResult<()> {
+        let mut next: flowr_ce_agents::Trigger =
+            serde_json::from_value(trigger).map_err(|e| trigger_err(format!("Invalid trigger: {e}")))?;
+        next.id = id.to_string();
+        self.reload().await?;
+        let manager = flowr_ce_agents::trigger_manager();
+        let _ = manager.delete(id).await;
+        manager.create(next).await.map_err(trigger_err)?;
+        self.persist().await
+    }
+
+    async fn attach(&self, trigger_id: &str, target: Value) -> FlowResult<()> {
+        let target: flowr_ce_agents::TriggerTarget =
+            serde_json::from_value(target).map_err(|e| trigger_err(format!("Invalid target: {e}")))?;
+        self.reload().await?;
+        flowr_ce_agents::trigger_manager().attach(trigger_id, target).await.map_err(trigger_err)?;
+        self.persist().await
+    }
+
+    async fn detach(&self, trigger_id: &str, target_id: &str) -> FlowResult<()> {
+        self.reload().await?;
+        flowr_ce_agents::trigger_manager().detach(trigger_id, target_id).await.map_err(trigger_err)?;
+        self.persist().await
+    }
+}
+
+// ---------------------------------------------------------------- settings
+
+/// Settings on the shared table `flowr_settings` (cluster mode).
+struct SharedSettings {
+    db: Arc<dyn PlatformDb>,
+}
+
+impl SharedSettings {
+    fn decode(row: &Value) -> Option<(String, Value)> {
+        let key = row.get("key")?.as_str()?.to_string();
+        let raw = row.get("value").and_then(|v| v.as_str()).unwrap_or("null");
+        Some((key, serde_json::from_str(raw).unwrap_or(Value::String(raw.to_string()))))
+    }
+}
+
+#[async_trait]
+impl SettingsStore for SharedSettings {
+    async fn get(&self, key: &str) -> FlowResult<Option<Value>> {
+        let rows = rows(&*self.db, SETTINGS, &format!("key = {}", sql_quote(key))).await?;
+        Ok(rows.first().and_then(Self::decode).map(|(_, v)| v))
+    }
+
+    async fn get_string(&self, key: &str) -> FlowResult<Option<String>> {
+        Ok(self.get(key).await?.map(|v| match v {
+            Value::String(s) => s,
+            other => other.to_string(),
+        }))
+    }
+
+    async fn set(&self, key: &str, value: &Value, source: &str) -> FlowResult<()> {
+        let value = serde_json::to_string(value).map_err(|e| FlowError::Storage(format!("Failed to serialize setting: {e}")))?;
+        self.db.delete(SETTINGS, &format!("key = {}", sql_quote(key))).await.map_err(storage_err)?;
+        insert(&*self.db, SETTINGS, json!({ "key": key, "value": value, "source": source, "updated_at": now() })).await
+    }
+
+    async fn get_all(&self) -> FlowResult<Vec<(String, Value)>> {
+        let batches: Vec<RecordBatch> = self.db.query(SETTINGS, None, ALL).await.map_err(storage_err)?;
+        let mut all: Vec<(String, Value)> = batches_to_json(&batches).iter().filter_map(Self::decode).collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(all)
+    }
+
+    async fn seed_defaults(&self, defaults: &[(&str, Value, &str)]) -> FlowResult<usize> {
+        let mut n = 0;
+        for (key, value, source) in defaults {
+            if self.get(key).await?.is_none() {
+                self.set(key, value, source).await?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+}
+
+/// Cluster mode, first start: copy the state keys and settings this FlowR kept
+/// on its own disk (LanceDB at `local_path`) to the shared tables, keys the
+/// shared side lacks only. Done once per deployment (marker key), so a stale
+/// disk on a later replica cannot bring back what was deleted since.
+pub async fn migrate_local(db: &dyn PlatformDb, local_path: &str) -> Result<Vec<(String, usize)>, String> {
+    let marker = batches_to_json(&db.query(STATE, Some(&format!("key = {}", sql_quote(MIGRATED_KEY))), 1).await?);
+    if !marker.is_empty() {
+        return Ok(Vec::new());
+    }
+    let local = LanceDbPlatform::new(local_path);
+    let tables = local.list_tables().await?;
+    let mut copied = Vec::new();
+    for (from, to, cols) in [("state", STATE, STATE_COLUMNS), ("settings", SETTINGS, SETTINGS_COLUMNS)] {
+        if !tables.iter().any(|t| t == from) {
+            continue;
+        }
+        let have: std::collections::HashSet<String> =
+            column(&batches_to_json(&db.query(to, None, ALL).await?), "key").map(String::from).collect();
+        let rows: Vec<Value> = batches_to_json(&local.query(from, None, ALL).await?)
+            .into_iter()
+            .filter(|r| r.get("key").and_then(|k| k.as_str()).map_or(false, |k| !have.contains(k)))
+            .map(|r| Value::Object(cols.iter().map(|c| (c.to_string(), r.get(*c).cloned().unwrap_or(json!("")))).collect()))
+            .collect();
+        if !rows.is_empty() {
+            db.insert(to, &rows).await.map_err(|e| format!("migrating {from} to {to}: {e}"))?;
+        }
+        copied.push((to.to_string(), rows.len()));
+    }
+    db.insert(STATE, &[json!({ "key": MIGRATED_KEY, "value": "true", "expires_at": "", "created_at": now() })]).await?;
+    info!(from = %local_path, to = %db.describe(), ?copied, "local state and settings copied to the shared tables");
+    Ok(copied)
 }
 
 #[cfg(test)]
@@ -603,5 +817,67 @@ mod tests {
         assert_eq!(s.workflows().list("t").await.unwrap().len(), 1);
         s.workflows().delete("t", "hello").await.unwrap();
         assert!(!s.workflows().exists("t", "hello").await.unwrap());
+    }
+
+    /// Cluster mode: two FlowRs on one shared store see the same settings,
+    /// state and triggers; a runtime's alias still wins over "every key".
+    #[tokio::test]
+    async fn cluster_mode_shares_settings_state_and_triggers() {
+        let dir = tempfile::tempdir().unwrap();
+        let db: Arc<dyn PlatformDb> = Arc::new(LanceDbPlatform::new(dir.path().join("shared.lance").to_string_lossy()));
+        let open = |name: &str, aliases: Vec<(String, String)>| {
+            let db = Arc::clone(&db);
+            let path = dir.path().join(name);
+            async move {
+                let local = crate::init_storage_with(path.to_str().unwrap(), false).await.unwrap();
+                let s = SharedRegistryStorage::new(local, db, aliases).all_state();
+                s.init().await.unwrap();
+                s
+            }
+        };
+        let a = open("a", Vec::new()).await;
+        let b = open("b", Vec::new()).await;
+        let rt = open("rt", vec![("_triggers".into(), "runtime:t/cv:triggers".into())]).await;
+
+        a.settings().set("auth.mode", &json!("oidc"), "api").await.unwrap();
+        assert_eq!(b.settings().get_string("auth.mode").await.unwrap().as_deref(), Some("oidc"));
+        assert_eq!(b.settings().seed_defaults(&[("auth.mode", json!("none"), "default"), ("cors.origins", json!("*"), "default")]).await.unwrap(), 1);
+        assert_eq!(a.settings().get_all().await.unwrap().len(), 2);
+
+        a.state().set("pins:u1", json!(["x"]), None).await.unwrap();
+        assert_eq!(b.state().get("pins:u1").await.unwrap(), Some(json!(["x"])));
+
+        // A trigger created through A is listed through B (B reloads from the
+        // shared state; the manager is one per process, so clear it first).
+        let t = json!({"id": "t1", "name": "nightly", "namespace": "n", "enabled": true,
+                       "config": {"type": "cron", "expression": "0 3 * * *", "message": "go"}, "targets": []});
+        a.triggers().create(t).await.unwrap();
+        flowr_ce_agents::trigger_manager().replace_all(&json!([])).await.unwrap();
+        assert_eq!(b.triggers().list(Some("n")).await.unwrap().len(), 1);
+        // The runtime's `_triggers` is its own key, not the console's.
+        assert!(rt.triggers().list(None).await.unwrap().is_empty());
+        b.triggers().delete("t1").await.unwrap();
+        assert!(a.triggers().get("t1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn local_state_is_copied_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_dir = dir.path().join("local");
+        let local = crate::init_storage_with(local_dir.to_str().unwrap(), false).await.unwrap();
+        local.state().set("pins:u1", json!(["a"]), None).await.unwrap();
+        local.settings().set("auth.mode", &json!("oidc"), "api").await.unwrap();
+        let db: Arc<dyn PlatformDb> = Arc::new(LanceDbPlatform::new(dir.path().join("shared.lance").to_string_lossy()));
+        let s = SharedRegistryStorage::new(Arc::clone(&local), Arc::clone(&db), Vec::new()).all_state();
+        s.init().await.unwrap();
+        let lance = local_dir.join("clawdflow.lance").to_string_lossy().to_string();
+        let copied = migrate_local(&*db, &lance).await.unwrap();
+        assert!(copied.iter().any(|(t, n)| t == STATE && *n == 1), "{copied:?}");
+        assert_eq!(s.state().get("pins:u1").await.unwrap(), Some(json!(["a"])));
+        assert_eq!(s.settings().get_string("auth.mode").await.unwrap().as_deref(), Some("oidc"));
+        // Deleted afterwards: a second start does not bring it back.
+        s.state().delete("pins:u1").await.unwrap();
+        assert!(migrate_local(&*db, &lance).await.unwrap().is_empty());
+        assert!(s.state().get("pins:u1").await.unwrap().is_none());
     }
 }
