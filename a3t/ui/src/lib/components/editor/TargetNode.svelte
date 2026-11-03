@@ -4,6 +4,8 @@
 
   function onDelete(e: MouseEvent) {
     e.stopPropagation();
+    // A host that passes `onremove` handles it; otherwise the Triggers page's window event.
+    if (typeof data.onremove === 'function') { data.onremove(data.targetIdx); return; }
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('trigger-disconnect', { detail: data.targetIdx }));
     }

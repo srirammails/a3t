@@ -1,7 +1,7 @@
 <script lang="ts">
   // A single artifact (flow, agent, template, resource, trigger) as a compact
   // handoff card. The body opens in the right-hand pane, which has the width.
-  import { navigateToDetail } from '$lib/stores/panels.svelte';
+  import { openInStudio } from '$lib/stores/panels.svelte';
   import { ARTIFACTS, toEditorText, type ArtifactKind } from './artifacts';
 
   let { kind, data, onopen }: {
@@ -15,8 +15,8 @@
   const name = $derived(data?.name ?? '');
   const text = $derived(toEditorText(data?.raw ?? '', spec.format));
 
-  // Only flows have a dedicated full-screen editor panel today.
-  const hasPanel = $derived(kind === 'flow');
+  // Everything in the registry opens in the Studio; a draft is not there yet.
+  const hasPanel = $derived(kind !== 'flow_draft' && !!name);
 </script>
 
 <div class="widget">
@@ -30,8 +30,8 @@
         {spec.draft ? 'Review' : 'Open'}
       </button>
       {#if hasPanel}
-        <button class="wbtn" title="Open in the full editor"
-          onclick={() => navigateToDetail('flow-editor', name || 'Flow Editor', `${ns}/${name}`, { namespace: ns, name })}>↗</button>
+        <button class="wbtn" title="Open in Studio"
+          onclick={() => openInStudio(kind as Exclude<ArtifactKind, 'flow_draft'>, ns, name)}>↗</button>
       {/if}
     </div>
   </div>

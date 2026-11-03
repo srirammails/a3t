@@ -8,7 +8,7 @@
   import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
   import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, foldKeymap, indentOnInput } from '@codemirror/language';
   import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-  import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
+  import { autocompletion, completionKeymap, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
 
   /// A step's line, as the host marks it: its breakpoint (`before` | `after` |
   /// `on_error`), its state in the shown run, whether the run stands there.
@@ -18,10 +18,50 @@
   /// `marks`: step lines — with them comes a breakpoint gutter (`ongutter` on a
   /// click), line tints, and the current line kept in view. `oncontext`: a
   /// right-click on a line; return true to take it over from the browser menu.
-  let { value = '', onchange, readOnly = false, reveal = null, marks = null, ongutter, oncontext }: {
+  /// `issues`: problems the host found (the CNCF schema's), tinted on their
+  /// lines with the message on hover.
+  type Issue = { line: number; level: 'error' | 'warning'; message: string };
+  /// `complete`: what fits at a position (the schema's keys and values), offered
+  /// as you type and on Ctrl+Space.
+  type Suggestions = { from: number; options: { label: string; detail?: string; info?: string; apply: string; boost?: number }[] } | null;
+  let { value = '', onchange, readOnly = false, reveal = null, marks = null, ongutter, oncontext, issues = null, complete }: {
     value: string; onchange?: (val: string) => void; readOnly?: boolean; reveal?: { line: number; n: number } | null;
     marks?: LineMark[] | null; ongutter?: (line: number) => void; oncontext?: (e: MouseEvent, line: number) => boolean;
+    issues?: Issue[] | null;
+    complete?: (text: string, pos: number) => Suggestions;
   } = $props();
+
+  function suggest(ctx: CompletionContext): CompletionResult | null {
+    if (!complete) return null;
+    const r = complete(ctx.state.doc.toString(), ctx.pos);
+    if (!r || !r.options.length) return null;
+    // While typing, only once a word is started (or right after `key: `); Ctrl+Space always.
+    if (!ctx.explicit && r.from === ctx.pos && !/:\s$/.test(ctx.state.sliceDoc(Math.max(0, ctx.pos - 2), ctx.pos))) return null;
+    return {
+      from: r.from,
+      options: r.options.map((o) => ({ label: o.label, detail: o.detail, info: o.info, apply: o.apply, boost: o.boost, type: 'property' })),
+      validFor: /^[\w.:@-]*$/,
+    };
+  }
+
+  // ── Problems ──
+  const setIssues = StateEffect.define<Issue[]>();
+  const issuesField = StateField.define<Issue[]>({
+    create: () => [],
+    update(v, tr) {
+      for (const e of tr.effects) if (e.is(setIssues)) return e.value;
+      return v;
+    },
+  });
+  const issueLines = EditorView.decorations.compute([issuesField], (state) => {
+    const by = new Map<number, Issue[]>();
+    for (const i of state.field(issuesField)) if (i.line >= 1 && i.line <= state.doc.lines) by.set(i.line, [...(by.get(i.line) ?? []), i]);
+    const out: Range<Decoration>[] = [...by].sort((a, b) => a[0] - b[0]).map(([line, is]) => {
+      const err = is.some((i) => i.level === 'error');
+      return Decoration.line({ class: `cm-issue ${err ? 'cm-issue-error' : 'cm-issue-warning'}`, attributes: { title: is.map((i) => `${i.level === 'error' ? '✗' : '!'} ${i.message}`).join('\n') } }).range(lineOf(state, line).from);
+    });
+    return Decoration.set(out);
+  });
 
   // ── Step marks ──
   const setMarks = StateEffect.define<LineMark[]>();
@@ -107,6 +147,8 @@
       doc: value,
       extensions: [
         marksField,
+        issuesField,
+        issueLines,
         stepGutter,
         lineNumbers(),
         highlightActiveLineGutter(),
@@ -119,7 +161,7 @@
         indentOnInput(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         bracketMatching(),
-        autocompletion(),
+        autocompletion(complete ? { override: [suggest] } : {}),
         rectangularSelection(),
         highlightActiveLine(),
         highlightSelectionMatches(),
@@ -160,6 +202,11 @@
     if (cur && cur !== lastCurrent && cur <= view.state.doc.lines) effects.push(EditorView.scrollIntoView(lineOf(view.state, cur).from, { y: 'nearest', yMargin: 60 }));
     lastCurrent = cur;
     view.dispatch({ effects });
+  });
+
+  $effect(() => {
+    if (!ready) return;
+    view.dispatch({ effects: setIssues.of($state.snapshot(issues ?? []) as Issue[]) });
   });
 
   function goto(r: { line: number } | null) {
@@ -230,6 +277,11 @@
   .yaml-editor :global(.cm-bp-after) { border: 1.5px solid var(--err, #d92d20); background: linear-gradient(90deg, transparent 50%, var(--err, #d92d20) 50%); }
   .yaml-editor :global(.cm-bp-on_error) { background: var(--err, #d92d20); border-radius: 1px; transform: rotate(45deg) scale(0.85); }
   .yaml-editor :global(.cm-bp-spacer) { visibility: hidden; }
+
+  /* Problems: a tint and a mark at the line's start; the message on hover. */
+  .yaml-editor :global(.cm-issue) { position: relative; }
+  .yaml-editor :global(.cm-issue-error) { background: rgba(217, 45, 32, 0.07); box-shadow: inset 3px 0 0 var(--err, #d92d20); }
+  .yaml-editor :global(.cm-issue-warning) { background: rgba(180, 83, 9, 0.06); box-shadow: inset 3px 0 0 var(--warn, #b45309); }
 
   /* The shown run: each step line's state, and where the run stands. */
   .yaml-editor :global(.cm-st) { box-shadow: inset 3px 0 0 var(--st, transparent); }

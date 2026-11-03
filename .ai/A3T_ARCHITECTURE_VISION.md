@@ -390,6 +390,30 @@ provenance:
 
 ---
 
+## UI Channels: Console and Studio (2 Nov 2026)
+
+A3T has two UI channels over the same platform and API. Full design:
+**`A3T_STUDIO_ARCHITECTURE.md`**.
+
+| Channel | For | What it is |
+|---|---|---|
+| **Console** | Everyone — business users, SRE, AppSec, developers without write access | Section pages: inventory, details, status, run history, chat. Read and light actions. No editors. |
+| **Studio** | Developers with write access (read-only for those without) | An IDE: Explorer of flows and resources, tabbed documents, panels. Author with AI, compose flows and resources into one deployable workflow, attach to a canvas and deploy, see runtimes, deployments, runs, timelines and checkpoints, connect a dev runtime and attach to running flows (logs, checkpoints), query databases, chat with LLMs, call MCP tools, fire triggers, AQL over agent/flow memory by tier. |
+
+The Studio runs in two hosts from one codebase — the web dash and a **VS Code
+extension** — so its model (`studio-core`: items, kinds, workspace, adapters) is
+plain TypeScript with no UI or host dependencies, its components (`studio-ui`)
+make no network calls, and host differences sit behind one `StudioHost`
+interface.
+
+How this maps onto the persona model above: Dev Team works in the Studio; SRE uses
+the Console and the Studio's canvas, runtime and run documents; AppSec uses the
+Console (policies, audit, approvals). Every Console detail offers *Open in Studio*
+where the user may edit.
+
+The screens sketch below is the original (June 2026) section list; the Console is
+its current form, and the editors it describes are Studio documents.
+
 ## UX Screens
 
 ```

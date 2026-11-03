@@ -89,11 +89,17 @@
   let paneW = $state<number>(loadLS<number>(LS_PANE, 560));
   let paneDragging = $state(false);
   let chatLayoutEl = $state<HTMLDivElement>();
+  let layoutW = $state(0);
 
   function paneMax() {
-    const w = chatLayoutEl?.getBoundingClientRect().width ?? 1200;
+    const w = layoutW || 1200;
     return Math.max(PANE_MIN, w - 420);   // always leave the transcript readable
   }
+  /// The width actually drawn. The stored width came from whatever window it was
+  /// dragged in; clamping only while dragging let a width saved on a wide screen
+  /// fill a narrower one, so the designer covered the chat and the user lost the
+  /// conversation they were co-authoring in. Clamped on every layout instead.
+  const paneShown = $derived(Math.min(paneW, paneMax()));
   function setPaneW(w: number) {
     paneW = Math.min(paneMax(), Math.max(PANE_MIN, Math.round(w)));
     try { localStorage.setItem(LS_PANE, JSON.stringify(paneW)); } catch {}
@@ -778,8 +784,8 @@
   }
 </script>
 
-<div class="chat-layout" bind:this={chatLayoutEl}
-     style="grid-template-columns: 1fr{openArtifact ? ` 6px ${paneW}px` : ''};">
+<div class="chat-layout" bind:this={chatLayoutEl} bind:clientWidth={layoutW}
+     style="grid-template-columns: 1fr{openArtifact ? ` 6px ${paneShown}px` : ''};">
   <!-- Left: conversation history -->
   <!-- Chat body. The conversation list is the shell's context pane now, so this
        owns only the agent selection and the transcript. -->

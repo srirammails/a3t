@@ -9,7 +9,7 @@
   import CanvasDeployBar from './CanvasDeployBar.svelte';
   import CanvasDesigner from '$lib/components/editor/CanvasDesigner.svelte';
   import { mcpCall } from '$lib/services/api';
-  import { navigateToDetail } from '$lib/stores/panels.svelte';
+  import { openInStudio } from '$lib/stores/panels.svelte';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
   import JsonForm from './JsonForm.svelte';
   import YamlEditor from '$lib/components/editor/YamlEditor.svelte';
@@ -220,9 +220,9 @@
           {saving ? 'Saving…' : (spec.draft ? 'Save to registry' : 'Save')}
         </button>
       {/if}
-      {#if artifact.kind === 'flow'}
-        <button class="pbtn" title="Open in full editor"
-          onclick={() => navigateToDetail('flow-editor', artifact.name, `${artifact.namespace}/${artifact.name}`, { namespace: artifact.namespace, name: artifact.name })}>↗</button>
+      {#if artifact.kind !== 'flow_draft'}
+        <button class="pbtn" title="Open in Studio"
+          onclick={() => openInStudio(artifact.kind as Exclude<ArtifactKind, 'flow_draft'>, artifact.namespace, artifact.name, artifact.id)}>↗</button>
       {/if}
       <button class="pbtn" onclick={() => onclose?.()} title="Close">✕</button>
     </div>

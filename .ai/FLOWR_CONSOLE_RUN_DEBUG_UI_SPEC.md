@@ -237,6 +237,11 @@ Every debug command, edit and operation is audit-logged with the principal (the 
 
 ## 14. Studio shell (reusable) and Flow Studio — added 1 Nov 2026
 
+> Extended by **`A3T_STUDIO_ARCHITECTURE.md`** (2 Nov 2026): the Studio as a
+> developer channel for web and VS Code, built from kinds, a workspace and
+> adapters. The run, debug, monitor and checkpoint behaviour in this spec is
+> unchanged and is what the Studio's Run documents and Runs panel implement.
+
 A reusable IDE-style shell (`a3t/ui/src/lib/components/studio/`) for A3T apps — Flow Studio first; DB Console, Logs and Runtime next.
 
 - **`StudioShell`**: optional left and right regions, the editor area, and an optional bottom region under it. Each region is a tabbed panel group (`Region`) that resizes by dragging its splitter, **minimizes to a stack** on its edge (vertical labels left/right, a strip at the bottom; click a label to bring that panel back), and **maximizes** to fill the studio (⤢ or double-click a tab; Esc restores). The editor area maximizes the same way.

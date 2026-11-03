@@ -157,7 +157,7 @@
     busy = true;
     const r = await runsApi.cancel(runId, 'cancelled from the console');
     busy = false;
-    if (!r.ok) message = r.error ?? 'Cancel failed';
+    if (!r.ok) message = r.error ?? 'Stop failed';
     await load();
   }
   async function rerun(debug: boolean, fromSeq?: number) {
@@ -268,10 +268,20 @@
       {#if run.resume_count > 0}<span class="dim" title="Resumed after an interruption, a timer or a pause">resumed {run.resume_count}×</span>{/if}
       {#if run.current_step}<span class="dim">at <span class="mono">{run.current_step}</span></span>{/if}
       <span class="grow"></span>
-      {#if live && run.can_steer}<button class="lnk" disabled={busy} onclick={cancel}>Cancel</button>{/if}
+      {#if live && run.can_steer}<button class="lnk" disabled={busy} onclick={cancel} title="Stop this run">■ Stop</button>{/if}
       {#if !live && run.can_steer}
-        <button class="lnk" disabled={busy} onclick={() => rerun(false)}>Re-run</button>
-        <button class="lnk" disabled={busy} onclick={() => rerun(true)}>Re-run in debug</button>
+        <span class="tip-wrap">
+          <button class="ib" disabled={busy} onclick={() => rerun(false)} aria-label="Re-run">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>
+          </button>
+          <span class="tip" aria-hidden="true">Re-run</span>
+        </span>
+        <span class="tip-wrap">
+          <button class="ib" disabled={busy} onclick={() => rerun(true)} aria-label="Re-run in debug">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="6" height="8.5" rx="3"/><path d="M6.5 5a1.5 1.5 0 0 1 3 0M8 8v5.5M2.5 7.5H5M11 7.5h2.5M2.5 11.5H5M11 11.5h2.5M3.5 3.5 5.5 5.5M12.5 3.5 10.5 5.5"/></svg>
+          </button>
+          <span class="tip" aria-hidden="true">Re-run in debug</span>
+        </span>
       {/if}
     </div>
 
@@ -471,6 +481,18 @@
   .pill.warn { background: var(--warn-bg, #fef3c7); color: var(--warn, #b45309); }
   .lnk { border: 0; background: transparent; color: var(--spec); cursor: pointer; font-size: 12px; }
   .lnk:disabled { opacity: 0.5; }
+  .ib { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--spec); cursor: pointer; }
+  .ib:hover:not(:disabled) { background: var(--spec-bg); }
+  .ib:disabled { opacity: 0.5; cursor: default; }
+  /* Icon labels, as SlidePanel's: shown under the button on hover or focus, and
+     right-aligned so the last one stays inside the panel. */
+  .tip-wrap { position: relative; display: inline-flex; }
+  .tip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20;
+         padding: 4px 10px; border-radius: 5px; background: var(--text-1); color: var(--bg-page);
+         font-size: 11px; font-weight: 500; white-space: nowrap; pointer-events: none;
+         opacity: 0; transition: opacity 0.15s 0.3s; }
+  .tip::before { content: ''; position: absolute; bottom: 100%; right: 8px; border: 4px solid transparent; border-bottom-color: var(--text-1); }
+  .tip-wrap:hover .tip, .tip-wrap:focus-within .tip { opacity: 1; }
   .rv-pause { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--warn, #b45309); border-radius: var(--r-sm); background: var(--warn-bg, #fef3c7); }
   .rv-ctl { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .rv-ctl select { padding: 3px 6px; border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 12px; background: var(--bg-surface); }

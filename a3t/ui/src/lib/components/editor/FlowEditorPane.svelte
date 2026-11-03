@@ -4,7 +4,8 @@
   import '@xyflow/svelte/dist/style.css';
   import StepNode from './StepNode.svelte';
   import WorkflowNode from './WorkflowNode.svelte';
-  import AgentNode from './AgentNode.svelte';
+  import AgentBlockNode from './AgentBlockNode.svelte';
+  import AgentPortNode from './AgentPortNode.svelte';
   import AgentSectionNode from './AgentSectionNode.svelte';
   import PortCardNode from './PortCardNode.svelte';
   import ResourceNode from './ResourceNode.svelte';
@@ -14,13 +15,19 @@
   import JoinNode from './JoinNode.svelte';
   import FlowMarkerNode from './FlowMarkerNode.svelte';
   import YamlEditor from './YamlEditor.svelte';
+  import SchemaOutline from './SchemaOutline.svelte';
+  import GraphPalette from './GraphPalette.svelte';
+  import { addTask, addCase, paletteStep, setThen, STEP_MIME } from '$lib/studio-core/flow/compose';
+  import { ITEM_MIME } from '$lib/studio-core/items';
+  import { outline, completeAt } from '$lib/studio-core/flow/schema';
   import GraphFollow from './GraphFollow.svelte';
   import SchemaForm from './SchemaForm.svelte';
   import AgentTemplateEditor from './AgentTemplateEditor.svelte';
   import { parseWorkflowToGraph, isAgentTemplateYaml } from './workflowParser';
   import { runsApi, type Breakpoint, type DebugCommand } from '$lib/services/api';
-  import { lineOfStep, stepLines } from '$lib/components/studio/flow';
+  import { lineOfStep, stepLines } from '$lib/studio-core/flow/model';
   import type { FlowDebug } from '$lib/components/run/debugState.svelte.ts';
+  import type { Snippet } from 'svelte';
 
   let {
     initialYaml = '',
@@ -37,6 +44,13 @@
     debug = null,
     onrun,
     onshowrun,
+    toolbar,
+    showCode,
+    focusStep = null,
+    gotoLine = null,
+    palette = false,
+    onaddstep,
+    ondropat,
   }: {
     initialYaml: string;
     onchange?: (val: string) => void;
@@ -66,20 +80,41 @@
     /// Context menu → Run / Debug, and → show a step in the Runs panel.
     onrun?: (debug: boolean) => void;
     onshowrun?: () => void;
+    /// Bump to switch the main view to Code (the Studio's Edit / double-click).
+    showCode?: number;
+    /// A step for the form to open (its name, and a stamp per request).
+    focusStep?: { name: string; n: number } | null;
+    /// A line to show in the Code view (a problem picked in the Problems panel).
+    gotoLine?: { line: number; n: number } | null;
+    /// Show the step palette on the graph (flows): drag a step onto the flow, or
+    /// click to add it. `onaddstep` gets the palette step's id (the host adds it
+    /// and opens it in its form); without it the pane adds the step itself.
+    palette?: boolean;
+    onaddstep?: (stepId: string) => void;
+    /// Something dropped on a step or a connector of the graph: where in the
+    /// flow it goes (the list, the index, in words). Return true when taken;
+    /// a drop elsewhere on the graph bubbles to the host (appends).
+    ondropat?: (e: DragEvent, at: InsertAt) => boolean;
+    /// Host content for the Graph | Code toolbar (`main` only), after the tabs —
+    /// the studio puts the flow's name and Run/Deploy here instead of a bar of its own.
+    toolbar?: Snippet;
   } = $props();
 
   const nodeTypes = {
-    step: StepNode, workflow: WorkflowNode, agent: AgentNode,
+    step: StepNode, workflow: WorkflowNode, agent: AgentBlockNode, agentPort: AgentPortNode,
     agentSection: AgentSectionNode, portCard: PortCardNode,
     resource: ResourceNode, pipeline: PipelineStepNode, subflow: SubFlowNode,
     control: ControlNode, join: JoinNode, flowMarker: FlowMarkerNode,
   };
 
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
+  type Path = (string | number)[];
+  export type InsertAt = { list: Path; index: number; label: string };
   import DesignerChat from '$lib/components/editor/DesignerChat.svelte';
 
   // ── Internal state ──
-  let leftMode = $state<'graph' | 'code'>('graph');
+  let leftMode = $state<'graph' | 'code'>(untrack(() => (showCode ? 'code' : 'graph')));
+  $effect(() => { if (showCode) leftMode = 'code'; });
   let rightMode = $state<'form' | 'ai'>('form');
   // Single-column hosts drive one selection across all three views.
   let soloMode = $state<'graph' | 'code' | 'form'>('graph');
@@ -87,7 +122,13 @@
   $effect(() => { if (soloMode !== 'form') onsection?.(soloMode); });
   // With the AI tab hidden, never leave the right pane on a tab that is gone.
   $effect(() => { if (!showAi && rightMode === 'ai') rightMode = 'form'; });
-  let yamlSource = $state(initialYaml);
+  let yamlSource = $state(untrack(() => initialYaml));
+  // Follow the text when it changes outside (a step dropped on the flow, the
+  // other pane of the same document); our own edits come back unchanged.
+  $effect(() => {
+    const next = initialYaml;
+    if (next !== untrack(() => yamlSource)) yamlSource = next;
+  });
   let agentScrollTarget = $state('');
   let splitPercent = $state(50);
   let dragging = $state(false);
@@ -232,7 +273,12 @@
 
   // Nodes and edges directly from parser (expansion handled inside node components)
   let nodes = $derived.by<Node[]>(() => baseGraph?.nodes ?? []);
-  let edges = $derived.by<Edge[]>(() => baseGraph?.edges ?? []);
+  /// Edges flow only while the shown run is live (running, or a debug run paused);
+  /// at rest the graph is still.
+  let edges = $derived.by<Edge[]>(() => {
+    const live = !!debug?.live;
+    return (baseGraph?.edges ?? []).map((e) => (e.animated && !live ? { ...e, animated: false } : e));
+  });
 
   // ── Breakpoints and the run's position on the graph ──
   let shownNodes = $derived.by<Node[]>(() => {
@@ -282,6 +328,116 @@
     const id = key ? nodes.find((n) => n.data?.stepKey === key)?.id : null;
     if (id) graphFocus = { id, n: ++revealN };
   }
+
+  // ── Dropping between steps ──
+  /// What a drop at this element of the graph means: on a step → after it; on a
+  /// connector → before the step it leads to (or after the one it leaves, when
+  /// it leads to a join or the end); on start → first. Null: anywhere else.
+  let dropAt = $state<(InsertAt & { node?: string; edge?: string }) | null>(null);
+  const nodeById = (id: string | null | undefined) => (id ? nodes.find((n) => n.id === id) : undefined);
+  const pathOf = (id: string | null | undefined) => nodeById(id)?.data?.path as Path | undefined;
+  const after = (p: Path) => ({ list: p.slice(0, -2), index: (p[p.length - 2] as number) + 1, label: `after ${p[p.length - 1]}` });
+  const before = (p: Path) => ({ list: p.slice(0, -2), index: p[p.length - 2] as number, label: `before ${p[p.length - 1]}` });
+  function targetAt(el: Element | null): (InsertAt & { node?: string; edge?: string }) | null {
+    const nodeEl = el?.closest('.svelte-flow__node');
+    if (nodeEl) {
+      const id = nodeEl.getAttribute('data-id') ?? '';
+      const n = nodeById(id);
+      const p = pathOf(id);
+      if (p) return { ...after(p), node: id };
+      if (n?.data?.marker === 'start') return { list: ['do'], index: 0, label: 'at the start', node: id };
+      return null;
+    }
+    const edgeEl = el?.closest('.svelte-flow__edge');
+    if (edgeEl) {
+      const id = edgeEl.getAttribute('data-id') ?? '';
+      const e = edges.find((x) => x.id === id);
+      if (!e) return null;
+      const t = pathOf(e.target), src = pathOf(e.source);
+      if (t) return { ...before(t), edge: id };
+      if (src) return { ...after(src), edge: id };
+      if (nodeById(e.source)?.data?.marker === 'start') return { list: ['do'], index: 0, label: 'at the start', edge: id };
+    }
+    return null;
+  }
+  const droppable = (e: DragEvent) => { const t = e.dataTransfer?.types ?? []; return t.includes(STEP_MIME) || t.includes(ITEM_MIME); };
+  function onGraphDragOver(e: DragEvent) {
+    if (!ondropat || readOnly || !droppable(e)) return;
+    // Accept here: over a connector the event may not bubble out of the graph.
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    const at = targetAt(e.target as Element);
+    if (at?.node !== dropAt?.node || at?.edge !== dropAt?.edge) mark(at);
+    dropAt = at;
+  }
+  /// The step or connector a drop would go to, marked on the element itself:
+  /// changing the graph's nodes or edges mid-drag would redraw them under the
+  /// pointer and lose the target.
+  let marked: Element | null = null;
+  function mark(at: { node?: string; edge?: string } | null) {
+    marked?.classList.remove('drop-target');
+    marked = null;
+    const sel = at?.node ? `.svelte-flow__node[data-id="${at.node}"]` : at?.edge ? `.svelte-flow__edge[data-id="${at.edge}"]` : '';
+    if (sel) { marked = document.querySelector(sel); marked?.classList.add('drop-target'); }
+  }
+  function onGraphDrop(e: DragEvent) {
+    const at = dropAt;
+    dropAt = null;
+    mark(null);
+    if (!at || !ondropat) return;
+    if (ondropat(e, { list: at.list, index: at.index, label: at.label })) { e.preventDefault(); e.stopPropagation(); }
+  }
+
+  // ── Connecting steps: a jump (`then:`) ──
+  /// A connection drawn from one step to another sets the first one's `then:`
+  /// (both in the same list); from a switch, it adds a case going there; to the
+  /// end marker, `then: end`.
+  function onConnect(c: { source: string; target: string }) {
+    const sp = pathOf(c.source);
+    const tgt = nodeById(c.target);
+    const tp = pathOf(c.target);
+    if (!sp) { note = 'Connect from a step.'; return; }
+    const to = tgt?.data?.marker === 'end' ? 'end' : tp ? String(tp[tp.length - 1]) : '';
+    if (!to) { note = 'Connect to a step, or to the end.'; return; }
+    if (tp && JSON.stringify(tp.slice(0, -2)) !== JSON.stringify(sp.slice(0, -2))) {
+      note = `${sp[sp.length - 1]} can only jump to a step in its own list — ${to} is in another.`;
+      return;
+    }
+    if (tp && JSON.stringify(tp) === JSON.stringify(sp)) return;
+    note = '';
+    const isSwitch = nodeById(c.source)?.data?.taskType === 'switch';
+    onCodeChange(isSwitch ? addCase(yamlSource, sp, to).yaml : setThen(yamlSource, sp, to));
+  }
+
+  /// A palette block clicked: the host adds it (and opens it in its form), or we do.
+  function addFromPalette(id: string) {
+    if (onaddstep) { onaddstep(id); return; }
+    const st = paletteStep(id);
+    if (st) onCodeChange(addTask(yamlSource, st.base, st.task()).yaml);
+  }
+
+  // ── The code view's schema outline ──
+  let showOutline = $state((() => { try { return localStorage.getItem('a3t.code.outline') !== 'off'; } catch { return true; } })());
+  $effect(() => { try { localStorage.setItem('a3t.code.outline', showOutline ? 'on' : 'off'); } catch { /* private window */ } });
+  let outlinePct = $state(42);
+  let outlineDrag = $state(false);
+  let codeSplit: HTMLDivElement | undefined = $state();
+  function onOutlineDrag(e: MouseEvent) {
+    e.preventDefault(); outlineDrag = true;
+    const move = (ev: MouseEvent) => { if (!codeSplit) return; const r = codeSplit.getBoundingClientRect(); outlinePct = Math.max(22, Math.min(70, ((ev.clientX - r.left) / r.width) * 100)); };
+    const up = () => { outlineDrag = false; window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+  }
+  /// The schema's problems, marked on their lines in the text.
+  const schemaProblems = $derived(leftMode === 'code' || soloMode === 'code' ? outline(yamlSource).problems : []);
+  const codeIssues = $derived(schemaProblems.filter((p) => p.line).map((p) => ({ line: p.line!, level: p.level, message: p.message })));
+  const issueCount = $derived(schemaProblems.length);
+  // A problem picked elsewhere (the Problems panel): show its line.
+  $effect(() => {
+    const g = gotoLine;
+    if (!g) return;
+    untrack(() => { leftMode = 'code'; soloMode = 'code'; reveal = { line: g.line, n: ++revealN }; });
+  });
 
   // ── Context menu ──
   type Menu = { x: number; y: number; key?: string; label?: string; from: 'graph' | 'code' };
@@ -347,6 +503,7 @@
 </script>
 
 {#snippet graphView(showMiniMap: boolean)}
+  {#if palette && !readOnly && !isAgentTemplate}<GraphPalette yaml={yamlSource} onadd={addFromPalette} />{/if}
   {#if nodes.length > 0}
     {#if baseGraph?.meta}
       <div class="wf-meta-bar">
@@ -356,8 +513,10 @@
         {#if baseGraph.meta.hasExtensions}<span class="wf-meta-tag ext">{baseGraph.meta.extensionCount} ext</span>{/if}
       </div>
     {/if}
+    <div class="gdrop" role="presentation" ondragover={onGraphDragOver} ondragleave={(e) => { if (e.currentTarget === e.target) { dropAt = null; mark(null); } }} ondrop={onGraphDrop}>
     <SvelteFlow nodes={shownNodes} {edges} {nodeTypes} fitView onnodeclick={handleNodeClick}
       onnodecontextmenu={({ event, node }) => openMenu(event, node)} onpanecontextmenu={({ event }) => openMenu(event)}
+      onconnect={(c) => onConnect(c)}
       nodesDraggable={!readOnly} nodesConnectable={!readOnly} elementsSelectable={!readOnly}>
       <Background />
       <Controls />
@@ -365,6 +524,8 @@
       <GraphFollow nodeId={currentNode} />
       {#if graphFocus}{#key graphFocus.n}<GraphFollow nodeId={graphFocus.id} delay={300} />{/key}{/if}
     </SvelteFlow>
+    {#if dropAt}<div class="drop-label">Insert {dropAt.label}</div>{/if}
+    </div>
     {#if debug?.runId && Object.keys(debug.marks).length}
       <div class="run-legend" title="The run selected in the Runs panel">
         <span class="lg done">ran</span><span class="lg failed">failed</span><span class="lg running">running</span><span class="lg paused">paused</span>
@@ -377,8 +538,21 @@
 {/snippet}
 
 {#snippet codeView()}
-  <YamlEditor value={yamlSource} onchange={onCodeChange} {readOnly} {reveal}
-    marks={codeMarks} ongutter={onGutter} oncontext={debug ? onCodeContext : undefined} />
+  <!-- The text, with the CNCF DSL outline beside it: the whole schema at each
+       place, what the flow sets in full, its problems marked in both. -->
+  <div class="code-split" class:no-outline={!showOutline} class:dragging={outlineDrag} bind:this={codeSplit} style="grid-template-columns: {showOutline ? `${outlinePct}% 5px 1fr` : '1fr'}">
+    {#if showOutline}
+      <div class="code-outline">
+        <SchemaOutline text={yamlSource} onchange={onCodeChange} {readOnly} onreveal={(line) => (reveal = { line, n: ++revealN })} />
+      </div>
+      <div class="code-div" role="separator" onmousedown={onOutlineDrag}></div>
+    {/if}
+    <div class="code-text">
+      <button class="outline-tg" onclick={() => (showOutline = !showOutline)} title={showOutline ? 'Hide the CNCF DSL outline' : 'Show the CNCF DSL outline'}>{showOutline ? '◧' : '◨'} Schema{#if !showOutline && issueCount} <b>{issueCount}</b>{/if}</button>
+      <YamlEditor value={yamlSource} onchange={onCodeChange} {readOnly} {reveal} issues={codeIssues} complete={completeAt}
+        marks={codeMarks} ongutter={onGutter} oncontext={debug ? onCodeContext : undefined} />
+    </div>
+  </div>
 {/snippet}
 
 {#snippet contextMenu(m: Menu)}
@@ -435,7 +609,7 @@
   {:else if isAgentTemplate && parsed}
     <AgentTemplateEditor template={parsed} scrollTo={agentScrollTarget} onchange={onAgentFormChange} onopensub={onopensub} {readOnly} {configSeed} {onsection} />
   {:else}
-    <SchemaForm value={yamlSource} onchange={onFormChange} />
+    <SchemaForm value={yamlSource} onchange={onFormChange} focus={focusStep} />
   {/if}
 {/snippet}
 
@@ -453,6 +627,7 @@
             Code
           </button>
         </div>
+        {@render toolbar?.()}
       </div>
       <div class="fep-pane-body part-main">
         {#if leftMode === 'graph'}{@render graphView(true)}{:else}{@render codeView()}{/if}
@@ -580,6 +755,7 @@
   .fep-divider:hover::after, .fep-split.dragging .fep-divider::after { background: white; }
 
   .fep-toolbar {
+    position: relative;   /* a host's toolbar may centre its title on the bar */
     display: flex; align-items: center; gap: 8px;
     padding: 5px 10px; border-bottom: 1px solid var(--border);
     background: var(--bg-surface); flex-shrink: 0;
@@ -595,6 +771,22 @@
   .fep-tab:hover:not(.active) { color: var(--text-2); }
 
   .fep-pane-body { flex: 1; overflow: hidden; position: relative; }
+
+  .gdrop { position: absolute; inset: 0; }
+  .drop-label { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); z-index: 8; pointer-events: none;
+                padding: 3px 10px; border-radius: 10px; background: var(--spec, #5530a8); color: #fff; font-size: 11.5px; }
+  .fep :global(.svelte-flow__node.drop-target) { box-shadow: 0 6px 0 -2px var(--spec, #5530a8); border-radius: 10px; }
+  .fep :global(.svelte-flow__edge.drop-target path.svelte-flow__edge-path) { stroke: var(--spec, #5530a8) !important; stroke-width: 3px !important; }
+  .code-split { display: grid; height: 100%; min-height: 0; overflow: hidden; }
+  .code-split.dragging { user-select: none; cursor: col-resize; }
+  .code-outline { min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border); }
+  .code-div { cursor: col-resize; background: var(--bg-subtle); }
+  .code-div:hover, .code-split.dragging .code-div { background: var(--spec, #5530a8); }
+  .code-text { position: relative; min-width: 0; min-height: 0; height: 100%; }
+  .outline-tg { position: absolute; top: 6px; right: 12px; z-index: 5; display: flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 11px;
+                border: 1px solid var(--border); border-radius: 10px; background: var(--bg-surface); color: var(--text-3); cursor: pointer; }
+  .outline-tg:hover { color: var(--spec); border-color: var(--spec); }
+  .outline-tg b { color: var(--err, #b42318); }
 
   .fep-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-4); font-size: 13px; flex-direction: column; gap: 4px; }
   .fep-empty code { font-family: var(--font-mono); background: var(--bg-subtle); padding: 1px 5px; border-radius: 3px; font-size: 12px; }

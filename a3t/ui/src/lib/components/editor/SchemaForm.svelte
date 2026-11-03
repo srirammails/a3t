@@ -5,7 +5,11 @@
   import { isCncfDsl, normaliseTasks } from './workflowParser';
   import type { FunctionManifest } from '$lib/editor/types';
 
-  let { value = '', onchange }: { value: string; onchange?: (val: string) => void } = $props();
+  let { value = '', onchange, focus = null }: {
+    value: string; onchange?: (val: string) => void;
+    /// Open this step and bring it into view (a stamp per request).
+    focus?: { name: string; n: number } | null;
+  } = $props();
 
   // Get registry manifests for schema-driven config rendering
   function getManifest(callType: string): FunctionManifest | null {
@@ -83,12 +87,17 @@
     return v;
   }
 
-  /// Which key of a CNCF task body holds its editable config.
-  function configSlot(body: any): 'with' | 'set' | 'run' | null {
+  /// Where in a CNCF task body its editable config sits: `with`, `set`, or the
+  /// process under `run` (`run.workflow`, `run.shell`…).
+  function configSlot(body: any): string[] | null {
     if (!body || typeof body !== 'object') return null;
-    if (body.call !== undefined) return 'with';
-    if (body.set !== undefined) return 'set';
-    if (body.run !== undefined) return body.with !== undefined ? 'with' : 'run';
+    if (body.call !== undefined) return ['with'];
+    if (body.set !== undefined) return ['set'];
+    if (body.run !== undefined) {
+      if (body.with !== undefined) return ['with'];
+      const kind = ['workflow', 'container', 'script', 'shell'].find((k) => body.run && typeof body.run === 'object' && body.run[k] && typeof body.run[k] === 'object');
+      return kind ? ['run', kind] : ['run'];
+    }
     return null;   // composite task — leave its body alone
   }
 
@@ -104,7 +113,11 @@
       const key = Object.keys(orig)[0];
       const body = plainClone(orig[key]);
       const slot = configSlot(body);
-      if (slot) body[slot] = st.config ?? {};
+      if (slot) {
+        let at = body;
+        for (const k of slot.slice(0, -1)) at = at[k];
+        at[slot[slot.length - 1]] = st.config ?? {};
+      }
       return { [st.name ?? key]: body };
     });
   }
@@ -172,6 +185,14 @@
     emit();
   }
 
+  /// A CNCF task's resource is `with._resource` (what the engine reads); the
+  /// legacy shape keeps it on the step.
+  const resourceOf = (step: any): string => String((cncf ? step.config?._resource : step.resource) ?? '');
+  function setResource(idx: number, val: string) {
+    if (cncf) updateStepConfig(idx, '_resource', val);
+    else updateStepField(idx, 'resource', val);
+  }
+
   function updateStepConfig(idx: number, key: string, val: any) {
     const step = parsed.steps[idx];
     if (!step.config) step.config = {};
@@ -236,6 +257,17 @@
   }
 
   let expandedSteps = $state<Record<number, boolean>>({});
+  let root = $state<HTMLElement | null>(null);
+  let focused = 0;
+  // A step asked for (dropped on the flow): open it, close the others, show it.
+  $effect(() => {
+    if (!focus || focus.n === focused || !parsed?.steps) return;
+    const idx = parsed.steps.findIndex((s: any) => s.name === focus.name);
+    if (idx < 0) return;
+    focused = focus.n;
+    expandedSteps = { [idx]: true };
+    queueMicrotask(() => root?.querySelector(`[data-step="${CSS.escape(focus.name)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+  });
 
   // ── Task type schemas ──
 
@@ -423,7 +455,7 @@
   }
 </script>
 
-<div class="schema-form">
+<div class="schema-form" bind:this={root}>
   {#if parseError}
     <div class="form-error">{parseError}</div>
   {:else if parsed}
@@ -474,13 +506,13 @@
         <div class="steps-list">
           {#each parsed.steps as step, idx}
             {@const schema = getSchema(step.type)}
-            <div class="step-card" class:expanded={expandedSteps[idx]}>
+            <div class="step-card" class:expanded={expandedSteps[idx]} data-step={step.name}>
               <div class="step-header" role="button" tabindex="0" onclick={() => expandedSteps[idx] = !expandedSteps[idx]} onkeydown={(e) => { if (e.key === 'Enter') expandedSteps[idx] = !expandedSteps[idx]; }}>
                 <svg class="step-chevron" class:open={expandedSteps[idx]} width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>
                 <span class="step-num">{idx + 1}</span>
                 <span class="step-name">{step.name ?? 'unnamed'}</span>
                 <span class="step-type-badge">{step.type ?? '?'}</span>
-                {#if step.resource}<span class="step-resource">{step.resource}</span>{/if}
+                {#if resourceOf(step)}<span class="step-resource">{resourceOf(step)}</span>{/if}
                 {#if step.then}<span class="step-then">&#8594; {step.then}</span>{/if}
                 <span class="step-actions">
                   <button class="step-btn" onclick={(e) => { e.stopPropagation(); moveStep(idx, -1); }} title="Move up" disabled={idx === 0}>&#9650;</button>
@@ -507,7 +539,7 @@
                     {#if NEEDS_RESOURCE.has(step.type)}
                       <label class="form-label">
                         <span>resource</span>
-                        <input type="text" value={step.resource ?? ''} oninput={(e) => updateStepField(idx, 'resource', e.currentTarget.value)} placeholder="namespace/name" />
+                        <input type="text" value={resourceOf(step)} oninput={(e) => setResource(idx, e.currentTarget.value)} placeholder="namespace/name" />
                       </label>
                     {/if}
                     <label class="form-label">
@@ -663,6 +695,12 @@
   .form-label.full { grid-column: 1 / -1; }
   .form-label span { color: var(--text-2); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
   .form-label em { color: var(--err); font-style: normal; margin-left: 2px; }
+  /* Same fields as the agent-template form (AgentTemplateEditor), not the
+     roomier page-form defaults from app.css. */
+  .form-label input, .form-label select, .form-label textarea {
+    padding: 7px 10px; font-size: 13px; font-family: var(--font-mono);
+  }
+  .form-label input:focus, .form-label select:focus, .form-label textarea:focus { box-shadow: none; }
 
   /* Steps */
   .steps-list { display: flex; flex-direction: column; gap: 4px; }

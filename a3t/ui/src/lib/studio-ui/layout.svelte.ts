@@ -12,13 +12,23 @@ export type StudioLayout = {
   right: RegionState;
   bottom: RegionState;
   maximized: string | null;
+  /// Panels the user moved from their home region: to another region, or into
+  /// the editor area as a tab (`center`). Kept.
+  placement: Record<string, RegionId | 'center'>;
+  /// The panel shown in the editor area instead of a document, if any (not kept).
+  centerPanel: string | null;
 };
+
+/// Drag payload for a panel (its id).
+export const PANEL_MIME = 'application/x-a3t-panel';
 
 export const DEFAULT_LAYOUT: StudioLayout = {
   left: { size: 280, minimized: false, active: '' },
   right: { size: 340, minimized: false, active: '' },
   bottom: { size: 300, minimized: true, active: '' },
   maximized: null,
+  placement: {},
+  centerPanel: null,
 };
 
 export class Studio {
@@ -31,7 +41,7 @@ export class Studio {
     try {
       const v = JSON.parse(localStorage.getItem(this.key) ?? 'null');
       if (v && v.left && v.bottom) {
-        this.state = { ...base, ...v, right: v.right ?? base.right, maximized: null };
+        this.state = { ...base, ...v, right: v.right ?? base.right, placement: v.placement ?? {}, maximized: null, centerPanel: null };
         return;
       }
     } catch { /* private window */ }
@@ -39,7 +49,28 @@ export class Studio {
   }
 
   save() {
-    try { localStorage.setItem(this.key, JSON.stringify({ ...this.state, maximized: null })); } catch { /* private window */ }
+    try { localStorage.setItem(this.key, JSON.stringify({ ...this.state, maximized: null, centerPanel: null })); } catch { /* private window */ }
+  }
+
+  /// Move a panel to a region, or into the editor area as a tab (shown there now).
+  place(panel: string, where: RegionId | 'center') {
+    this.state.placement[panel] = where;
+    if (where === 'center') this.state.centerPanel = panel;
+    else {
+      if (this.state.centerPanel === panel) this.state.centerPanel = null;
+      this.state[where].active = panel;
+      this.state[where].minimized = false;
+    }
+    this.save();
+  }
+
+  /// Send a panel back to its home region, minimized there.
+  unplace(panel: string, home: RegionId) {
+    delete this.state.placement[panel];
+    if (this.state.centerPanel === panel) this.state.centerPanel = null;
+    this.state[home].active = panel;
+    this.state[home].minimized = true;
+    this.save();
   }
 
   /// Show `panel` in `region`, restoring the region if it was minimized.

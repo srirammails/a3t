@@ -111,6 +111,11 @@ button { cursor: pointer; font-family: var(--font-sans); }
 .btn.runtime:hover { background: #0e5d48; }
 .btn.control { background: var(--control); color: white; border-color: var(--control); }
 .btn.control:hover { background: #a86820; }
+/* A disabled button looks it (Save with nothing to save, Deploy with nothing new). */
+.btn:disabled, .btn:disabled:hover { opacity: 0.45; cursor: default; filter: saturate(0.6); }
+.btn.spec:disabled:hover { background: var(--spec); }
+.btn.runtime:disabled:hover { background: var(--runtime); }
+.btn.control:disabled:hover { background: var(--control); }
 
 /* Form inputs */
 input[type="text"],

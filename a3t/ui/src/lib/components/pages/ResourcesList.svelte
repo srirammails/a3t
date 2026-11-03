@@ -16,7 +16,7 @@
   import PropertiesTree from '$lib/components/shared/PropertiesTree.svelte';
   import DeleteConfirm from '$lib/components/shared/DeleteConfirm.svelte';
   import FlowEditorPane from '$lib/components/editor/FlowEditorPane.svelte';
-  import { navigateTo, getActivePanel } from '$lib/stores/panels.svelte.ts';
+  import { navigateTo, getActivePanel, openInStudio } from '$lib/stores/panels.svelte.ts';
   import { can, currentUser } from '$lib/stores/auth';
   import { onMount } from 'svelte';
   import { namespacesFor, inContext, itemProject, getProject, isPlatform } from '$lib/stores/context.svelte.ts';
@@ -699,7 +699,7 @@ do:
   open={!!selected}
   onclose={closePanel}
   onsave={selected?.category === 'flows' ? saveFlow : undefined}
-  onopenineditor={selected?.category === 'flows' && !isNewFlow ? () => navigateTo('flow-editor', 'Flow Editor') : undefined}
+  onopenineditor={selected && !isNewFlow ? () => openInStudio(selected!.category === 'flows' ? 'flow' : selected!.type === 'canvas' ? 'canvas' : 'resource', selected!.namespace, selected!.name) : undefined}
 >
   {#if selected}
     <div class="panel-layout">

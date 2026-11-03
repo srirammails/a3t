@@ -1,23 +1,8 @@
-/// Flow documents in the studio: what an open flow tab holds, and what the
-/// panels read from it (its steps for breakpoints, its input schema, problems).
+/// What the studio knows about a flow's text, without the network: parsing, its
+/// steps as the engine keys them, problems before deploy, where a step is in
+/// the YAML, and renaming. Plain TypeScript (studio-core).
 import * as YAML from 'yaml';
-
-export type OpenItem = { kind: 'flow' | 'resource' | 'trigger' | 'template' | 'canvas'; ns: string; name: string; id?: string; data?: any };
-
-export type Doc = {
-  /// `flow:<ns>/<name>`, `resource:<ns>/<name>`, … or `flow:new:<n>`.
-  id: string;
-  kind: 'flow' | 'resource' | 'trigger' | 'template' | 'canvas';
-  ns: string;
-  name: string;
-  /// Flows: the text being edited and the text last loaded or deployed.
-  yaml?: string;
-  saved?: string;
-  loaded?: boolean;
-  isNew?: boolean;
-  /// Other items: what the explorer listed.
-  data?: any;
-};
+import { outline } from './schema';
 
 export function parse(yaml: string | undefined): { doc: any; error: string | null } {
   try {
@@ -52,19 +37,16 @@ export function stepKeys(tasks: any, prefix = ''): string[] {
   return out;
 }
 
-export type Problem = { level: 'error' | 'warning'; message: string };
+export type Problem = { level: 'error' | 'warning'; message: string; line?: number | null };
 
-/// What is wrong with a flow before it is deployed.
+/// What is wrong with a flow before it is deployed: the CNCF DSL schema's
+/// findings (./schema), then what the engine needs beyond it.
 export function problems(yaml: string | undefined): Problem[] {
   const { doc, error } = parse(yaml);
-  if (error) return [{ level: 'error', message: `YAML: ${error}` }];
-  const out: Problem[] = [];
-  const d = doc?.document;
-  if (!d) out.push({ level: 'error', message: 'Missing `document:` (dsl, namespace, name, version).' });
-  else {
-    for (const k of ['dsl', 'namespace', 'name', 'version']) if (!d[k]) out.push({ level: 'error', message: `document.${k} is missing.` });
-  }
-  if (!Array.isArray(doc?.do) || !doc.do.length) out.push({ level: 'error', message: 'The flow has no steps (`do:` is empty or missing).' });
+  const o = outline(yaml ?? '');
+  if (error) return o.problems.length ? o.problems : [{ level: 'error', message: `YAML: ${error}` }];
+  const out: Problem[] = o.problems.map(({ level, message, line }) => ({ level, message, line }));
+  if (Array.isArray(doc?.do) && !doc.do.length) out.push({ level: 'error', message: 'The flow has no steps (`do:` is empty).' });
   const keys = stepKeys(doc?.do);
   const seen = new Set<string>();
   for (const k of keys) {
@@ -129,3 +111,39 @@ function nearest(root: unknown, name: string): YAML.Pair | null {
 }
 
 const lineAt = (text: string, offset: number) => text.slice(0, offset).split('\n').length;
+
+/// The same flow under another `document.name`, comments and layout kept.
+export function withFlowName(yaml: string, name: string): string {
+  const d = YAML.parseDocument(yaml);
+  d.setIn(['document', 'name'], name);
+  return d.toString();
+}
+
+/// `document.name` as the CNCF DSL defines it: lowercase letters and digits,
+/// dashes only inside.
+export const FLOW_NAME = /^[a-z0-9](-?[a-z0-9])*$/;
+
+/// `document.version` of a flow's text ('' when absent or not parseable).
+export function versionOf(yaml: string | undefined): string {
+  try { return String(YAML.parse(yaml ?? '')?.document?.version ?? ''); } catch { return ''; }
+}
+/// The text with `document.version` set (layout and comments kept).
+export function withVersion(yaml: string, version: string): string {
+  const d = YAML.parseDocument(yaml);
+  d.setIn(['document', 'version'], version);
+  return d.toString();
+}
+/// The next semantic version: 1.2.3 → patch 1.2.4, minor 1.3.0, major 2.0.0.
+export function bumpVersion(v: string, part: 'patch' | 'minor' | 'major'): string {
+  const [a, b, c] = (v.match(/^(\d+)\.(\d+)\.(\d+)/)?.slice(1) ?? ['1', '0', '0']).map(Number);
+  return part === 'major' ? `${a + 1}.0.0` : part === 'minor' ? `${a}.${b + 1}.0` : `${a}.${b}.${c + 1}`;
+}
+/// Versions newest first (semantic order; others after, as given).
+export function sortVersions(vs: string[]): string[] {
+  const key = (v: string) => (v.match(/^(\d+)\.(\d+)\.(\d+)/)?.slice(1).map(Number) ?? null);
+  return [...vs].sort((x, y) => {
+    const a = key(x), b = key(y);
+    if (!a || !b) return a ? -1 : b ? 1 : 0;
+    return b[0] - a[0] || b[1] - a[1] || b[2] - a[2];
+  });
+}

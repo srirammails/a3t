@@ -32,6 +32,8 @@ do:
     call: llm
     with:
       prompt: ${ .input.message // "Say hello in one sentence." }
+      # The conversation before this message (Studio chat); the prompt follows it.
+      messages: ${ .input.messages // [] }
       system_prompt: "You are a test assistant. Keep responses brief."
       max_tokens: ${ .input.max_tokens // 256 }
       temperature: 0.3
