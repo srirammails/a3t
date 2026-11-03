@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="627" viewBox="0 0 1200 627">
+  <title>One frozen lock with five keyholes, five different keys turning in it at once</title>
+  <defs>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#d9d4c6"/>
+    </pattern>
+    <linearGradient id="shackle" x1="0" x2="1">
+      <stop offset="0" stop-color="#8f8a7d"/><stop offset=".5" stop-color="#d4cfc2"/><stop offset="1" stop-color="#8f8a7d"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2a26"/><stop offset="1" stop-color="#151411"/>
+    </linearGradient>
+    <!-- A key with its tip at the origin, pointing +x; it extends to -x. -->
+    <symbol id="key" overflow="visible">
+      <path d="M-270,0 m-40,0 a40,40 0 1,0 80,0 a40,40 0 1,0 -80,0 M-270,0 m-15,0 a15,15 0 1,1 30,0 a15,15 0 1,1 -30,0"
+            fill-rule="evenodd"/>
+      <rect x="-232" y="-8" width="232" height="16" rx="3"/>
+      <path d="M-92,8 h86 v14 h-14 v10 h-16 v-10 h-14 v18 h-16 v-18 h-12 v10 h-14 z"/>
+    </symbol>
+    <!-- Keyhole centred on the origin. -->
+    <symbol id="hole" overflow="visible">
+      <circle r="24" fill="#3a3833"/>
+      <circle cy="-5" r="10" fill="#0a0908"/>
+      <path d="M-6,0 L6,0 L9,16 L-9,16 Z" fill="#0a0908"/>
+    </symbol>
+  </defs>
+
+  <rect width="1200" height="627" fill="#faf9f6"/>
+  <rect width="1200" height="627" fill="url(#dots)" opacity=".7"/>
+
+  <!-- Shackle -->
+  <path d="M480,240 V170 a120,120 0 0 1 240,0 V240" fill="none" stroke="url(#shackle)" stroke-width="46" stroke-linecap="round"/>
+
+  <!-- Body: the frozen weights -->
+  <rect x="400" y="215" width="400" height="320" rx="38" fill="url(#body)"/>
+  <g stroke="#3a3833" stroke-width="1.5" opacity=".55">
+    <path d="M430,250 H770 M430,500 H770"/>
+  </g>
+  <text x="600" y="240" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" letter-spacing="3" fill="#6e6a60">FROZEN WEIGHTS</text>
+
+  <!-- Keyholes -->
+  <use href="#hole" x="510" y="315"/>
+  <use href="#hole" x="690" y="315"/>
+  <use href="#hole" x="490" y="430"/>
+  <use href="#hole" x="600" y="390"/>
+  <use href="#hole" x="710" y="430"/>
+
+  <!-- Keys, all turning at once -->
+  <g fill="#3a7fff"><use href="#key" transform="translate(510,312) rotate(30)"/></g>
+  <g fill="#c47028"><use href="#key" transform="translate(690,312) rotate(150) scale(1,-1)"/></g>
+  <g fill="#7d4bbb"><use href="#key" transform="translate(490,428) rotate(-18)"/></g>
+  <g fill="#23987f"><use href="#key" transform="translate(710,428) rotate(198) scale(1,-1)"/></g>
+  <g fill="#c8a43a"><use href="#key" transform="translate(600,388) rotate(-90) scale(.72)"/></g>
+
+  <!-- Key labels -->
+  <g font-family="IBM Plex Mono, monospace" font-size="15" letter-spacing="1.5" fill="#3a3833">
+  <g text-anchor="middle">
+    <text x="276" y="118">FACTS</text>
+    <text x="924" y="118">RELATIONS</text>
+    <text x="233" y="580">DOCUMENTS</text>
+    <text x="967" y="580">EVENTS</text>
+  </g>
+    <text x="642" y="588">CONTEXT</text>
+  </g>
+
+  <text x="40" y="52" font-family="IBM Plex Mono, monospace" font-size="15" letter-spacing="2" fill="#6e6a60">A3T · BLOG</text>
+</svg>

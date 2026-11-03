@@ -1,0 +1,36 @@
+---
+title: CNCF Workflow DSL, Explained
+description: The whole CNCF Serverless Workflow schema as one expanding tree. Open document, use, do, call, try and the rest, layer by layer, each with an explanation and an example.
+date: 2026-11-01
+author: Sriram
+tags: [workflows, cncf]
+image: /covers/cncf-workflow-dsl.png
+imageAlt: The CNCF Serverless Workflow schema tree drawn as a floor plan, from workflow at the front to document, use, do and the task types behind it, under the title CNCF Workflow DSL, explained.
+---
+import SchemaTree from '../../components/SchemaTree.astro';
+
+A3T describes agents and processes in the [CNCF Serverless Workflow](https://github.com/serverlessworkflow/specification) DSL: an open, vendor-neutral workflow language written in YAML. The project, still in the CNCF, now goes by the [Open Workflow Specification](https://open-workflow-specification.org/).
+
+Below is the whole 1.0 schema as one tree. Click **+** on any key to see what it is for and an example, and to open the layer inside it. New to YAML? Read [How to Read and Write YAML](../how-to-read-and-write-yaml/) first.
+
+<SchemaTree of="swf" />
+
+## Three rules that hold everywhere
+
+1. **Data flows down the list.** Each task's output is the next task's input. Inside a task, `.` is that input.
+2. **`${ }` is jq.** Anything inside it is a [jq](https://jqlang.github.io/jq/) expression evaluated at run time. Quote it when it contains `: `.
+3. **A task is a one-key map.** In `do`, `try`, `fork.branches` and `switch`, each list item is `- name:` and the task sits under it.
+
+## How A3T runs it
+
+A3T runs these workflows on a runtime written in Rust, and adds two kinds of `call`: `call: adb` runs [AQL](https://github.com/srirammails/AQL) queries against agent memory, and `call: a3t:agent` runs an LLM agent, with tools and memory, as a single task. Everything in the tree above works as written.
+
+<TryIt href="https://docs.a3t.io/getting-started/introduction/">From a plain workflow to an agent with memory, in four examples</TryIt>
+
+<BookDemo inline title="Want to see your workflow run on A3T?" text="Bring a process you run today; we'll turn it into a governed workflow in the demo." />
+
+## Sources
+
+- [DSL reference (1.0)](https://github.com/serverlessworkflow/specification/blob/main/dsl-reference.md), which the tree follows
+- [CloudEvents](https://cloudevents.io/), the event format used by `emit` and `listen`
+- [jq manual](https://jqlang.github.io/jq/manual/), the expression language inside `${ }`

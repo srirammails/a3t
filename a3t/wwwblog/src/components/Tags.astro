@@ -1,0 +1,9 @@
+---
+import { toneFor } from '../consts';
+
+interface Props { tags: string[]; }
+const { tags } = Astro.props;
+---
+{tags.length > 0 && (
+	<div class="tags">{tags.map((t) => <span class={`tag tone-${toneFor(t)}`}>{t}</span>)}</div>
+)}

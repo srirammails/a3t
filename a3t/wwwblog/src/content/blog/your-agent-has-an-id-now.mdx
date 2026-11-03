@@ -1,0 +1,147 @@
+---
+title: Your Agent Has an ID Now. Who Is It Working For?
+description: Agent identity, delegation, and why the enterprise still needs a gateway. What Entra Agent ID, Cross App Access and token vaults solve in 2026, the five gaps they leave, and how A3T closes them.
+date: 2026-11-02
+author: Sriram
+tags: [security, agents, policy]
+image: /covers/your-agent-has-an-id-now.png
+imageAlt: A delegation chain from a finance analyst to an agent, through the A3T gateway with a Cedar decision, to the ERP, with one call allowed and an approve-payment call denied, under the title Your Agent Has an ID Now. Who Is It Working For?
+---
+
+## The agent that didn't get the memo
+
+Picture a finance analyst who asks an agent to reconcile quarter-end invoices across the ERP, the procurement system and SharePoint. The job runs for six hours. Two hours in, the analyst moves to a different team and loses access to the procurement system.
+
+The agent keeps going. It is still holding the token it started with, or a service account that never belonged to the analyst in the first place. Nobody told it anything changed, and nobody can see that it is still working on someone's behalf.
+
+This is not an edge case. It is the default shape of most enterprise agent deployments today, and it is the problem I have spent the last few months building around in A3T.
+
+## Two bad options
+
+When an agent needs to reach an enterprise application (ServiceNow, Workday, Salesforce, a data warehouse), teams usually pick one of two options. Both fail in the same place.
+
+### Option 1: give the agent a service account
+
+The agent gets a static credential with broad rights. It is simple, and it is how most automation has always worked. But:
+
+- The application sees `svc-agent`, never the person who asked. Every action loses its human.
+- The account has to be powerful enough for every user the agent serves, so it is over-privileged for each one of them.
+- Every user of the agent inherits the same access. A junior analyst's agent can do what the CFO's agent can do.
+- The secret lives with the agent. A prompt-injected agent is a compromised service account.
+
+### Option 2: hand the agent the user's OAuth token
+
+This is the MCP-era default: the user clicks "allow", and the agent or its MCP server holds the user's token. Better attribution, but:
+
+- The agent can do anything the user can, within the token's scopes. There is no "read invoices, but never approve payments".
+- The token sits in agent code and agent memory.
+- Nobody centrally knows which agent holds which user's token.
+- When the user's access changes, the token stays valid until it expires, and the refresh token keeps minting new ones.
+
+### What neither gives you
+
+What neither option gives you is the thing an auditor will eventually ask for: *this agent, acting for this person, did this action, on this data, because this rule allowed it, and it stopped when that person's access changed.*
+
+That chain of agent identity, delegation and per-action decision is the **delegation problem**. It matters even more for data access than for actions. An agent that summarises SharePoint for one user and then answers another user from what it remembers has quietly broken the first user's permissions.
+
+## What the identity providers shipped in 2026
+
+The identity industry has noticed, and 2026 brought real progress.
+
+- **Microsoft Entra Agent ID** gives agents their own directory identities, governed by the same Conditional Access, sponsorship and lifecycle workflows as employees. An agent can now be inventoried, owned, and disabled when its sponsor leaves.
+- **Cross App Access (ID-JAG).** Between late August and 1 September 2026, Okta, Auth0 and Descope shipped support for the IETF ID-JAG draft. It lets the enterprise IdP, not each employee clicking "allow", decide which applications an agent may reach on a user's behalf.
+- **Token vaults.** Auth0 Token Vault brokers those exchanges, storing the enterprise refresh token and handing the agent's backend a downstream access token without user prompts.
+- **Hyperscaler gateways.** Policy in Amazon Bedrock AgentCore went GA in March 2026, evaluating Cedar policies on every agent-to-tool call. Google's Agent Gateway pairs with PingOne Authorize to decide each call and mint a narrowly scoped delegated token.
+
+This is the right direction. Agents are finally first-class identities, and delegation is moving into standard protocols (OAuth token exchange, ID-JAG) instead of ad-hoc API keys. So is the problem solved?
+
+Not quite.
+
+## Why an agent ID is not enough
+
+An agent ID answers *who the agent is*. It does not answer *whether this particular action should happen*. Five gaps remain.
+
+1. **The IdP decides at token time, not at action time.** Conditional Access evaluates when a token is issued. After that the token is a bearer credential. Microsoft is open that Conditional Access for agent identities is deliberately minimal: no MFA, no device signals. Nothing in the token can say "may update this record but not delete it, only under $500, only for this user, only for the next two hours".
+2. **Scopes are coarse.** SaaS APIs expose a handful of OAuth scopes. `Sites.ReadWrite.All` is not a policy. Every one of your 200 applications interprets its scopes differently.
+3. **Enforcement can't live inside the agent.** If the agent holds the token, the agent decides how to use it. A prompt-injected or buggy agent will use it for anything within scope. The check has to sit somewhere the agent cannot skip.
+4. **Frameworks don't wire it up.** Using an agent ID correctly means authenticating as the agent, carrying the user's token through the run, exchanging it per downstream audience, refreshing, never passing tokens through, and logging both identities on every call. LangChain and Strands give you tool abstractions, not this. In practice, people paste an API key into the tool config and ship.
+5. **Revocation reaches tokens, not running work.** IdPs can disable an identity or revoke a session. They have no idea that an agent is three hours into a six-hour job for that user. Our finance analyst's agent is still running.
+
+This is why the hyperscalers ship gateways alongside their agent identities. The pattern that works:
+
+- **The gateway holds the credentials.** Agents never see downstream tokens, so they cannot bypass it.
+- **Every tool call is decided** on agent + user + tool + arguments + context, by a policy engine SecOps own.
+- **Access changes reach live runs** through identity signals (CAEP, Entra Continuous Access Evaluation, SCIM), not just at the next token refresh.
+
+The IdP proves *who*. The gateway decides *whether*, every time, and can take it back.
+
+## How A3T brings control to any agent
+
+A3T is an agent runtime. You bring an existing LangChain or Strands agent from GitHub, run it on A3T, and the runtime handles identity, delegation and policy without a line of auth code in the agent. Every tool call passes through one choke point, and that choke point is the gateway.
+
+### 1. Every agent gets an identity
+
+Registering an agent gives it a stable ID (`agent://acme/invoice-reconciler@3`), a human owner, and a class that policy can refer to. At runtime its sandbox receives a short-lived workload token, never a SaaS credential. If you use Entra Agent ID, the A3T agent maps to the Entra agent object, so Conditional Access and lifecycle workflows apply as Microsoft designed.
+
+### 2. Every run is bound to a person
+
+When the analyst starts the job, A3T records a delegation: which user, which agent, which tools, until when. Each downstream call carries a token exchanged from the user's sign-in (OAuth token exchange, Entra On-Behalf-Of or ID-JAG), with the user as subject and the agent as actor. The agent can never claim to act for someone it wasn't delegated by.
+
+### 3. Every call is decided by policy
+
+A3T evaluates [Cedar](https://www.cedarpolicy.com/) on agent, user, tool, arguments and context before anything leaves the gateway. The schema is generated from the MCP tools; roles come from Entra app roles or your IGA. SecOps review a small set of rules instead of writing them per user:
+
+```rust
+// The reconciler may read ERP data for a finance analyst it acts for.
+// No agent may ever approve a payment, whoever it acts for.
+permit (
+  principal in AgentClass::"finance-reconcilers",
+  action in Action::"erp_read_tools",
+  resource
+)
+when { context.on_behalf_of in Role::"finance-analyst" };
+
+forbid (principal is Agent, action == Action::"erp__approve_payment", resource);
+```
+
+Tools an agent can never use for its user are hidden from its tool list, so it never plans calls that will be denied. Risky calls can pause for human approval instead of failing.
+
+### 4. The gateway holds the keys
+
+User-delegated tokens and the rare unavoidable service account live in A3T's vault, or in Auth0 Token Vault or HashiCorp Vault through a plug-in. Agents never see them, so they cannot go around the gateway.
+
+### 5. Access changes reach running work
+
+A3T resolves the user's roles live on every step and listens for identity signals (CAEP, Entra Continuous Access Evaluation, SCIM, IGA events). When our analyst moves teams, the reconciliation job pauses at its next checkpoint, and the analyst and agent owner are told why. It resumes only after a fresh decision. When someone leaves, their agents' runs are stopped and their stored tokens deleted.
+
+### 6. SecOps get one place to look
+
+Every decision is recorded with both identities, the policy that decided it, and the credential mode used, then exported over OpenTelemetry to the SIEM. The console and API answer the questions SecOps actually ask:
+
+- Which agents exist, who owns them, and what can they reach?
+- What did this agent do for this user last week?
+- If I publish this policy change, who gains or loses access? (Cedar's analyzer answers this before the change goes live.)
+- Stop this agent, for everyone, now.
+
+### It plugs into what you already run
+
+A3T has pluggable interfaces for identity providers (Keycloak, Entra, Okta, Auth0, Google), credential vaults, decision points (embedded Cedar, Amazon Verified Permissions, any AuthZEN PDP) and identity signals. It can be the gateway itself, sit behind AgentCore or Google Agent Gateway as the policy decision point, or sit in front of them. A3T does not replace your IdP. It makes every agent actually use it.
+
+## Identity is the start, not the control
+
+The identity providers have done their part: agents now have real identities, and delegation has standard protocols. What's missing is the layer that uses them on every action, holds the keys, and pulls access back from work that is already running.
+
+Without that layer, an agent ID is a name badge on someone who also has a master key. With it, SecOps can say exactly what each agent may do, for whom, and for how long, and prove it afterwards.
+
+That is what I am building into A3T. If you are wrestling with service accounts for agents, or trying to explain to your CISO what your LangChain agents can reach, I would like to hear how you are handling it.
+
+<BookDemo inline title="Wrestling with service accounts for agents?" text="Bring one agent and the apps it touches; we'll show it running on A3T with delegation, Cedar policy and live revocation." />
+
+## Sources
+
+- [Conditional Access for Microsoft Entra Agent ID](https://learn.microsoft.com/en-us/entra/identity/conditional-access/agent-id) and [What's new in Agent ID](https://learn.microsoft.com/en-us/entra/agent-id/whats-new-agent-id)
+- [Descope: Cross App Access (XAA) support](https://www.descope.com/press-release/cross-app-access-xaa-support), [Auth0: Cross App Access for resource applications](https://auth0.com/docs/xaa-resource-app), and [WorkOS: Cross App Access converged in eight days](https://workos.com/blog/cross-app-access-converged-in-eight-days)
+- [Auth0 Token Vault](https://auth0.com/ai/docs/intro/token-vault)
+- [Policy in Amazon Bedrock AgentCore is now generally available](https://aws.amazon.com/about-aws/whats-new/2026/03/policy-amazon-bedrock-agentcore-generally-available) (3 March 2026)
+- [Ping Identity: runtime identity for Google Cloud Agent Gateway](https://www.pingidentity.com/en/resources/blog/post/runtime-identity-for-traffic.html)
+- [Cedar policy language](https://www.cedarpolicy.com/)

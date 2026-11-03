@@ -1,0 +1,28 @@
+---
+# SAMPLE POST: replace or delete before the first deploy.
+title: Agent memory you can query
+description: Agents forget between runs unless memory is designed in. A short tour of how A3T stores what agents learn and lets you query it with AQL.
+date: 2026-10-24
+tags: [memory, aql]
+---
+
+Agents that run for weeks need to remember what they saw, what they did and what worked.
+A3T keeps that memory in a store you can query, govern and forget from.
+
+## Three kinds of memory
+
+1. **Episodic**: what happened in each run.
+2. **Semantic**: facts and entities, linked into a knowledge graph.
+3. **Procedural**: the steps that worked, so the agent can reuse them.
+
+<TryIt href="https://docs.a3t.io/concepts/memory/">Memory concepts in the A3T docs</TryIt>
+
+## Querying it
+
+AQL (Agent Query Language) reads like SQL with graph steps. The docs cover the full syntax.
+
+<BookDemo inline title="Want to see memory on your data?" text="We'll walk through an agent learning from its own runs." />
+
+## Governance
+
+Memory is scoped per tenant and per agent, and policy applies to reads as well as writes.

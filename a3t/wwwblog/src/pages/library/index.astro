@@ -1,0 +1,41 @@
+---
+import { url } from '../../lib/url';
+import Base from '../../layouts/Base.astro';
+import LibraryItem from '../../components/LibraryItem.astro';
+import LinkList from '../../components/LinkList.astro';
+import { getLibrary } from '../../lib/posts';
+
+const library = await getLibrary();
+const kinds = [...new Set(library.map((i) => i.data.kind))];
+---
+<Base title="Library · A3T Blog" description="Papers, posts and talks on AI agents, policy, memory and knowledge graphs, with the A3T team’s commentary.">
+	<div class="container">
+		<header class="blog-head">
+			<a class="back" href={url()}>← Blog</a>
+			<span class="kicker">Library</span>
+			<h1>What we’re <em>reading</em>.</h1>
+			<p>Papers, posts, talks and podcasts behind how A3T is built, each with a short note on why it matters.</p>
+			{kinds.length > 1 && (
+				<div class="lib-filter" role="group" aria-label="Filter by type">
+					<button type="button" class="chip on" data-kind="all">All</button>
+					{kinds.map((k) => <button type="button" class="chip" data-kind={k}>{k}s</button>)}
+				</div>
+			)}
+		</header>
+		<div class="lib-grid" id="libGrid">
+			{library.map((i) => <div data-kind={i.data.kind}><LibraryItem item={i} /></div>)}
+		</div>
+		<LinkList />
+	</div>
+</Base>
+
+<script>
+	const chips = document.querySelectorAll<HTMLButtonElement>('.lib-filter .chip');
+	chips.forEach((chip) => chip.addEventListener('click', () => {
+		chips.forEach((c) => c.classList.toggle('on', c === chip));
+		const k = chip.dataset.kind;
+		document.querySelectorAll<HTMLElement>('#libGrid > [data-kind]').forEach((el) => {
+			el.hidden = k !== 'all' && el.dataset.kind !== k;
+		});
+	}));
+</script>

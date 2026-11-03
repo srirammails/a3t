@@ -1,0 +1,186 @@
+---
+// YAML lessons with a live YAML → JSON view, for MDX posts: <YamlPlayground />
+// Edit the YAML and the JSON updates as you type, or shows the parse error. Without JavaScript
+// every lesson is shown with its JSON, computed at build time.
+import yaml from 'js-yaml';
+
+type Lesson = { id: string; label: string; what: string; src: string };
+
+const lessons: Lesson[] = [
+	{
+		id: 'maps', label: 'Maps', what: 'key: value pairs. The space after the colon is required. Order does not matter.',
+		src: `name: process-order
+version: 3
+active: true
+owner: null`,
+	},
+	{
+		id: 'lists', label: 'Lists', what: 'Each item starts with "- ". Items are in order, and can be any type.',
+		src: `secrets:
+  - paymentKey
+  - shopToken
+retries:
+  - 1
+  - 5
+  - 30`,
+	},
+	{
+		id: 'nesting', label: 'Nesting', what: 'Indentation, in spaces, puts a key inside another. Two spaces per level is the convention. Tabs are not allowed.',
+		src: `document:
+  namespace: shop
+  name: process-order
+timeout:
+  after:
+    minutes: 30`,
+	},
+	{
+		id: 'list-of-maps', label: 'List of maps', what: 'The pattern every workflow uses: a list whose items are maps. The keys after "- " belong to the same item, so they line up.',
+		src: `do:
+  - price:
+      set:
+        total: 42
+  - charge:
+      call: http
+      with:
+        method: post`,
+	},
+	{
+		id: 'inline', label: 'Inline', what: 'Flow style: { } for a map and [ ] for a list, on one line. Same data, shorter. Handy for small values.',
+		src: `delay: { seconds: 2 }
+tags: [orders, payments]
+limit:
+  attempt: { count: 3 }`,
+	},
+	{
+		id: 'strings', label: 'Strings', what: 'Most strings need no quotes. Quote them when YAML would otherwise read a number, a boolean, or a colon followed by a space.',
+		src: `plain: Process an order
+version: '1.10'
+unquoted: 1.10
+title: "Order: paid"
+expr: '\${ { id: .orderId } }'`,
+	},
+	{
+		id: 'multiline', label: 'Multi-line', what: '| keeps the line breaks (good for scripts). > folds the lines into one (good for long text).',
+		src: `code: |
+  print("one")
+  print("two")
+summary: >
+  Validates the order,
+  charges the card
+  and ships it.`,
+	},
+	{
+		id: 'broken', label: 'Fix me', what: 'This one does not parse. Read the error, then fix it: one quote is enough.',
+		src: `document:
+  name: process-order
+  title: Order: paid`,
+	},
+];
+
+const toJson = (src: string) => {
+	try { return { ok: true, text: JSON.stringify(yaml.load(src), null, 2) }; }
+	catch (e) { return { ok: false, text: (e as Error).message }; }
+};
+---
+<div class="yp" data-yp>
+	<div class="yp-tabs" role="tablist" aria-label="YAML lessons">
+		{lessons.map((l, i) => (
+			<button type="button" role="tab" class="yp-tab" data-id={l.id} aria-selected={i === 0 ? 'true' : 'false'}>{i + 1}. {l.label}</button>
+		))}
+	</div>
+	{lessons.map((l, i) => {
+		const out = toJson(l.src);
+		return (
+			<section class:list={['yp-lesson', { active: i === 0 }]} data-id={l.id}>
+				<p class="yp-what"><strong>{l.label}.</strong> {l.what}</p>
+				<div class="yp-grid">
+					<div class="yp-pane">
+						<span class="yp-head">YAML <button type="button" class="yp-reset">reset</button></span>
+						<textarea spellcheck="false" aria-label={`YAML: ${l.label}`} rows={Math.max(7, l.src.split('\n').length + 1)} data-src={l.src}>{l.src}</textarea>
+					</div>
+					<div class="yp-pane">
+						<span class="yp-head">What a program reads (JSON)</span>
+						<pre class:list={['yp-out', { err: !out.ok }]} aria-live="polite">{out.text}</pre>
+					</div>
+				</div>
+			</section>
+		);
+	})}
+</div>
+
+<script>
+	import yaml from 'js-yaml';
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-yp]')) {
+		root.classList.add('ready');
+		const tabs = [...root.querySelectorAll<HTMLButtonElement>('.yp-tab')];
+		const lessons = [...root.querySelectorAll<HTMLElement>('.yp-lesson')];
+		const select = (id: string) => {
+			tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.id === id)));
+			lessons.forEach((l) => l.classList.toggle('active', l.dataset.id === id));
+		};
+		tabs.forEach((t) => t.addEventListener('click', () => select(t.dataset.id!)));
+
+		for (const lesson of lessons) {
+			const area = lesson.querySelector('textarea')!;
+			const out = lesson.querySelector<HTMLElement>('.yp-out')!;
+			const update = () => {
+				try {
+					out.textContent = JSON.stringify(yaml.load(area.value), null, 2) ?? 'null';
+					out.classList.remove('err');
+				} catch (e) {
+					out.textContent = (e as Error).message;
+					out.classList.add('err');
+				}
+			};
+			area.addEventListener('input', update);
+			// Tab inserts two spaces: YAML does not allow tab indentation.
+			area.addEventListener('keydown', (e) => {
+				if (e.key !== 'Tab' || e.shiftKey) return;
+				e.preventDefault();
+				area.setRangeText('  ', area.selectionStart, area.selectionEnd, 'end');
+				update();
+			});
+			lesson.querySelector('.yp-reset')!.addEventListener('click', (e) => {
+				e.preventDefault();
+				area.value = area.dataset.src!;
+				update();
+			});
+		}
+	}
+</script>
+
+<style>
+	.yp {
+		margin: 2em 0; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--bg-surface);
+		box-shadow: var(--shadow); padding: 16px 18px 18px; font-size: 15px; line-height: 1.55;
+	}
+	.yp-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 14px; border-bottom: 1px solid var(--divider); }
+	.yp-tab {
+		font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
+		border: 1px solid var(--border-strong); background: var(--bg-page); color: var(--text-2); cursor: pointer;
+	}
+	.yp-tab:hover { border-color: var(--text-4); }
+	.yp-tab[aria-selected='true'] { background: var(--text-1); border-color: var(--text-1); color: var(--bg-page); }
+	.yp:not(.ready) .yp-tabs { display: none; }
+	.yp.ready .yp-lesson:not(.active) { display: none; }
+	.yp-lesson + .yp-lesson { margin-top: 18px; }
+	.yp.ready .yp-lesson { margin-top: 0; }
+	.yp-what { margin: 14px 0 12px; color: var(--text-2); }
+	.yp-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+	.yp-pane { display: flex; flex-direction: column; min-width: 0; }
+	.yp-head { display: flex; justify-content: space-between; align-items: center; font-family: var(--font-mono); font-size: 11px; color: var(--text-4); padding: 0 2px 6px; text-transform: uppercase; letter-spacing: .08em; }
+	.yp-reset { font: inherit; text-transform: none; letter-spacing: 0; border: 0; background: none; color: var(--signal-ink); cursor: pointer; padding: 0; }
+	.yp textarea, .yp-out {
+		flex: 1; margin: 0; font-family: var(--font-mono); font-size: 13px; line-height: 1.6; border-radius: var(--r);
+		border: 1px solid var(--border); background: var(--bg-ivory); padding: 10px 12px; color: var(--text-1);
+	}
+	.yp textarea { resize: vertical; tab-size: 2; white-space: pre; overflow-x: auto; }
+	.yp textarea:focus { outline: 2px solid var(--signal); outline-offset: 0; }
+	.yp-out { background: var(--bg-page); overflow: auto; white-space: pre; }
+	.yp-out.err { color: var(--checkpoint-ink); background: var(--checkpoint-bg); white-space: pre-wrap; }
+	@media (max-width: 720px) {
+		.yp { padding: 14px 12px 16px; }
+		.yp-grid { grid-template-columns: 1fr; }
+	}
+</style>

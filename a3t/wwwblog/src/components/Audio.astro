@@ -1,0 +1,6 @@
+---
+import Media from './Media.astro';
+interface Props { src: string; title?: string; }
+const { src, title = 'Listen' } = Astro.props;
+---
+<Media type="audio" src={src} title={title} />

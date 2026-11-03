@@ -1,0 +1,25 @@
+# One-line links shown in the Links section. `id` must be unique; order here is display order.
+- id: quickstart
+  title: Quick start
+  url: https://docs.a3t.io/getting-started/quickstart/
+  note: Run A3T and your first governed agent.
+- id: architecture
+  title: Architecture
+  url: https://docs.a3t.io/getting-started/architecture/
+  note: Runtime, policy and memory, and how they fit together.
+- id: agents
+  title: Agents
+  url: https://docs.a3t.io/concepts/agents/
+  note: How agents are defined, run and governed.
+- id: memory
+  title: Memory
+  url: https://docs.a3t.io/concepts/memory/
+  note: AQL agent memory and knowledge graphs.
+- id: workflows
+  title: Workflows
+  url: https://docs.a3t.io/concepts/workflows/
+  note: CNCF Serverless Workflow, the format A3T agents run on.
+- id: github
+  title: FlowR on GitHub
+  url: https://github.com/openagen/flowr
+  note: The open-source runtime behind A3T.

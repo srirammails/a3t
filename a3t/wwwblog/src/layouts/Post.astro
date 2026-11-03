@@ -1,0 +1,46 @@
+---
+import { url } from '../lib/url';
+import type { CollectionEntry } from 'astro:content';
+import Base from './Base.astro';
+import Cover from '../components/Cover.astro';
+import Pills from '../components/Pills.astro';
+import PostMeta from '../components/PostMeta.astro';
+import PostCard from '../components/PostCard.astro';
+import BookDemo from '../components/BookDemo.astro';
+import Media from '../components/Media.astro';
+
+
+interface Props {
+	post: CollectionEntry<'blog'>;
+	related: CollectionEntry<'blog'>[];
+}
+const { post, related } = Astro.props;
+const d = post.data;
+---
+<Base title={`${d.title} · A3T Blog`} description={d.description} image={d.image} imageAlt={d.imageAlt}
+	type="article" published={d.date} author={d.author}>
+	<article class="container">
+		<header class="post-head">
+			<a class="back" href={url()}>← All posts</a>
+			<Pills post={post} />
+			<h1>{d.title}</h1>
+			<p class="lede">{d.description}</p>
+			<PostMeta post={post} />
+		</header>
+		<div class="post-cover">
+			{d.media
+				? <Media {...d.media} title={d.title} poster={d.media.poster ?? d.image} />
+				: <Cover title={d.title} tag={d.tags[0]} image={d.image} imageAlt={d.imageAlt} eager />}
+		</div>
+		<div class="prose">
+			<slot />
+		</div>
+		<BookDemo />
+	</article>
+	{related.length > 0 && (
+		<section class="container related" aria-labelledby="more-h">
+			<div class="grid-head"><h2 id="more-h">More from the blog</h2><a class="see-all" href={url()}>All posts →</a></div>
+			<div class="post-grid">{related.map((p) => <PostCard post={p} />)}</div>
+		</section>
+	)}
+</Base>

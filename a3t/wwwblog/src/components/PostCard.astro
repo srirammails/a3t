@@ -1,0 +1,22 @@
+---
+import { url } from '../lib/url';
+import type { CollectionEntry } from 'astro:content';
+import Cover from './Cover.astro';
+import Pills from './Pills.astro';
+import PostMeta from './PostMeta.astro';
+import { areasFor, formatFor } from '../lib/areas';
+
+// `toggle`: the pills filter the page they're on (home) instead of linking to it.
+interface Props { post: CollectionEntry<'blog'>; toggle?: boolean; class?: string; }
+const { post, toggle, class: extra } = Astro.props;
+const d = post.data;
+---
+<article class:list={['card', extra]} data-areas={areasFor(post).map((a) => a.id).join(' ')} data-format={formatFor(post).id}>
+	<Cover title={d.title} tag={d.tags[0]} image={d.image} imageAlt={d.imageAlt} media={d.media?.type} />
+	<div class="card-body">
+		<Pills post={post} toggle={toggle} />
+		<h3><a class="stretch" href={url(`${post.id}/`)}>{d.title}</a></h3>
+		<p>{d.description}</p>
+		<PostMeta post={post} />
+	</div>
+</article>

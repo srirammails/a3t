@@ -1,0 +1,26 @@
+---
+// Demo-first call to action. Used at the end of every post; drop <BookDemo inline /> into MDX for one mid-post.
+import { DEMO_URL, QUICKSTART_URL } from '../consts';
+
+interface Props {
+	title?: string;
+	text?: string;
+	inline?: boolean;
+}
+const {
+	title = 'See it running on your use case',
+	text = 'A 30-minute walkthrough: build an agent, put policy on every action, and watch it remember. Or start in the docs.',
+	inline = false,
+} = Astro.props;
+---
+<aside class:list={['cta-band', { inline }]}>
+	<h2>{title}</h2>
+	<p>{text}</p>
+	<div class="cta-actions">
+		<a class="btn primary lg" href={DEMO_URL} target="_blank" rel="noopener">
+			Book a demo
+			<svg class="arr" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+		</a>
+		<a class="btn lg" href={QUICKSTART_URL}>Get started in the docs</a>
+	</div>
+</aside>

@@ -1,0 +1,6 @@
+---
+import Media from './Media.astro';
+interface Props { src: string; title?: string; poster?: string; }
+const { src, title = 'Video', poster } = Astro.props;
+---
+<Media type="video" src={src} title={title} poster={poster} />

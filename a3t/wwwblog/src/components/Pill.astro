@@ -1,0 +1,12 @@
+---
+// One filter pill, styled like the a3t.io FAQ pills: formats filled, areas outlined.
+// On the home page it is a toggle button; anywhere else it links to the home page filtered.
+import { url } from '../lib/url';
+
+interface Props { k: 'area' | 'format'; v: string; label: string; toggle?: boolean; }
+const { k, v, label, toggle } = Astro.props;
+const cls = `pill pill-${k} pill-${v}`;
+---
+{toggle
+	? <button type="button" class={cls} data-k={k} data-v={v} aria-pressed="false" title={`Show only ${label}`}>{label}</button>
+	: <a class={cls} href={`${url()}?${k}=${v}`} title={`All ${label} posts`}>{label}</a>}

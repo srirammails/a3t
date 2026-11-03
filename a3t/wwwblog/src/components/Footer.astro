@@ -1,0 +1,20 @@
+---
+// Same footer as a3t.io (www/index.html); keep the two in step. The legal popups and cookie
+// settings live on a3t.io, so those entries link there (#privacy, #terms, #cookies).
+import { url } from '../lib/url';
+import { MAIN_URL, DOCS_URL, CONSOLE_URL } from '../consts';
+---
+<footer class="site-footer">
+	<div class="container">
+		<div class="footer-top">
+			<div class="footer-brand">
+				<a href={`${MAIN_URL}/`} class="brand" aria-label="A3T home"><span class="logo">A3T</span><span class="tld">.io</span></a>
+				<p>Governed agentic workflows for the enterprise. Built on open standards: CNCF Serverless Workflow, AQL and Cedar.</p>
+			</div>
+			<div class="footer-column"><h3>Platform</h3><a href={`${MAIN_URL}/#tour`}>Product tour</a><a href={`${MAIN_URL}/#personas`}>Who it’s for</a><a href={`${MAIN_URL}/#how-it-works`}>How it works</a><a href={`${MAIN_URL}/faq.html`}>FAQ</a></div>
+			<div class="footer-column"><h3>Resources</h3><a href={url()}>Blog</a><a href={DOCS_URL}>Documentation</a><a href={CONSOLE_URL}>Console</a></div>
+			<div class="footer-column"><h3>Legal</h3><a href={`${MAIN_URL}/#privacy`}>Privacy policy</a><a href={`${MAIN_URL}/#terms`}>Terms of service</a><a href={`${MAIN_URL}/#cookies`}>Cookie settings</a></div>
+		</div>
+		<div class="footer-bottom"><span>© 2026 A3T. All rights reserved.</span><span>AUTHENTICATE → AUTHORIZE → EXECUTE → REMEMBER</span></div>
+	</div>
+</footer>

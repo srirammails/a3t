@@ -1,0 +1,260 @@
+---
+title: Introduction
+description: What A3T is, and how to build flows with the two grammars it runs on, CNCF Serverless Workflow and AQL.
+---
+
+A3T is an **agent infrastructure platform** built on two open specifications:
+
+- **<a href="https://github.com/serverlessworkflow/specification" target="_blank" rel="noopener">CNCF Serverless Workflow</a>** (SWF) describes *what runs*: the steps, their order, branches, retries and calls.
+- **<a href="https://github.com/srirammails/AQL" target="_blank" rel="noopener">AQL, the Agent Query Language</a>** describes *what an agent remembers*: how it stores, recalls and links what it learns. You can try queries in the <a href="https://srirammails.github.io/AQL/playground/" target="_blank" rel="noopener">AQL playground</a>.
+
+A3T's runtime, written in Rust, executes the workflows. **ADB**, the agent database, executes AQL. You describe a flow in YAML, and agents are steps in that flow, so the same definition covers plain automation, memory and LLM reasoning.
+
+This page builds up in four steps: a plain workflow, plain AQL, AQL inside a workflow, and finally an agent that uses AQL memory.
+
+## The two grammars
+
+### CNCF Serverless Workflow
+
+A workflow is a YAML document with a header and a list of tasks.
+
+| Part | What it does |
+|------|--------------|
+| `document` | Identity: `dsl` version, `namespace`, `name`, `version` |
+| `do` | The task list, run top to bottom. Each item is `- taskName: {…}` |
+| `set` | Builds data from expressions |
+| `call` | Calls something: `http`, an LLM, MCP, `adb` (AQL) or `a3t:agent` |
+| `with` | The arguments of a `call` |
+| `switch` | Branches: each case has a `when` condition and a `then` target |
+| `for` / `fork` | Loops over a list / runs branches in parallel |
+| `try` / `raise` | Catches and retries errors / raises one |
+| `wait`, `emit`, `listen` | Timers and events |
+| `then` | Where to go next: a task name, `continue` or `end` |
+| `export` | Saves results into `$context`, which later tasks can read |
+| `${ … }` | A runtime expression in <a href="https://jqlang.github.io/jq/" target="_blank" rel="noopener">jq</a> syntax, e.g. `${ .ticket.priority }` |
+
+Each task's output is the next task's input (`.`). Values you need later go into `$context` with `export`.
+
+### AQL
+
+An AQL statement is a **verb**, a **memory type** and **clauses**. Reads say `FROM`, writes say `INTO`.
+
+| Part | Options |
+|------|---------|
+| Read verbs | `RECALL` (query), `LOOKUP` (by key), `SCAN` (recent window), `LOAD` (tools) |
+| Write verbs | `STORE`, `UPDATE`, `FORGET` |
+| Graph verbs | `LINK … TO … TYPE "…"` to connect records, `FOLLOW LINKS` to walk them |
+| Memory types | `WORKING` (current context), `EPISODIC` (what happened), `SEMANTIC` (facts), `PROCEDURAL` (how-to, with confidence), `TOOLS` |
+| Clauses | `WHERE`, `KEY`, `WINDOW LAST n`, `ORDER BY`, `LIMIT`, `RETURN`, `AGGREGATE` |
+| Modifiers | `NAMESPACE "…"` (isolation), `SCOPE private\|shared\|cluster`, `TTL 90d` |
+| Variables | `$name` in a `WHERE` clause, bound from the caller's `variables` |
+
+The full grammar is in the <a href="https://github.com/srirammails/AQL" target="_blank" rel="noopener">AQL repository</a>.
+
+## 1. A plain workflow
+
+Triage a support ticket: P1 tickets page the on-call engineer, everything else becomes a ticket.
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: demo
+  name: ticket-triage
+  version: '1.0.0'
+do:
+  - prepare:
+      set:
+        ticket: ${ .ticket }
+        urgent: ${ .ticket.priority == "P1" }
+      export:
+        as: '${ $context + . }'
+
+  - route:
+      switch:
+        - urgent:
+            when: ${ $context.urgent }
+            then: page_oncall
+        - default:
+            then: file_ticket
+
+  - page_oncall:
+      call: http
+      with:
+        method: POST
+        endpoint:
+          uri: https://hooks.example.com/oncall
+        body:
+          summary: ${ $context.ticket.summary }
+      then: end
+
+  - file_ticket:
+      call: http
+      with:
+        method: POST
+        endpoint:
+          uri: https://tickets.example.com/api/tickets
+        body: ${ $context.ticket }
+```
+
+Run it with `{"ticket": {"priority": "P1", "summary": "Checkout is down"}}`.
+
+## 2. Plain AQL
+
+The same statements work in the <a href="https://srirammails.github.io/AQL/playground/" target="_blank" rel="noopener">playground</a>, over ADB's API, or inside a workflow.
+
+Remember what happened, a fact, and a procedure:
+
+```sql
+STORE INTO EPISODIC (
+  host = "lt-4471", alert = "beaconing", outcome = "isolated"
+) TTL 90d
+
+STORE INTO SEMANTIC (
+  key = "beaconing",
+  content = "Regular outbound calls to one IP, a sign of malware command and control"
+)
+
+STORE INTO PROCEDURAL (
+  pattern = "isolate-host",
+  steps = "Isolate the host, snapshot the disk, open an incident",
+  confidence = 0.9
+)
+```
+
+Connect them, so knowledge points to the procedure that resolves it:
+
+```sql
+LINK FROM SEMANTIC WHERE key = "beaconing"
+  TO PROCEDURAL WHERE pattern = "isolate-host"
+  TYPE "resolved_by"
+```
+
+Read it back:
+
+```sql
+-- What has happened on this host?
+RECALL FROM EPISODIC WHERE host = "lt-4471" LIMIT 5 RETURN alert, outcome
+
+-- What do we know about beaconing, and how was it resolved?
+RECALL FROM SEMANTIC WHERE key = "beaconing"
+  FOLLOW LINKS TYPE "resolved_by" INTO PROCEDURAL
+  RETURN pattern, confidence
+```
+
+## 3. AQL inside a workflow
+
+A workflow runs AQL with a `call: adb` task. `with.query` holds the statement, `with.variables` binds `$names` in `WHERE` clauses, and `with._resource` names the ADB resource to use (see <a href="/concepts/resources/" target="_blank" rel="noopener">Resources</a>).
+
+This flow checks an alert against the host's history, then records the alert:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: secops
+  name: alert-memory
+  version: '1.0.0'
+do:
+  - init:
+      set:
+        alert: ${ .alert }
+      export:
+        as: '${ $context + . }'
+
+  - recall_history:
+      call: adb
+      with:
+        query: RECALL FROM EPISODIC WHERE host = $host LIMIT 5 RETURN alert, outcome
+        variables:
+          host: ${ $context.alert.host }
+        _resource: a3t/adb
+      export:
+        as: '${ $context + {history: .} }'
+
+  - remember:
+      call: adb
+      with:
+        # Values in STORE are built with an expression; @json quotes them safely.
+        query: '${ "STORE INTO EPISODIC (host = " + ($context.alert.host | @json) + ", alert = " + ($context.alert.type | @json) + ", outcome = \"open\") TTL 90d" }'
+        _resource: a3t/adb
+
+  - result:
+      set:
+        alert: ${ $context.alert }
+        history: ${ $context.history }
+```
+
+Run it with `{"alert": {"host": "lt-4471", "type": "beaconing"}}`. The second run on the same host finds the first one in `history`.
+
+## 4. An agent with AQL memory
+
+An agent is a `call: a3t:agent` task: an LLM reasoning loop with tools, governed by the same runtime. Give it a `memory_resource` and it uses AQL memory on every turn:
+
+- **Before reasoning** it recalls from each memory type you enable for reading, and adds what it finds to its prompt.
+- **After answering** it stores the turn in `WORKING` and `EPISODIC` memory.
+- If a `PROCEDURAL` memory matches the message well enough, it can answer from that procedure.
+
+`memory_namespace` keeps one agent's memory apart from another's. This flow first teaches the agent a fact with AQL, then asks it a question:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: secops
+  name: triage-agent
+  version: '1.0.0'
+do:
+  - teach:
+      call: adb
+      with:
+        query: >
+          STORE INTO SEMANTIC (key = "beaconing",
+            content = "Regular outbound calls to one IP. Isolate the host and open an incident.")
+          NAMESPACE "secops"
+        _resource: a3t/adb
+
+  - triage:
+      call: a3t:agent
+      with:
+        message: ${ .message }
+        session_id: ${ .session_id // "triage-1" }
+        config:
+          system_prompt: >
+            You are a SecOps triage agent. Use what you remember about past
+            alerts and known threats. Be concise and say what to do next.
+          llm_resource: a3t/default-llm
+          max_iterations: 5
+          memory_resource: a3t/adb
+          memory_namespace: secops
+          memory_config:
+            working:    { read: true, write: true }
+            episodic:   { read: true, write: true }
+            semantic:   { read: true, write: false }
+            procedural: { read: true, write: false }
+```
+
+Ask it `{"message": "lt-4471 is beaconing to 203.0.113.9. What should I do?"}`. The agent recalls the `beaconing` fact from `SEMANTIC` memory and any earlier turns in this session from `EPISODIC`, then answers. Use your own resource names for `a3t/adb` and `a3t/default-llm`.
+
+## Where to go next
+
+- <a href="/getting-started/quickstart/" target="_blank" rel="noopener">Quick start</a>: run A3T and these flows.
+- <a href="/concepts/workflows/" target="_blank" rel="noopener">Workflows</a> and <a href="/concepts/task-types/" target="_blank" rel="noopener">Task types</a>: the full CNCF task set in A3T.
+- <a href="/concepts/memory/" target="_blank" rel="noopener">Memory</a>: memory types, namespaces and scopes in ADB.
+- <a href="/concepts/agents/" target="_blank" rel="noopener">Agents</a>: agent configuration, tools and MCP servers.
+
+## Core components
+
+| Component | Purpose |
+|-----------|---------|
+| **Runtime** | Executes CNCF Serverless Workflows, written in Rust |
+| **ADB** | Agent database: executes AQL for agent memory and knowledge graphs |
+| **`a3t:agent`** | Agent engine: LLM reasoning, tool use and memory, as a workflow task |
+| **A3T Console** | Management UI: templates, agents, canvas, resources |
+
+## Key concepts
+
+- **Workflows**: YAML definitions with tasks; each task has a type
+- **Task types**: built-in types such as `call: http`, `call: llm`, `call: adb`, `call: a3t:agent`, `switch` and `for`
+- **Resources**: connections to external systems: LLMs, databases, ADB, MCP servers
+- **Agents**: LLM-powered entities with memory and tool access, running as workflows
+- **Templates**: versioned, reusable agent blueprints
+- **Canvas**: multi-agent orchestration specs
+- **Triggers**: webhooks, cron schedules and events that start workflows

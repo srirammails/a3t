@@ -1,0 +1,55 @@
+---
+title: How to Read and Write YAML
+description: Maps, lists, indentation, quotes and multi-line text, in eight short lessons you can edit, with the JSON a program reads updating as you type.
+date: 2026-11-01
+author: Sriram
+tags: [workflows, yaml]
+image: /covers/how-to-read-and-write-yaml.png
+imageAlt: A YAML file on a card, with indentation guides and labels for map, list and nested, under the title How to read and write YAML.
+---
+import YamlPlayground from '../../components/YamlPlayground.astro';
+
+Workflows, Kubernetes manifests, CI pipelines and agent configs are all written in YAML. YAML is JSON written for people: the same maps, lists, strings and numbers, with indentation instead of braces.
+
+The quickest way to learn it is to watch what a program reads. Edit the YAML on the left and the JSON on the right updates as you type.
+
+<YamlPlayground />
+
+## Reading a YAML file
+
+Four questions get you through any file:
+
+1. **Who owns this line?** The nearest line above it with *less* indentation. Indentation is the structure.
+2. **Is it a list item?** A line starting with `- ` is one item of a list. Every key indented under it, lined up with the first key after the dash, belongs to the same item.
+3. **Is the value here, or below?** `key: value` holds a value on the same line. `key:` with nothing after it means the value is the indented block below.
+4. **Is it text, or something else?** `true`, `false`, `null` and numbers are read as those types. Quotes force text. `|` and `>` start multi-line text.
+
+## Writing rules
+
+- **Spaces, never tabs.** Two per level, and the same number everywhere in the file.
+- **A space after every colon.** `key:value` is one string, not a key and a value.
+- **Quote what looks like something else:** versions (`'1.10'`, or it becomes `1.1`), cron lines (`'0 * * * *'`), and any value containing `: ` or starting with `{`, `[`, `*`, `&`, `!`, `%` or `@`.
+- **Quote expressions that contain `: `.** In a workflow, `as: '${ { id: .orderId } }'` needs quotes; `in: ${ .items }` does not.
+- **Comments start with `#`**, after a space if they follow a value.
+
+## Gotchas
+
+| You write | A program reads | Fix |
+|:--|:--|:--|
+| `version: 1.10` | the number `1.1` | `version: '1.10'` |
+| `title: Order: paid` | a parse error | `title: 'Order: paid'` |
+| `zip: 01234` | the number `1234` | `zip: '01234'` |
+| `country: NO` | `false`, in YAML 1.1 parsers such as PyYAML | `country: 'NO'` |
+| `on: push` | `true: push`, in YAML 1.1 parsers | `'on': push` |
+| a tab before a key | a parse error | two spaces |
+
+The last two depend on the parser. YAML 1.2, which the playground above uses, reads `NO` and `on` as text; older YAML 1.1 parsers read them as booleans. Quoting works in both.
+
+## Next
+
+Now read a real schema: [CNCF Workflow DSL, Explained](../cncf-workflow-dsl-explained/) shows the whole workflow language as a tree you can open key by key.
+
+## Sources
+
+- [YAML 1.2.2 specification](https://yaml.org/spec/1.2.2/)
+- [js-yaml](https://github.com/nodeca/js-yaml), the parser the playground uses

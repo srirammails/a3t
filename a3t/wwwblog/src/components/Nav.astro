@@ -1,0 +1,53 @@
+---
+// Same menu as a3t.io (www/index.html); keep the two in step.
+import { url } from '../lib/url';
+import { MAIN_URL, DOCS_URL, CONSOLE_URL, DEMO_URL } from '../consts';
+---
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="announce">
+	<div class="container">
+		<span>See your agents built, governed and running in a 30-minute walkthrough.</span>
+		<a class="pill" href={DEMO_URL} target="_blank" rel="noopener">Book a demo →</a>
+	</div>
+</div>
+
+<nav class="nav" id="mainNav" aria-label="Main">
+	<div class="container nav-inner">
+		<a href={`${MAIN_URL}/`} class="brand" aria-label="A3T home">
+			<span class="logo">A3T</span>
+			<span class="tld">.io</span>
+		</a>
+		<div class="nav-links" id="navLinks">
+			<a href={`${MAIN_URL}/#tour`} class="nav-link">Product tour</a>
+			<a href={`${MAIN_URL}/#personas`} class="nav-link">Who it’s for</a>
+			<a href={`${MAIN_URL}/#how-it-works`} class="nav-link">How it works</a>
+			<a href={`${MAIN_URL}/faq.html`} class="nav-link">FAQ</a>
+			<a href={url()} class="nav-link" aria-current="page">Blog</a>
+		</div>
+		<div class="nav-right">
+			<a href={DOCS_URL} class="nav-link">Docs</a>
+			<a href={CONSOLE_URL} class="nav-link console">
+				Console
+				<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+			</a>
+			<button class="menu-toggle" id="menuToggle" aria-label="Open navigation" aria-expanded="false" aria-controls="navLinks">
+				<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
+			</button>
+		</div>
+	</div>
+</nav>
+
+<script>
+	const nav = document.getElementById('mainNav')!;
+	const toggle = document.getElementById('menuToggle')!;
+	const links = document.getElementById('navLinks')!;
+	toggle.addEventListener('click', () => {
+		const open = links.classList.toggle('open');
+		toggle.setAttribute('aria-expanded', String(open));
+		toggle.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+	});
+	const onScroll = () => nav.classList.toggle('scrolled', window.scrollY > 12);
+	window.addEventListener('scroll', onScroll, { passive: true });
+	onScroll();
+</script>

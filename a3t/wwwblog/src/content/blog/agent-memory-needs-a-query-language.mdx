@@ -1,0 +1,249 @@
+---
+title: Agent Memory Needs a Query Language
+description: From how brains remember to AQL, a declarative language for storing, recalling, linking and learning across five kinds of agent memory.
+date: 2026-11-01
+author: Sriram
+tags: [memory, aql, agents]
+image: /covers/agent-memory-query-language.png
+imageAlt: Five memory types (working, episodic, semantic, procedural and tools) drawn as a graph of linked nodes, with an AQL query card, under the title Agent Memory Needs a Query Language.
+---
+
+## Agents don't remember, they re-read
+
+Most agents today have no memory, only a scratchpad and a search box. Each session starts from zero. Whatever the agent learned yesterday (which fix worked, which customer is difficult, which tool times out) is gone unless someone stuffs it back into the prompt.
+
+The usual answer is a vector store. Embed everything, retrieve the nearest chunks, append them to the context. That gives an agent recall, but not memory. A vector store cannot tell a fact from an experience, or an experience from a habit. It does not know that this procedure worked 92% of the time, that this event expires tomorrow, or that this concept is implemented by that workflow.
+
+Brains solved this problem long ago, and they did not solve it with one store. They use several kinds of memory, each with its own job. This post walks from that biology to [AQL](https://github.com/srirammails/AQL), the Agent Query Language I have been building to give agents the same structure.
+
+## How brains remember
+
+Neuroscience does not treat memory as one thing. It splits it into systems that differ in what they hold, how long they hold it, and how fast you can reach it.
+
+| System | What it holds | Where in the brain | Agent equivalent |
+|:--|:--|:--|:--|
+| **Working memory** | The few things you are juggling right now | Prefrontal cortex | Current task state, live variables, the active context |
+| **Episodic memory** | Specific events: what happened, when, with what outcome | Hippocampus | A log of past interactions, incidents, decisions and results |
+| **Semantic memory** | Facts and concepts, detached from when you learned them | Neocortex | Domain knowledge: policies, entities, definitions |
+| **Procedural memory** | How to do things, refined by practice | Basal ganglia, cerebellum | Runbooks and strategies, with a confidence that rises or falls with use |
+
+Three mechanisms matter as much as the systems themselves:
+
+- **Consolidation.** During sleep, the hippocampus replays recent episodes and the neocortex slowly extracts general knowledge from them. Experiences become facts.
+- **Association.** Neurons that fire together wire together. Memories are useful because they are connected, and connections strengthen with repeated use.
+- **Forgetting.** Forgetting is a feature. Without it, the important gets buried under the trivial.
+
+An agent needs the same four systems and the same three mechanisms. It also needs one more thing that brains handle implicitly: knowing which tools it has. So a useful agent memory has five types: **working, episodic, semantic, procedural and tools**.
+
+## Enter AQL
+
+AQL (Agent Query Language) is a declarative language for agent memory. An agent uses it to store, retrieve, link and learn from its experience across those five memory types. It is to agent memory what SQL is to tables.
+
+The core thesis is simple: agent learning is the accumulation of two things. One is a growing web of relationships between memory records. The other is tuned parameters inside procedural memory. Both are written and read through AQL, so an agent improves through use without retraining.
+
+A few design rules shape the whole language:
+
+- **Direction is explicit.** Reads use `FROM`, writes use `INTO`. You never have to guess which way data flows.
+- **Every statement names a memory type (or `ALL`).** The agent must decide whether it is storing a fact, an event or a procedure.
+- **Intent, not implementation.** AQL says what to remember or forget. The engine decides how to store, decay, compress and tier it.
+- **The ontology belongs to the agent.** Link types are free strings the LLM invents. Meaning emerges from use, not from a schema someone designed upfront.
+- **Pipelines are first-class**, with a hard time budget.
+- **Readable without a spec.** If a non-expert cannot read a query and understand it, the feature is cut.
+
+The [repo](https://github.com/srirammails/AQL) has a PEG grammar, a 150-test conformance suite, a reference implementation over LanceDB, and a [browser playground](https://srirammails.github.io/AQL/playground/) that runs it all in WASM.
+
+## The simple verbs
+
+Every AQL statement has the same shape: a verb, a direction, a memory type, a predicate, then optional modifiers.
+
+```sql
+VERB  FROM|INTO  MEMORY_TYPE  predicate  [modifiers...]
+```
+
+Each read verb matches one kind of recall, so the verb itself tells you what sort of memory access is happening.
+
+| Verb | Memory | What it does |
+|:--|:--|:--|
+| `SCAN` | `WORKING` | Look at what I am holding right now |
+| `RECALL` | `EPISODIC`, `SEMANTIC`, `ALL` | Search by condition or similarity |
+| `LOOKUP` | `PROCEDURAL`, `TOOLS`, `SEMANTIC` | Exact key or pattern match |
+| `LOAD` | `TOOLS` | Pick the best tools for the task |
+| `STORE` | any one type | Write a new memory |
+| `UPDATE` | any one type | Change an existing memory |
+| `FORGET` | any type, or `ALL` | Remove matching memories |
+
+**Working memory: what am I holding?** `WINDOW` is the natural way to read working memory, by count, by time, or by importance.
+
+```sql
+SCAN FROM WORKING WINDOW LAST 10
+SCAN FROM WORKING WINDOW LAST 30s
+SCAN FROM WORKING WINDOW TOP 3 BY attention_weight
+```
+
+**Episodic memory: what happened before?** Conditions, ordering and limits work as you would expect. `LIKE` does similarity search against an embedding.
+
+```sql
+RECALL FROM EPISODIC WHERE outcome = "success"
+  ORDER BY confidence DESC LIMIT 5
+  RETURN *
+```
+
+**Semantic memory: what do I know?**
+
+```sql
+LOOKUP FROM SEMANTIC KEY concept = "auth"
+RECALL FROM SEMANTIC LIKE $page_embedding MIN_CONFIDENCE 0.8
+```
+
+**Tools: what can I do?**
+
+```sql
+LOAD FROM TOOLS WHERE task = "bidding" ORDER BY ranking DESC LIMIT 3
+```
+
+**Writing and forgetting.** `TTL` builds forgetting into the write itself. `SCOPE` and `NAMESPACE` decide whether other agents can see the memory.
+
+```sql
+STORE INTO EPISODIC (event = "login", user_id = "u123") TTL 7d
+
+UPDATE INTO PROCEDURAL WHERE pattern = "checkout" (confidence = 0.95)
+
+FORGET FROM WORKING WHERE stale = true
+```
+
+The grammar also blocks the dangerous mistakes. `FORGET FROM ALL` without a `WHERE` clause is a syntax error, so an agent cannot wipe its memory by accident. `STORE INTO ALL` is invalid, because a write must say what kind of memory it is.
+
+**Aggregation: give me a signal, not records.** Often the LLM needs a number, not fifty rows.
+
+```sql
+RECALL FROM EPISODIC WHERE strategy = "tech_news_premium"
+  AGGREGATE COUNT(*) AS uses, AVG(ctr) AS avg_ctr
+  HAVING uses > 10 AND avg_ctr < 0.01
+  RETURN uses, avg_ctr
+```
+
+That query reads almost as English: find strategies used more than ten times with click-through below 1%.
+
+## Pipelines: thinking in one round trip
+
+Real decisions need several memories at once. A pipeline chains read statements into one query with a hard time budget. Each stage can use what earlier stages found, through `{variable}` references. If a stage runs out of budget, it returns what it has rather than blocking.
+
+The budget is the point. An RTB bidder has around 80 ms. A game character has one frame, 16 ms. Memory has to fit inside the decision, not the other way round.
+
+Here is a Kubernetes agent triaging an alert storm:
+
+```sql
+PIPELINE incident_triage TIMEOUT 200ms
+  -- What is happening right now?
+  SCAN FROM WORKING WINDOW LAST 60s
+    RETURN event_id, source, alert, pod
+
+  -- How often has this happened before?
+  | RECALL FROM EPISODIC WHERE pod = "payments-api"
+      AND root_cause = "OOMKilled"
+      AGGREGATE COUNT(*) AS past_incidents,
+                AVG(resolution_time) AS avg_resolution
+
+  -- What do we know about this service?
+  | LOOKUP FROM SEMANTIC KEY concept = "payments-api"
+      RETURN owner, memory_limit, dependencies
+
+  -- Pull it all together for the LLM
+  | REFLECT FROM WORKING, FROM SEMANTIC, FROM EPISODIC
+```
+
+It touches working, episodic and semantic memory, and ends with `REFLECT`, which assembles one context package for the LLM's next step.
+
+`REFLECT` is also where consolidation happens. With a `THEN` clause, the agent reads its experience and writes back what it learned, much as the hippocampus hands episodes to the neocortex:
+
+```sql
+REFLECT FROM EPISODIC WHERE incident_id = {current},
+        FROM PROCEDURAL WHERE pattern_id = {matched}
+  THEN STORE INTO PROCEDURAL (
+    pattern    = "learned_pattern",
+    steps      = "step1, step2",
+    confidence = 0.6
+  )
+```
+
+## Links: where learning lives
+
+A procedure with no links to episodes is a recipe. It has no evidence it works and no record of when it was used. Links turn it into operational knowledge. This is AQL's version of "fire together, wire together".
+
+`LINK` connects a record in one memory type to a record in another, with a type and a weight:
+
+```sql
+LINK FROM PROCEDURAL WHERE pattern_id = "oom-fix"
+  TO EPISODIC WHERE incident_id = "inc-001"
+  TYPE "applied_to"
+  WEIGHT 0.97
+```
+
+That reads as: the OOM runbook was applied to incident 001, and it worked very well.
+
+The type is any string. The engine stores and indexes it but never interprets it; the LLM decides what it means. So the agent builds its own vocabulary from experience. A Kubernetes agent that notices three OOMs on Fridays can invent a relationship nobody designed:
+
+```sql
+LINK FROM EPISODIC WHERE incident_id = "inc-001"
+  TO EPISODIC WHERE incident_id = "inc-005"
+  TYPE "recurring_pattern_friday"
+```
+
+Common patterns cross memory types: a concept triggers a runbook (semantic to procedural), a runbook was applied to an incident (procedural to episodic), one runbook supersedes another (procedural to procedural).
+
+Two modifiers read the graph back:
+
+- **`WITH LINKS`** shows the evidence behind a record: how many links of each type, and their weights.
+- **`FOLLOW LINKS`** walks one hop along a link type and returns the records at the other end, even in another memory type.
+
+```sql
+-- What evidence does this runbook have?
+LOOKUP FROM PROCEDURAL WHERE pattern_id = "oom-fix"
+  WITH LINKS ALL
+
+-- Which runbooks does this concept trigger?
+RECALL FROM SEMANTIC WHERE concept = "kubernetes_oom"
+  FOLLOW LINKS TYPE "triggers"
+  RETURN pattern_id, steps, confidence
+```
+
+The second query starts in semantic memory and ends in procedural memory. That is the agent traversing its own knowledge graph.
+
+## The value: an agent that gets better on its own
+
+Put the pieces together and you get a learning loop that needs no retraining. After an incident, the agent runs four statements:
+
+```sql
+-- 1. Remember what happened
+STORE INTO EPISODIC (incident_id = "inc-2026-03-28", pod = "payments-api",
+  action = "scaled to 768Mi", resolved = true, resolution_time = 420)
+
+-- 2. Connect it to the runbook that fixed it
+LINK FROM PROCEDURAL WHERE pattern_id = "oom-fix"
+  TO EPISODIC WHERE incident_id = "inc-2026-03-28"
+  TYPE "applied_to" WEIGHT 0.97
+
+-- 3. Tune the runbook
+UPDATE INTO PROCEDURAL WHERE pattern_id = "oom-fix"
+  (scale_to = "768Mi", confidence = 0.94, success_count = 8)
+
+-- 4. Clear the scratchpad
+FORGET FROM WORKING WHERE pod = "payments-api"
+```
+
+The graph grew by one link. The runbook got more precise. Next time, the same pipeline returns a better answer.
+
+What that gives an agent builder:
+
+- **Learning without retraining.** Knowledge accumulates as links and tuned parameters, written in milliseconds, not as weight updates that take a training run.
+- **Context that fits.** Windows, aggregates and pipelines hand the LLM a shaped package instead of a stuffed prompt.
+- **Auditability.** Every decision can be traced to what the agent knew, which procedure it followed and what happened. A link can be inspected, reweighted or removed. That matters in compliance and finance, where "the model just knew" is not an answer.
+- **Real-time budgets.** Pipelines carry a hard timeout, so memory works inside an 80 ms bid or a 16 ms frame.
+- **Portability.** AQL is a spec with a grammar and conformance tests, not one database's API. The parser is a separate crate; any engine can implement it.
+- **Shared learning.** `SCOPE shared` and `NAMESPACE` let a team of agents grow a common ontology from the bottom up.
+
+Vector stores gave agents recall. AQL is my attempt to give them memory: typed, connected, time-aware, and able to learn from its own experience.
+
+Try it in the [playground](https://srirammails.github.io/AQL/playground/), or read the [spec on GitHub](https://github.com/srirammails/AQL). For every verb, clause by clause, see [AQL, Explained](../aql-explained/).
+
+<TryIt href="https://srirammails.github.io/AQL/playground/">Run AQL in your browser: the parser and engine in WASM</TryIt>

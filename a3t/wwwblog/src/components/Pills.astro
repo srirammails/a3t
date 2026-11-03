@@ -1,0 +1,14 @@
+---
+// A post's format and area pills.
+import type { CollectionEntry } from 'astro:content';
+import Pill from './Pill.astro';
+import { areasFor, formatFor } from '../lib/areas';
+
+interface Props { post: CollectionEntry<'blog'>; toggle?: boolean; }
+const { post, toggle } = Astro.props;
+const format = formatFor(post);
+---
+<div class="pills">
+	<Pill k="format" v={format.id} label={format.label} toggle={toggle} />
+	{areasFor(post).map((a) => <Pill k="area" v={a.id} label={a.label} toggle={toggle} />)}
+</div>

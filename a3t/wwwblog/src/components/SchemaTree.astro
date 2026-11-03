@@ -1,0 +1,207 @@
+---
+// A language reference as an expanding tree, FAQ style, for MDX posts:
+//   <SchemaTree of="swf" />  the CNCF Serverless Workflow DSL
+//   <SchemaTree of="aql" />  AQL, the Agent Query Language
+// Each key is a <details>: + opens a note with what it is for and an example, plus the next layer.
+// Works without JavaScript; the script only adds expand/collapse all, search and #<prefix>-<path> deep links.
+import yaml from 'js-yaml';
+import { renderTree, paintYaml, paintAql, type SchemaNode, type TreeConfig } from '../lib/schema-tree';
+import { schema as swf } from '../lib/swf-schema';
+import { aqlSchema } from '../lib/aql-schema';
+
+interface Props { of: 'swf' | 'aql' }
+const { of } = Astro.props;
+
+type Tree = { nodes: SchemaNode[]; cfg: TreeConfig; file: string; search: string; legend: [string, string, string][] };
+const trees: Record<Props['of'], Tree> = {
+	swf: {
+		nodes: swf, file: 'workflow.yaml', search: 'Find a key, e.g. retry',
+		cfg: {
+			prefix: 'swf', root: 'workflow', paint: paintYaml,
+			slug: (k) => k.replace(/^call: /, '').replace(/[^\w.]+/g, '').replace(/\./g, '-') || 'task',
+			tone: (t) => ({ object: 'ephemeral', map: 'signal', array: 'checkpoint' } as const)[t.split(/[\s|·]/)[0]] ?? 'plain',
+		},
+		legend: [['object', 'ephemeral', 'fixed keys'], ['map', 'signal', 'keys you name'], ['array', 'checkpoint', 'list of - items'], ['string …', 'plain', 'a single value']],
+	},
+	aql: {
+		nodes: aqlSchema, file: 'AQL verbs', search: 'Find a keyword, e.g. LINKS',
+		cfg: {
+			prefix: 'aql', root: 'AQL', paint: paintAql,
+			slug: (k) => k.toLowerCase().replace(/[^a-z0-9_]+/g, '-').replace(/^-|-$/g, '') || 'x',
+			tone: (t) => ({ read: 'signal', write: 'ok', graph: 'checkpoint', compose: 'ephemeral' } as const)[t.split(' ')[0]] ?? 'plain',
+		},
+		legend: [['read', 'signal', 'reads memory'], ['write', 'ok', 'changes memory'], ['graph', 'checkpoint', 'links records'], ['compose', 'ephemeral', 'combines reads'], ['stream', 'plain', 'follows changes']],
+	},
+};
+const tree = trees[of];
+
+// Fail the build if a workflow example is not valid YAML, so the post never teaches broken syntax.
+// (AQL examples are checked against the AQL parser before publishing; see aql-schema.ts.)
+if (of === 'swf') {
+	const check = (nodes: SchemaNode[], at: string) => nodes.forEach((n) => {
+		if (n.ex) try { yaml.load(n.ex); } catch (e) { throw new Error(`SchemaTree: example for ${at}${n.k} is not valid YAML: ${(e as Error).message}`); }
+		if (n.c) check(n.c, `${at}${n.k} > `);
+	});
+	check(tree.nodes, '');
+}
+const html = renderTree(tree.nodes, tree.cfg);
+---
+<div class="st" data-st data-prefix={tree.cfg.prefix}>
+	<div class="st-bar">
+		<div class="st-legend" aria-label="Legend">
+			{tree.legend.map(([label, tone, what]) => <><span class={`st-type st-${tone}`}>{label}</span><span>{what}</span></>)}
+		</div>
+		<div class="st-tools">
+			<input type="search" placeholder={tree.search} aria-label="Find a key" />
+			<button type="button" data-all="open">Expand all</button>
+			<button type="button" data-all="close">Collapse</button>
+		</div>
+	</div>
+	<div class="st-root"><code class="st-key">{tree.file}</code></div>
+	<div class="st-tree" set:html={html} />
+	<p class="st-empty" hidden>No key matches.</p>
+</div>
+
+<script>
+	for (const root of document.querySelectorAll<HTMLElement>('[data-st]')) {
+		const prefix = `#${root.dataset.prefix}-`;
+		const all = [...root.querySelectorAll<HTMLDetailsElement>('details')];
+		const items = [...root.querySelectorAll<HTMLLIElement>('li')];
+		const empty = root.querySelector<HTMLElement>('.st-empty')!;
+		const search = root.querySelector<HTMLInputElement>('input')!;
+
+		root.querySelectorAll<HTMLButtonElement>('[data-all]').forEach((b) => b.addEventListener('click', () => {
+			const open = b.dataset.all === 'open';
+			all.forEach((d) => (d.open = open));
+		}));
+
+		// Opening a key sets #<prefix>-<path>, so a link can point straight at it.
+		all.forEach((d) => d.addEventListener('toggle', () => {
+			if (d.open && !search.value) history.replaceState(null, '', `#${d.id}`);
+		}));
+
+		// Search: keep matching keys and their parents, open the parents so matches are visible.
+		search.addEventListener('input', () => {
+			const q = search.value.trim().toLowerCase();
+			items.forEach((li) => li.hidden = false);
+			if (!q) { empty.hidden = true; return; }
+			const keep = new Set<HTMLLIElement>();
+			for (const li of items) {
+				if (!li.dataset.key!.includes(q)) continue;
+				for (let el: HTMLElement | null = li; el && el !== root; el = el.parentElement) {
+					if (el instanceof HTMLLIElement) keep.add(el);
+				}
+			}
+			items.forEach((li) => {
+				li.hidden = !keep.has(li);
+				const d = li.firstElementChild as HTMLDetailsElement;
+				// Open parents of a match; a match itself stays closed until clicked.
+				d.open = keep.has(li) && [...li.querySelectorAll<HTMLLIElement>(':scope li')].some((c) => keep.has(c));
+			});
+			empty.hidden = keep.size > 0;
+		});
+
+		// Deep link: #swf-do.call.http or #aql-recall.read-the-graph opens that key and every parent.
+		const target = location.hash.startsWith(prefix) && root.querySelector<HTMLDetailsElement>(`[id="${CSS.escape(location.hash.slice(1))}"]`);
+		if (target) {
+			for (let el: HTMLElement | null = target; el && el !== root; el = el.parentElement) {
+				if (el instanceof HTMLDetailsElement) el.open = true;
+			}
+			target.scrollIntoView({ block: 'start' });
+		}
+	}
+</script>
+
+<style>
+	.st {
+		position: relative; left: 50%; transform: translateX(-50%);
+		width: min(960px, calc(100vw - 32px)); margin: 2.4em 0;
+		border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--bg-surface);
+		box-shadow: var(--shadow); padding: 18px 20px 22px; font-size: 15px; line-height: 1.55;
+	}
+	.st-bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 20px; padding-bottom: 14px; border-bottom: 1px solid var(--divider); }
+	.st-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 12.5px; color: var(--text-3); }
+	.st-legend > span:nth-child(even) { margin-right: 8px; }
+	.st-tools { display: flex; gap: 6px; align-items: center; }
+	.st-tools input {
+		font: inherit; font-size: 13px; padding: 5px 10px; width: 200px; border-radius: 999px;
+		border: 1px solid var(--border-strong); background: var(--bg-page); color: var(--text-1);
+	}
+	.st-tools button {
+		font-family: var(--font-mono); font-size: 12px; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+		border: 1px solid var(--border-strong); background: var(--bg-page); color: var(--text-2);
+	}
+	.st-tools button:hover { border-color: var(--text-4); }
+
+	.st-root { margin: 16px 0 4px; }
+	.st-tree :global(ul) { list-style: none; margin: 0; padding: 0 0 0 22px; border-left: 1px dashed var(--border-strong); margin-left: 9px; }
+	.st-tree > :global(ul) { margin-left: 4px; }
+	.st-tree :global(li) { margin: 0; padding: 0; }
+	.st-tree :global(li[hidden]) { display: none; }
+
+	.st :global(summary) {
+		list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+		padding: 6px 8px; margin-left: -8px; border-radius: var(--r-sm); cursor: pointer;
+	}
+	.st :global(summary::-webkit-details-marker) { display: none; }
+	.st :global(summary:hover) { background: var(--bg-subtle); }
+	.st :global(summary:focus-visible) { outline: 2px solid var(--signal); outline-offset: 1px; }
+
+	.st :global(.st-plus) {
+		flex: none; width: 20px; height: 20px; border-radius: 50%; position: relative;
+		border: 1.5px solid var(--border-strong); background: var(--bg-page); transition: background .12s, border-color .12s;
+	}
+	.st :global(.st-plus::before), .st :global(.st-plus::after) {
+		content: ''; position: absolute; left: 50%; top: 50%; width: 9px; height: 1.5px; background: var(--text-2);
+		transform: translate(-50%, -50%); transition: transform .15s;
+	}
+	.st :global(.st-plus::after) { transform: translate(-50%, -50%) rotate(90deg); }
+	.st :global(details[open] > summary .st-plus) { background: var(--text-1); border-color: var(--text-1); }
+	.st :global(details[open] > summary .st-plus::before), .st :global(details[open] > summary .st-plus::after) { background: var(--bg-page); }
+	.st :global(details[open] > summary .st-plus::after) { transform: translate(-50%, -50%) rotate(0deg); }
+
+	.st :global(.st-key) { font-family: var(--font-mono); font-size: 14.5px; font-weight: 600; color: var(--text-1); background: none; padding: 0; white-space: pre-wrap; }
+	.st :global(.st-type) {
+		font-family: var(--font-mono); font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+		border: 1px solid transparent;
+	}
+	.st :global(.st-ephemeral) { background: var(--ephemeral-bg); color: var(--ephemeral-ink); }
+	.st :global(.st-signal) { background: var(--signal-bg); color: var(--signal-ink); }
+	.st :global(.st-checkpoint) { background: var(--checkpoint-bg); color: var(--checkpoint-ink); }
+	.st :global(.st-ok) { background: var(--ok-bg); color: var(--ok-ink); }
+	.st :global(.st-plain) { background: var(--bg-page); color: var(--text-3); border-color: var(--border); }
+	.st :global(.st-req) { font-size: 11px; font-weight: 600; color: var(--checkpoint); letter-spacing: .02em; }
+
+	/* The note reads like a comment attached to the key. */
+	.st :global(.st-note) {
+		position: relative; margin: 6px 0 10px 28px; padding: 12px 14px; border-radius: var(--r);
+		border: 1px solid var(--border); background: var(--bg-ivory); max-width: 700px;
+	}
+	.st :global(.st-note::before) {
+		content: ''; position: absolute; top: -7px; left: 14px; width: 12px; height: 12px; transform: rotate(45deg);
+		background: var(--bg-ivory); border-left: 1px solid var(--border); border-top: 1px solid var(--border);
+	}
+	.st :global(.st-note p) { margin: 0 0 8px; color: var(--text-2); font-size: 14.5px; }
+	.st :global(.st-note .st-path) { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-4); margin-bottom: 4px; }
+	.st :global(.st-path span) { margin: 0 2px; }
+	.st :global(.st-note pre) {
+		margin: 0; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; border-radius: var(--r-sm);
+		border: 1px solid var(--border); background: var(--bg-surface); overflow-x: auto; padding: 10px 12px; color: var(--text-1);
+	}
+	.st :global(.st-note pre code) { background: none; padding: 0; font-size: inherit; }
+	.st :global(.ky) { color: var(--ephemeral-ink); }
+	.st :global(.kw) { color: var(--checkpoint-ink); font-weight: 600; }
+	.st :global(.pu) { color: var(--text-4); }
+	.st :global(.ex) { color: var(--signal); }
+	.st :global(.sq) { color: var(--ok-ink); }
+	.st :global(.cm) { color: var(--text-4); font-style: italic; }
+	.st-empty { color: var(--text-4); font-size: 14px; margin: 8px 0 0; }
+
+	@media (max-width: 720px) {
+		.st { padding: 14px 12px 18px; }
+		.st-tools { width: 100%; }
+		.st-tools input { flex: 1; width: auto; min-width: 0; }
+		.st-tree :global(ul) { padding-left: 12px; margin-left: 6px; }
+		.st :global(.st-note) { margin-left: 0; }
+	}
+</style>

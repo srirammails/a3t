@@ -1,0 +1,20 @@
+---
+// Links section: one line each, title + note, pointing out.
+import { getCollection } from 'astro:content';
+
+const links = await getCollection('links');
+---
+<section class="links" aria-labelledby="links-h">
+	<div class="grid-head"><h2 id="links-h">Links</h2></div>
+	<ul class="link-list">
+		{links.map(({ data }) => (
+			<li>
+				<a href={data.url}>
+					<span class="link-title">{data.title}</span>
+					<span class="link-note">{data.note}</span>
+					<span class="link-host">{new URL(data.url).hostname.replace(/^www\./, '')} →</span>
+				</a>
+			</li>
+		))}
+	</ul>
+</section>

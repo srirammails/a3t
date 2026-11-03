@@ -1,0 +1,152 @@
+---
+import { url } from '../lib/url';
+import Base from '../layouts/Base.astro';
+import Cover from '../components/Cover.astro';
+import Pills from '../components/Pills.astro';
+import Pill from '../components/Pill.astro';
+import PostMeta from '../components/PostMeta.astro';
+import PostCard from '../components/PostCard.astro';
+import LibraryItem from '../components/LibraryItem.astro';
+import LinkList from '../components/LinkList.astro';
+import { BLOG_TITLE, BLOG_DESCRIPTION } from '../consts';
+import { getPosts, getLibrary, splitFeatured } from '../lib/posts';
+import { AREAS, FORMATS } from '../lib/areas';
+
+const LIBRARY_ON_HOME = 4;
+const { featured, rest } = splitFeatured(await getPosts());
+const library = await getLibrary();
+---
+<Base title={BLOG_TITLE} description={BLOG_DESCRIPTION}>
+	<div class="container" id="blogHome">
+		<h1 class="sr-only">{BLOG_TITLE}</h1>
+		{featured && (
+			<article class="featured featured-top">
+				<Cover title={featured.data.title} tag={featured.data.tags[0]} image={featured.data.image}
+					imageAlt={featured.data.imageAlt} media={featured.data.media?.type} eager />
+				<div class="featured-body">
+					<div class="featured-flag">
+						<span class="kicker">{featured.data.pinned ? 'Pinned' : 'Latest'}</span>
+						<Pills post={featured} toggle />
+					</div>
+					<h2><a class="stretch" href={url(`${featured.id}/`)}>{featured.data.title}</a></h2>
+					<p>{featured.data.description}</p>
+					<PostMeta post={featured} />
+					<span class="read-more">{featured.data.media ? (featured.data.media.type === 'video' ? 'Watch' : 'Listen') : 'Read the post'}
+						<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+					</span>
+				</div>
+			</article>
+		)}
+
+		{featured && (
+			<section aria-labelledby="posts-h">
+				<div class="grid-head grid-head-filters">
+					<h2 id="posts-h">Recent</h2>
+					<div class="filters" role="group" aria-label="Filter posts">
+						<div class="pills">{FORMATS.map((f) => <Pill k="format" v={f.id} label={f.label} toggle />)}</div>
+						<div class="pills">{AREAS.map((a) => <Pill k="area" v={a.id} label={a.label} toggle />)}</div>
+					</div>
+					<a class="see-all rss" href={url('rss.xml')}>RSS</a>
+				</div>
+				<div class="post-filter" id="postFilter" aria-live="polite">
+					<span>Showing</span><span class="pills" id="postFilterPills"></span>
+					<span id="postFilterCount"></span>
+					<button type="button" class="clear" id="postFilterClear">Show all</button>
+				</div>
+				<div class="post-grid">
+					{/* The hero again, so a filter can show it among the matches. */}
+					<PostCard post={featured} toggle class="is-featured" />
+					{rest.map((p) => <PostCard post={p} toggle />)}
+				</div>
+				<p class="post-empty" id="postEmpty" hidden>Nothing here yet. <button type="button" class="clear" id="postEmptyClear">Show all posts</button></p>
+			</section>
+		)}
+
+		{library.length > 0 && (
+			<section aria-labelledby="lib-h">
+				<div class="grid-head">
+					<h2 id="lib-h">Library <span class="grid-sub">Papers, posts and talks we’re reading, with our notes</span></h2>
+					<a class="see-all" href={url('library/')}>Full library →</a>
+				</div>
+				<div class="lib-grid">{library.slice(0, LIBRARY_ON_HOME).map((i) => <LibraryItem item={i} />)}</div>
+			</section>
+		)}
+
+		<LinkList />
+	</div>
+</Base>
+
+<script>
+	// Click a format or area pill to filter the posts; click it again, or its × above the grid, to clear.
+	// The filter lives in the URL (?area=data&format=video), so article pages can link to it.
+	const home = document.getElementById('blogHome')!;
+	const cards = Array.from(home.querySelectorAll<HTMLElement>('.post-grid .card'));
+	const bar = document.getElementById('postFilter')!;
+	const chips = document.getElementById('postFilterPills')!;
+	const count = document.getElementById('postFilterCount')!;
+	const empty = document.getElementById('postEmpty')!;
+	const KEYS = ['format', 'area'] as const;
+	type Key = (typeof KEYS)[number];
+	const state: Record<Key, string | null> = { format: null, area: null };
+
+	const params = new URLSearchParams(location.search);
+	for (const k of KEYS) {
+		const v = params.get(k);
+		if (v && home.querySelector(`.pill[data-k="${k}"][data-v="${CSS.escape(v)}"]`)) state[k] = v;
+	}
+
+	function apply(anchor?: Element | null) {
+		const before = anchor ? anchor.getBoundingClientRect().top : 0;
+		const on = Boolean(state.format || state.area);
+		home.classList.toggle('filtering', on);
+		let shown = 0;
+		for (const c of cards) {
+			const match = on
+				&& (!state.format || c.dataset.format === state.format)
+				&& (!state.area || (c.dataset.areas ?? '').split(' ').includes(state.area));
+			c.classList.toggle('hidden', on && !match);
+			if (match) shown++;
+		}
+		home.querySelectorAll<HTMLElement>('.pill[data-k]').forEach((p) => {
+			const pressed = state[p.dataset.k as Key] === p.dataset.v;
+			p.classList.toggle('on', pressed);
+			p.setAttribute('aria-pressed', String(pressed));
+		});
+		chips.innerHTML = '';
+		for (const k of KEYS) {
+			if (!state[k]) continue;
+			const b = home.querySelector(`.filters .pill[data-k="${k}"][data-v="${state[k]}"]`)!.cloneNode(true) as HTMLElement;
+			b.title = 'Remove filter';
+			b.addEventListener('click', () => { state[k] = null; apply(); });
+			chips.appendChild(b);
+		}
+		count.textContent = `${shown} ${shown === 1 ? 'post' : 'posts'}`;
+		bar.classList.toggle('show', on);
+		empty.hidden = !on || shown > 0;
+
+		const q = new URLSearchParams();
+		for (const k of KEYS) if (state[k]) q.set(k, state[k]!);
+		history.replaceState(null, '', location.pathname + (q.size ? `?${q}` : '') + location.hash);
+		// Keep the clicked pill's card where it was on screen.
+		if (anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - before);
+	}
+
+	home.querySelectorAll<HTMLElement>('.pill[data-k]').forEach((p) => p.addEventListener('click', (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+		const k = p.dataset.k as Key;
+		state[k] = state[k] === p.dataset.v ? null : p.dataset.v!;
+		// A pill on the hero or a card jumps to the grid; one in the header stays put.
+		const inHeader = p.closest('.filters');
+		apply(inHeader ? p : null);
+		if (!inHeader) document.getElementById('posts-h')!.scrollIntoView({ block: 'start' });
+	}));
+	const clear = () => { state.format = state.area = null; apply(); };
+	document.getElementById('postFilterClear')!.addEventListener('click', clear);
+	document.getElementById('postEmptyClear')!.addEventListener('click', clear);
+
+	if (state.format || state.area) {
+		apply();
+		document.getElementById('posts-h')!.scrollIntoView({ block: 'start' });
+	}
+</script>

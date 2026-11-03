@@ -1,0 +1,30 @@
+---
+import { url } from '../lib/url';
+// One library entry: what it is, where it's from, an optional player, and the commentary (the Markdown body).
+import { render, type CollectionEntry } from 'astro:content';
+import Tags from './Tags.astro';
+import Media from './Media.astro';
+
+interface Props { item: CollectionEntry<'library'>; }
+const { item } = Astro.props;
+const d = item.data;
+const { Content } = await render(item);
+const host = new URL(d.url).hostname.replace(/^www\./, '');
+---
+<article class="lib-item">
+	<div class="lib-top">
+		<span class={`kind kind-${d.kind}`}>{d.kind}</span>
+		<span class="lib-source">{d.source}{d.year && ` · ${d.year}`}{d.media?.duration && ` · ${d.media.duration}`}</span>
+	</div>
+	<h3><a href={d.url} target="_blank" rel="noopener">{d.title}<span class="ext" aria-hidden="true">↗</span></a></h3>
+	{d.authors && <p class="lib-authors">{d.authors}</p>}
+	{d.media && <Media {...d.media} title={d.title} compact />}
+	<div class="lib-note"><Content /></div>
+	<div class="lib-foot">
+		<Tags tags={d.tags.slice(0, 3)} />
+		<span class="lib-links">
+			{d.related && <a href={url(`${d.related}/`)}>Our take →</a>}
+			<a href={d.url} target="_blank" rel="noopener">{host}</a>
+		</span>
+	</div>
+</article>

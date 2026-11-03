@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8">
+<!-- Cover for your-agent-has-an-id-now. Screenshot at 1200x627 to public/covers/your-agent-has-an-id-now.png. -->
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Playfair+Display:ital,wght@0,500;1,500&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;width:1200px;height:627px;overflow:hidden;background:#faf9f6}
+body{background-image:linear-gradient(#ece8dd 1px,transparent 1px),linear-gradient(90deg,#ece8dd 1px,transparent 1px);background-size:40px 40px}
+.title{position:absolute;left:64px;top:84px;width:480px}
+.kicker{font:500 15px 'IBM Plex Mono',monospace;letter-spacing:.16em;color:#6e6a60;text-transform:uppercase}
+h1{margin:16px 0 0;font:500 52px/1.08 'Playfair Display',Georgia,serif;letter-spacing:-.02em;color:#0f0f0f}
+h1 em{color:#c47028}
+.sub{margin-top:24px;font:500 16px/1.6 'IBM Plex Mono',monospace;color:#6e6a60}
+.card{position:absolute;right:44px;top:56px;width:500px;padding:24px 28px;border-radius:16px;background:#fff;border:2px solid #e2ddd0;box-shadow:0 20px 50px rgba(40,30,10,.10);transform:rotate(-1.5deg)}
+.row{display:flex;align-items:center;gap:14px}
+.node{flex:1;padding:10px 14px;border-radius:10px;border:2px solid #e2ddd0;font:600 15px 'IBM Plex Mono',monospace;color:#0f0f0f}
+.node small{display:block;font-weight:500;font-size:12px;color:#9a958a;margin-top:2px}
+.who{width:30px;font:600 12px 'IBM Plex Mono',monospace;color:#9a958a;text-align:right}
+.arrow{margin:4px 0 4px 44px;height:22px;border-left:2px dashed #c9c2b0;padding-left:12px;font:500 12px/22px 'IBM Plex Mono',monospace;color:#9a958a}
+.gw{border-color:#c47028;background:#fbf0e0}
+.gw small{color:#7a4710}
+.dec{margin:10px 0 0 44px;display:grid;gap:6px}
+.d{font:600 13px 'IBM Plex Mono',monospace;padding:5px 10px;border-radius:8px}
+.ok{background:#e3f4ef;color:#0a4c3a}
+.no{background:#fde8e6;color:#9b2c1f}
+.tok{margin:12px 0 0 44px;font:500 12px/1.5 'IBM Plex Mono',monospace;color:#1a3fa8;background:#eaf1ff;border-radius:8px;padding:6px 10px}
+</style></head><body>
+<div class="title"><div class="kicker">A3T · Blog</div><h1>Your agent has an ID now. <em>Who is it working for?</em></h1>
+<div class="sub">agent identity · delegation<br>per-call policy · live revocation</div></div>
+<div class="card">
+<div class="row"><span class="who">user</span><div class="node">finance analyst<small>signed in with Entra</small></div></div>
+<div class="arrow">delegates · until 18:00</div>
+<div class="row"><span class="who">agent</span><div class="node">invoice-reconciler@3<small>agent://acme</small></div></div>
+<div class="arrow">every tool call</div>
+<div class="row"><span class="who">gate</span><div class="node gw">A3T gateway<small>Cedar decides · vault holds keys</small></div></div>
+<div class="tok">sub: analyst · act: invoice-reconciler@3</div>
+<div class="dec"><span class="d ok">permit  erp__list_invoices</span><span class="d no">forbid  erp__approve_payment</span></div>
+</div>
+</body></html>

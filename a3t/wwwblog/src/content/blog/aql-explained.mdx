@@ -1,0 +1,37 @@
+---
+title: AQL, Explained
+description: Every verb of AQL, the Agent Query Language, as one expanding tree. Open SCAN, RECALL, STORE, LINK, PIPELINE and the rest, clause by clause, each with an explanation and an example.
+date: 2026-11-01
+author: Sriram
+tags: [aql, memory]
+image: /covers/aql-explained.png
+imageAlt: AQL's verbs drawn as a tree on a floor, from AQL at the front to the read, write, graph, compose and stream families and their verbs, under the title AQL, explained.
+---
+import SchemaTree from '../../components/SchemaTree.astro';
+
+AQL is the query language agents use for their own memory: five memory types (working, episodic, semantic, procedural and tools) and a small set of verbs to store, recall, link and learn. [Agent Memory Needs a Query Language](../agent-memory-needs-a-query-language/) explains why. This post is the reference.
+
+AQL is not YAML, so instead of keys the tree is built from verbs. Every statement has the same shape:
+
+```sql
+VERB  FROM|INTO  MEMORY_TYPE  predicate  [modifiers...]
+```
+
+Each verb below opens into those parts in order: the memory it reads or writes, the predicate that picks records, then the modifiers that shape the result. Click **+** on any part to see what it does and an example.
+
+<SchemaTree of="aql" />
+
+## Three rules that hold everywhere
+
+1. **Direction is in the words.** Reads take `FROM` memory, `STORE` and `UPDATE` write `INTO` it, and `FORGET` removes `FROM` it. `LINK` says both ends: `FROM` one record `TO` another.
+2. **Every statement names its memory.** A write names exactly one type. `ALL` works with `RECALL`, `REFLECT` and `FORGET` only, and `FORGET` always needs `WHERE`.
+3. **Modifiers come after the predicate, in any order.** `LIMIT 5 ORDER BY time DESC` and `ORDER BY time DESC LIMIT 5` mean the same.
+
+Every example in the tree parses with the AQL reference parser. The [browser playground](https://srirammails.github.io/AQL/playground/) runs the core language; the stream verbs, `GROUP BY`, `WINDOW` on `RECALL` and the time modifiers already run in the parser and in ADB, A3T's memory engine, but not yet in the playground.
+
+<TryIt href="https://srirammails.github.io/AQL/playground/">Run AQL in your browser: the parser and engine in WASM</TryIt>
+
+## Sources
+
+- [AQL on GitHub](https://github.com/srirammails/AQL): the grammar (`grammar/aql.pest`), the spec and the conformance suites
+- [AQL spec v0.5](https://github.com/srirammails/AQL/blob/main/spec/AQL_SPEC_v0.5.md), and the v0.6 to v0.10 additions next to it

@@ -1,0 +1,17 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import { readingMinutes } from '../lib/posts';
+
+interface Props { post: CollectionEntry<'blog'>; }
+const { post } = Astro.props;
+const { date, author, media } = post.data;
+const fmt = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+const length = media
+	? (media.duration ? `${media.duration} ${media.type === 'video' ? 'watch' : 'listen'}` : null)
+	: `${readingMinutes(post)} min read`;
+---
+<div class="meta">
+	<span>{author}</span><span class="dot"></span>
+	<time datetime={date.toISOString()}>{fmt.format(date)}</time>
+	{length && <><span class="dot"></span><span>{length}</span></>}
+</div>

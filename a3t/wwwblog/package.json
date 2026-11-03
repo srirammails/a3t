@@ -1,0 +1,19 @@
+{
+  "name": "a3t-blog",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node node_modules/astro/astro.js dev",
+    "build": "node node_modules/astro/astro.js build",
+    "preview": "node node_modules/astro/astro.js preview",
+    "astro": "node node_modules/astro/astro.js"
+  },
+  "dependencies": {
+    "@astrojs/mdx": "4.3.14",
+    "@astrojs/rss": "4.0.19",
+    "@astrojs/sitemap": "3.7.4",
+    "astro": "5.18.2",
+    "js-yaml": "4.3.2"
+  }
+}
