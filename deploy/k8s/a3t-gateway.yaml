@@ -26,7 +26,7 @@ spec:
       terminationGracePeriodSeconds: 20
       containers:
         - name: flowr
-          image: ghcr.io/srirammails/flowr:2026-11-03-ee32
+          image: ghcr.io/srirammails/flowr:2026-11-03-ee33
           ports:
             - { name: http, containerPort: 3002 }
           env:
