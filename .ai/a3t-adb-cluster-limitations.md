@@ -39,7 +39,7 @@ another carries on".
 |---|---|---|---|---|
 | CA-20 | Engine notices (`publish` / `subscribe`, used for task wake-ups and run topics) are held in the ADB process's memory | Under Raft, a subscriber on a follower must still get notices published through the leader | Only the leader serves clients (CA-22), so every subscriber is on the leader. After a failover subscribers reconnect (FlowR's Flight client resubscribes every second) and may miss notices sent during the switch; workers fall back to polling, so a missed wake-up only delays work | accepted |
 | CA-21 | Raft (`adb-raft`, ADB `.ai/M3_RAFT.md`): the leader is the only active node; owner and leader are one role (§8 keeps them apart) | Leader throughput is the replica set's throughput | Owner ≠ leader with multi-Raft when one leader saturates (ARCHITECTURE §8) | accepted |
-| CA-22 | Clients reach the leader through a Kubernetes Service whose readiness probe (`/ready`) passes on the leader only. Followers answer 503 and do not serve Flight. **Deviation** from `.ai/M3_RAFT.md` (followers forwarding requests) | A leader change takes the probe period (1 s) plus election to reach clients; clients retry | Forwarding at followers, or leader discovery in clients, if the probe delay matters. Side effect: followers are never Ready, so a StatefulSet RollingUpdate stalls on the first follower; the StatefulSet uses `OnDelete` and ADB `deploy/k8s/adb-roll.sh` (followers first, then the leader: one leader change, ~3 s on vc-dev) | accepted |
+| CA-22 | Clients reach the leader through a Kubernetes Service whose readiness probe (`/ready`) passes on the leader only. Followers answer 503 and do not serve Flight. **Deviation** from `.ai/M3_RAFT.md` (followers forwarding requests) | A leader change takes the probe period (1 s) plus election to reach clients; clients retry | Forwarding at followers, or leader discovery in clients, if the probe delay matters. Side effect: followers are never Ready, so a StatefulSet RollingUpdate stalls on the first follower; the StatefulSet uses `OnDelete` and ADB `deploy/k8s/adb-roll.sh` (followers first, then the leader: one leader change, ~3 s on vc-dev) | accepted; replace by leader-label routing (ADB CL-7) |
 | CA-23 | A leader that loses the lead exits (code 75) and is restarted as a follower | One process restart per lost lead (a few seconds on that node; the new leader serves meanwhile) | Close the engine in-process once open connections can be cut | accepted |
 | CA-24 | The sequencer appends one record at a time through Raft (no group commit across clients) | Write throughput is about one record per Raft round trip (~1–3 ms on one host) | Group commit (ARCHITECTURE §9 step 3) through `client_write_many` | open |
 | CA-25 | openraft snapshots are pointers (the data is each node's WAL and tables). A node that falls behind openraft's trimmed log (default: 20,000 entries kept after a snapshot every 50,000) cannot be caught up by Raft | It refuses the snapshot with a message; it needs a copy of a peer's data directory | Snapshot = a copy of the data directory, streamed (R7 follow-up) | open |
@@ -73,6 +73,29 @@ another carries on".
 | CA-51 | A worker treated any error renewing a run's lease (ADB unreachable for a moment, e.g. a failover) as lost ownership and stopped the run (`cancelled: lost ownership of the run`), though no other worker could own it yet. Found by `cluster-gateway --raft` (lease 3 s, failover ~2 s) | Runs cancelled by an ADB failover | Keep the run and retry while the lease from the last confirmed renewal lasts; stop only on a refusal or an expired lease (`engine_worker::keep_alive`) | fixed |
 | CA-52 | The router sends a run to `FLOWR_DEFAULT_POOL` or a deployment runtime only once that pool has a live worker; otherwise to `default`, silently. A run started right after a runtime starts (before its first claim) waited in `default`, where nobody claims user flows | Runs stuck pending with no sign why | A warning names the flow when it falls back; a queue that nobody serves is still possible | partly fixed |
 | CA-50 | "Gateway" also names the console's engine endpoint on port 3003 (`engine_remote`, `FLOWR_ENGINE_URL`) | Confusing names in code and logs | Rename the old one (engine relay) when it is retired | accepted |
+
+## What is left in ADB (3 Nov 2026)
+
+The Raft replica set runs on vc-dev (3 nodes, adb `l`); memory features are done. Open,
+in the proposed order (details in ADB `.ai/limitations.md`):
+
+1. **Push the ADB branch** (`m0-k5-deps`, only on this pod) — ADB S9.
+2. **Leader-label routing** instead of readiness: all three nodes Ready, plain rolling
+   updates — ADB CL-7 (replaces CA-22).
+3. **Fault harness, the M3 gate**: partitions, clock skew, disk-full, slow fsync, a
+   linearizability checker — ADB CL-5; then measure on 3 servers — ADB CL-6 (today:
+   election 0.5–1 s, failover 2–3 s, 0 lost writes, all on one host).
+4. **Group commit** — CA-24 (every gateway call adds Raft writes, CA-48).
+5. **Snapshots and membership** — CA-25, CA-26.
+6. **The user's graph check on vc-dev** (P1 step 1.6).
+7. **Per-pool scopes beyond the engine** — CA-40 / ADB SEC-1.
+8. **Hibernation (M4)**: wake measured (0.5–5.5 s to serve, `tests/cluster-wake.mjs`);
+   lazy wake, ADB trios as hibernating Sandboxes, scheduled wakes — ADB CL-8. The core ADB
+   stays always-on.
+
+Also open: write idempotency key (CA-27), erasure on followers (CA-28), power-safe
+store (ADB L11), owner checks under failover (ADB CL-3). After the MVP: edge ADB,
+stitching, central KG + KBLaM, M5 scale-out.
 
 ## Deviations from the design doc
 
