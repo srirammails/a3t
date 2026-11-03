@@ -27,6 +27,7 @@ spec:
       containers:
         - name: flowr
           image: ghcr.io/srirammails/flowr:2026-11-03-ee33
+          args: [--mode, http, --port, "3002"]
           ports:
             - { name: http, containerPort: 3002 }
           env:
