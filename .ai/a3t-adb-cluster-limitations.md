@@ -32,7 +32,15 @@ another carries on".
 
 | # | What | Effect | Plan | Status |
 |---|---|---|---|---|
-| CA-20 | Engine notices (`publish` / `subscribe`, used for task wake-ups and run topics) are held in the ADB process's memory | Under Raft, a subscriber on a follower must still get notices published through the leader | Fan notices out across the cluster, or have FlowR subscribe at the leader | open |
+| CA-20 | Engine notices (`publish` / `subscribe`, used for task wake-ups and run topics) are held in the ADB process's memory | Under Raft, a subscriber on a follower must still get notices published through the leader | Only the leader serves clients (CA-22), so every subscriber is on the leader. After a failover subscribers reconnect (FlowR's Flight client resubscribes every second) and may miss notices sent during the switch; workers fall back to polling, so a missed wake-up only delays work | accepted |
+| CA-21 | Raft (`adb-raft`, ADB `.ai/M3_RAFT.md`): the leader is the only active node; owner and leader are one role (§8 keeps them apart) | Leader throughput is the replica set's throughput | Owner ≠ leader with multi-Raft when one leader saturates (ARCHITECTURE §8) | accepted |
+| CA-22 | Clients reach the leader through a Kubernetes Service whose readiness probe (`/ready`) passes on the leader only. Followers answer 503 and do not serve Flight. **Deviation** from `.ai/M3_RAFT.md` (followers forwarding requests) | A leader change takes the probe period (1 s) plus election to reach clients; clients retry | Forwarding at followers, or leader discovery in clients, if the probe delay matters | accepted |
+| CA-23 | A leader that loses the lead exits (code 75) and is restarted as a follower | One process restart per lost lead (a few seconds on that node; the new leader serves meanwhile) | Close the engine in-process once open connections can be cut | accepted |
+| CA-24 | The sequencer appends one record at a time through Raft (no group commit across clients) | Write throughput is about one record per Raft round trip (~1–3 ms on one host) | Group commit (ARCHITECTURE §9 step 3) through `client_write_many` | open |
+| CA-25 | openraft snapshots are pointers (the data is each node's WAL and tables). A node that falls behind openraft's trimmed log (default: 20,000 entries kept after a snapshot every 50,000) cannot be caught up by Raft | It refuses the snapshot with a message; it needs a copy of a peer's data directory | Snapshot = a copy of the data directory, streamed (R7 follow-up) | open |
+| CA-26 | Membership is fixed at bootstrap (`ADB_PEERS`); no add/remove at runtime | Replacing a node means keeping its id and data volume (StatefulSet) | Learner → voter → remove (R8) | open |
+| CA-27 | A transaction id seen by the old leader's sequencer (`committed(txn_id)`, in memory) is not known to the new one | A client retrying the same `txn_id` across a failover could commit twice | Rebuild the txn map from the log tail at open | open |
+| CA-28 | W5 erasure (`rewrite_closed`) runs on the leader's WAL only; followers keep a forgotten record's payload in their WAL until it is purged there | Payload lingers on followers for up to `ADB_LOG_RETAIN` records | Replicate the erasure as its own record | open |
 
 ## Deviations from the design doc
 
