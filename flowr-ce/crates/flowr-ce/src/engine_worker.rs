@@ -356,18 +356,33 @@ async fn keep_alive(engine: Arc<dyn EngineStore>, lease: Lease, run: RunId, epoc
     let mut news = engine.subscribe(&run_topic(run));
     let mut tick = tokio::time::interval(self::lease() / 3);
     tick.tick().await;
+    // The lease runs from the last renewal the store confirmed: until it ends no
+    // other worker can claim the run, so a store that cannot be reached for a
+    // moment (an ADB failover) is not a lost run.
+    let mut renewed_at = std::time::Instant::now();
     loop {
         tokio::select! {
             _ = tick.tick() => {
                 if done.load(Ordering::SeqCst) {
                     return;
                 }
-                let lease_ok = matches!(engine.heartbeat(std::slice::from_ref(&lease), self::lease()).await.as_deref(), Ok([LeaseStatus::Renewed]));
-                let owned = engine.renew(run, epoch, self::lease()).await.unwrap_or(false);
-                if !(lease_ok && owned) {
-                    warn!(%run, "lost ownership of the run; stopping it here");
-                    crate::ops::stop_run(run, "lost ownership of the run");
-                    return;
+                let lease_st = engine.heartbeat(std::slice::from_ref(&lease), self::lease()).await;
+                let owned = engine.renew(run, epoch, self::lease()).await;
+                let error = match (&lease_st, &owned) {
+                    (Err(e), _) | (_, Err(e)) => Some(e.to_string()),
+                    _ => None,
+                };
+                match (lease_st.as_deref(), owned) {
+                    (Ok([LeaseStatus::Renewed]), Ok(true)) => renewed_at = std::time::Instant::now(),
+                    _ if error.is_some() && renewed_at.elapsed() < self::lease() * 9 / 10 => {
+                        let e = error.unwrap_or_default();
+                        warn!(%run, error = %e, left_ms = (self::lease().saturating_sub(renewed_at.elapsed())).as_millis() as u64, "renewing the run's lease failed; retrying while the lease lasts");
+                    }
+                    _ => {
+                        warn!(%run, "lost ownership of the run; stopping it here");
+                        crate::ops::stop_run(run, "lost ownership of the run");
+                        return;
+                    }
                 }
             }
             msg = news.next() => {

@@ -39,6 +39,11 @@ pub(crate) fn route(namespace: &str, flow: &str) -> String {
 /// Where a run of `namespace/flow` goes, and why.
 pub fn decide(namespace: &str, flow: &str) -> Route {
     let shared = shared_route(namespace, flow, &|p| crate::engine_remote::pool_is_live(p), &deployed_on);
+    if shared.rule == "fallback" {
+        // No candidate pool has a live worker (none deployed, or its workers are
+        // down or not started yet): the run waits in `default` until one claims it.
+        tracing::warn!(namespace, flow, pool = %shared.pool, "router: no live pool for this flow; it waits in the default pool");
+    }
     let alone = !crate::engine_remote_enabled() && std::env::var("FLOWR_ENGINE_TOKEN").map_or(true, |t| t.is_empty());
     if alone {
         let mine = crate::engine_worker::worker_pools();
